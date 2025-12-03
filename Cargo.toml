@@ -1,0 +1,13 @@
+[package]
+name = "rscopulas"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+argmin = "0.11.0"
+criterion = "0.8.0"
+ndarray = "0.17.1"
+ndarray-linalg = "0.18.0"
+rand = "0.9.2"
+serde = "1.0.228"
+statrs = "0.18.0"
