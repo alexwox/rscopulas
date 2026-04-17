@@ -1,164 +1,275 @@
 # rscopulas
 
-`rscopulas` is a Rust workspace for fitting, evaluating, and sampling copulas
-from pseudo-observations.
+`rscopulas` is a copula workspace centered on one core idea: operate on
+validated pseudo-observations and make fitting, density evaluation, and
+sampling predictable across single-family copulas, pair copulas, and vine
+copulas.
 
-## Workspace
+The current source of truth in this repository is the Rust crate
+`rscopulas-core`, with a NumPy-first Python package layered on top of it.
 
-- `crates/rscopulas-core`: core data validation, copula models, pair-copula
-  primitives, vine structure / fitting / evaluation / sampling, math, stats,
-  reference tests, and benchmarks
-- `crates/rscopulas-accel`: CPU-parallel helpers plus the first narrow CUDA /
-  Metal batch-kernel facade
-- `crates/rscopulas-python`: PyO3 extension crate plus the local NumPy-first
-  Python package surface
+## What the package gives you
 
-## Current Status
+- Single-family copulas for Gaussian, Student t, Clayton, Frank, and
+  Gumbel-Hougaard.
+- Bivariate pair-copula kernels with h-functions and inverse h-functions.
+- C-vine, D-vine, and R-vine construction, fitting, scoring, and sampling.
+- Explicit data validation through `PseudoObs`, so the library only accepts
+  inputs in the open unit hypercube `(0, 1)^d`.
+- Likelihood diagnostics on fitted models: log-likelihood, AIC, BIC,
+  convergence flag, and iteration count.
+- An execution policy layer that keeps CPU, CUDA, and Metal behavior honest
+  instead of silently pretending every path is accelerated.
 
-### Working now
+## Workspace layout
 
-- pseudo-observation validation through `PseudoObs`
-- single-family copulas (`new`, `fit`, `log_pdf`, `sample`):
-  - `GaussianCopula` (Kendall tau inversion for the correlation matrix)
-  - `StudentTCopula` (tau inversion plus a degrees-of-freedom grid search)
-  - `ClaytonCopula`, `FrankCopula`, `GumbelHougaardCopula` (mean Kendall tau
-    inversion, Gaussian-style AIC/BIC diagnostics)
-- pair-copula primitives in `rscopulas_core::paircopula` exposing
-  `log_pdf`, `cond_first_given_second`, `cond_second_given_first`,
-  `inv_first_given_second`, and `inv_second_given_first` for:
-  - Independence, Gaussian, Student t, Clayton, Frank, Gumbel-Hougaard
-  - rotations `R0`, `R90`, `R180`, `R270` (Gaussian and Student t only use `R0`
-    by construction; Clayton / Frank / Gumbel exercise all four rotations)
-- `fit_pair_copula` selects a family + rotation by AIC or BIC, with an optional
-  Kendall tau independence threshold
-- vine copulas (`CopulaModel::log_pdf`, `CopulaModel::sample`) over C, D, and
-  R structures:
-  - Gaussian-parameterised constructors: `VineCopula::gaussian_c_vine`,
-    `VineCopula::gaussian_d_vine`
-  - mixed-family fitters: `VineCopula::fit_c_vine`, `VineCopula::fit_d_vine`,
-    `VineCopula::fit_r_vine` with configurable `family_set`, rotations,
-    AIC/BIC selection, optional truncation level, and optional independence
-    threshold (`VineFitOptions`)
-  - `VineCopula::from_trees` for building a vine from pre-specified trees
-- reference tests against fixtures generated from R:
-  - `copula` 1.1-3 at `d = 2` for Gaussian, Student t, Clayton, Frank, Gumbel
-    (log pdf, fit, sample summary)
-  - `VineCopula` 2.6.1 pair-copula fixtures (log pdf, both h-functions, both
-    inverse h-functions) for Gaussian, Student t, Clayton, Frank, Gumbel, plus
-    Clayton and Gumbel at `R90`, `R180`, `R270`
-  - `VineCopula` 2.6.1 vine fixtures: Gaussian C-vine and D-vine at `d = 4`;
-    a mixed-family R-vine at `d = 5` for both the full and truncation-level-2
-    cases; and an R-vine fit non-triviality check against a Dissmann-style
-    reference matrix
-- Criterion benchmarks for Gaussian `fit`, `log_pdf`, and `sample`; Student t,
-  Clayton, Frank, and Gumbel `log_pdf`; and Gaussian C-vine and D-vine
-  `log_pdf`
-- execution controls through `ExecPolicy` / `Device`
-- quality gates enforced in CI:
-  - `cargo fmt --check`
-  - `cargo test`
-  - `cargo bench --no-run`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
+- `crates/rscopulas-core`: the main Rust API and the package most users should
+  start with.
+- `crates/rscopulas-accel`: backend helpers for CPU parallelism plus narrow
+  CUDA and Metal acceleration.
+- `crates/rscopulas-python`: local Python bindings built on top of
+  `rscopulas-core`.
 
-### Not working yet / scaffolding
+## Core mental model
 
-- there is no top-level ergonomic facade yet for selecting a family and
-  returning a boxed or enum-backed fitted model from one entry point; the
-  `Copula` enum is exported but unused by the library
-- reference coverage is strongest at `d = 2` for single families, `d = 4` for
-  Gaussian vines, and `d = 5` for mixed R-vines; broader dimensional
-  regression coverage still needs to be added
-- Python packaging currently targets local development through `maturin develop`;
-  wheel automation and PyPI publishing are not set up yet
+Everything starts with pseudo-observations:
 
-### Known caveats
+- Each value must be finite.
+- Each value must satisfy `0 < u < 1`.
+- The library does not estimate marginal distributions for you.
+- You fit a model from `PseudoObs`, then evaluate `log_pdf(...)` or
+  `sample(...)` from the fitted model.
 
-- `ExecPolicy::Auto` is intentionally conservative: it can pick CPU-parallel
-  execution, but it does not automatically jump to CUDA or Metal yet
-- forced GPU execution is narrow and explicit:
-  - CUDA currently accelerates the Gaussian pair batch kernel used by
-    pair-fit scoring and Gaussian vine `log_pdf`
-  - Metal currently accelerates the same Gaussian pair batch surface through an
-    `f32` mixed-precision kernel; broader `f64`-sensitive work remains on CPU
-    or unsupported, depending on the operation
-- single-family copula `log_pdf`, Kendall tau, and sampling remain CPU paths;
-  forcing CUDA/Metal for those top-level operations still surfaces a backend
-  error
-- mixed-family pair and vine work can still contain deliberate CPU fallback
-  within a forced GPU request, because only the Gaussian pair kernel is
-  accelerated today
+If you already have ranked and scaled data, you are in the right place. If you
+have raw observations, transform them to pseudo-observations before calling the
+API.
 
-## Acceleration Contract
+## Rust variant
 
-The backend story is intentionally staged and honest:
+The primary Rust crate is `rscopulas-core`.
 
-- CPU: the reference implementation is complete, and `Auto` can choose Rayon
-  parallelism for batch-heavy paths that already support it
-- CUDA: first true GPU backend for this library's `f64`-heavy numerics; the
-  current kernel set is the Gaussian pair batch surface reused by Gaussian vine
-  evaluation
-- Metal: bounded mixed-precision backend; it shares the same Gaussian pair
-  batch contract as CUDA, but with parity checked against tolerances instead of
-  exact equality
+### Add the crate
 
-If you need predictable device behavior today, prefer
-`Force(Device::Cpu)`, `Force(Device::Cuda(_))`, or `Force(Device::Metal)`
-instead of relying on `Auto`.
+This repository is currently organized as a workspace, so local development
+typically depends on the path crate directly:
 
-## Reference Fixtures
-
-Fixture generation scripts live in `scripts/reference/` and write JSON
-fixtures under:
-
-- `fixtures/reference/r-copula/v1_1_3/` — single-family fixtures from R
-  package `copula` 1.1-3
-- `fixtures/reference/vinecopula/v2/` — pair-copula and vine fixtures from R
-  package `VineCopula` 2.6.1
-
-The R scripts (`generate_{gaussian,student_t,clayton,frank,gumbel}_fixtures.R`,
-`generate_paircopula_fixtures.R`, `generate_vine_fixtures.R`) are runnable from
-the workspace root with `Rscript` and regenerate the JSON fixtures in-place.
-
-## Development
-
-Run the main quality gates from the workspace root:
-
-```bash
-cargo fmt --check
-cargo test
-cargo bench --no-run
-cargo clippy --all-targets --all-features -- -D warnings
+```toml
+[dependencies]
+ndarray = "0.17"
+rand = "0.9"
+rscopulas-core = { path = "crates/rscopulas-core" }
 ```
 
-## Python Bindings
+### Fit a Gaussian copula
 
-The Python package is intentionally scoped for local development first. It wraps
-the stable `rscopulas-core` surface with a NumPy-first API and avoids exposing
-backend-selection or persistence features that are still evolving.
+```rust
+use ndarray::array;
+use rand::{SeedableRng, rngs::StdRng};
+use rscopulas_core::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
 
-Current Python surface:
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = PseudoObs::new(array![
+        [0.12, 0.18],
+        [0.21, 0.25],
+        [0.27, 0.22],
+        [0.35, 0.42],
+        [0.48, 0.51],
+        [0.56, 0.49],
+        [0.68, 0.73],
+        [0.82, 0.79],
+    ])?;
 
-- `GaussianCopula`, `StudentTCopula`, `ClaytonCopula`, `FrankCopula`,
-  `GumbelCopula`, and `VineCopula`
-- `fit(...)`, `from_params(...)`, `log_pdf(...)`, and `sample(...)`
-- fit diagnostics and vine structure inspection helpers
+    let fit = GaussianCopula::fit(&data, &FitOptions::default())?;
+    println!("AIC: {}", fit.diagnostics.aic);
+    println!("Correlation:\n{:?}", fit.model.correlation());
 
-Local install workflow:
+    let log_pdf = fit.model.log_pdf(&data, &Default::default())?;
+    println!("First log density: {}", log_pdf[0]);
+
+    let mut rng = StdRng::seed_from_u64(7);
+    let sample = fit.model.sample(4, &mut rng, &Default::default())?;
+    println!("Sample:\n{:?}", sample);
+    Ok(())
+}
+```
+
+### Fit a mixed-family R-vine
+
+```rust
+use ndarray::array;
+use rscopulas_core::{
+    PairCopulaFamily, PseudoObs, SelectionCriterion, VineCopula, VineFitOptions,
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = PseudoObs::new(array![
+        [0.12, 0.18, 0.21],
+        [0.21, 0.25, 0.29],
+        [0.27, 0.22, 0.31],
+        [0.35, 0.42, 0.39],
+        [0.48, 0.51, 0.46],
+        [0.56, 0.49, 0.58],
+        [0.68, 0.73, 0.69],
+        [0.82, 0.79, 0.76],
+    ])?;
+
+    let options = VineFitOptions {
+        family_set: vec![
+            PairCopulaFamily::Independence,
+            PairCopulaFamily::Gaussian,
+            PairCopulaFamily::Clayton,
+            PairCopulaFamily::Frank,
+            PairCopulaFamily::Gumbel,
+        ],
+        include_rotations: true,
+        criterion: SelectionCriterion::Aic,
+        truncation_level: Some(1),
+        ..VineFitOptions::default()
+    };
+
+    let fit = VineCopula::fit_r_vine(&data, &options)?;
+    println!("structure = {:?}", fit.model.structure());
+    println!("order = {:?}", fit.model.order());
+    println!("pair parameters = {:?}", fit.model.pair_parameters());
+    Ok(())
+}
+```
+
+### Build a vine from explicit Gaussian parameters
+
+Use this path when you already know the structure and want a model directly,
+without fitting pair families from data.
+
+```rust
+use ndarray::array;
+use rscopulas_core::VineCopula;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let correlation = array![
+        [1.0, 0.60, 0.35],
+        [0.60, 1.0, 0.25],
+        [0.35, 0.25, 1.0],
+    ];
+
+    let model = VineCopula::gaussian_c_vine(vec![0, 1, 2], correlation)?;
+    println!("order = {:?}", model.order());
+    Ok(())
+}
+```
+
+### Work directly with pair copulas
+
+The pair-copula layer is useful when you want low-level control over a vine
+edge, need h-functions explicitly, or want to inspect the selected family on one
+pair before fitting a full vine.
+
+```rust
+use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let spec = PairCopulaSpec {
+        family: PairCopulaFamily::Clayton,
+        rotation: Rotation::R90,
+        params: PairCopulaParams::One(1.4),
+    };
+
+    let log_pdf = spec.log_pdf(0.32, 0.77, 1e-12)?;
+    let h = spec.cond_first_given_second(0.32, 0.77, 1e-12)?;
+
+    println!("log_pdf = {log_pdf}");
+    println!("h_1|2 = {h}");
+    Ok(())
+}
+```
+
+### Important API notes
+
+- Import the `CopulaModel` trait when calling trait methods like `log_pdf(...)`
+  and `sample(...)` on concrete models.
+- `PseudoObs::new(...)` validates that your matrix has at least two columns and
+  all values lie strictly inside `(0, 1)`.
+- `GaussianCopula::fit(...)` inverts the Kendall tau matrix.
+- `StudentTCopula::fit(...)` combines Kendall tau inversion with a grid search
+  over degrees of freedom.
+- `ClaytonCopula`, `FrankCopula`, and `GumbelHougaardCopula` fit a single
+  dependence parameter from the data.
+- `VineFitOptions` controls candidate pair families, rotations, criterion,
+  truncation, and optional independence selection thresholds.
+
+### Execution backends
+
+Execution is explicit by design:
+
+- `ExecPolicy::Auto` is conservative and currently means CPU reference or
+  CPU-parallel behavior only.
+- `ExecPolicy::Force(Device::Cuda(_))` and `ExecPolicy::Force(Device::Metal)`
+  only work on the narrow GPU-aware paths that exist today.
+- Single-family `log_pdf(...)`, Kendall tau estimation, and sampling remain CPU
+  paths.
+- Gaussian pair-batch evaluation and Gaussian vine density evaluation are the
+  main accelerated paths today.
+
+If you need deterministic backend selection, prefer explicit `Force(...)`
+policies instead of relying on `Auto`.
+
+## Python variant
+
+The Python package is named `rscopulas` and is built with `maturin` on top of
+the Rust core. The Python layer is intentionally thin: it keeps the same model
+families and fitting behavior, but exposes them in a NumPy-first shape with
+Pythonic result objects.
+
+### Install for local development
+
+From the repository root:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -U pip maturin ".[dev]"
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
 maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
-pytest python/tests
+pytest
 ```
 
-Minimal example:
+The project metadata lives in the root `pyproject.toml`, and the extension
+module is exported as `rscopulas._rscopulas`.
+
+### Fit a Gaussian copula
 
 ```python
 import numpy as np
 
-from rscopulas import GaussianCopula, VineCopula
+from rscopulas import GaussianCopula
+
+data = np.array(
+    [
+        [0.12, 0.18],
+        [0.21, 0.25],
+        [0.27, 0.22],
+        [0.35, 0.42],
+        [0.48, 0.51],
+        [0.56, 0.49],
+        [0.68, 0.73],
+        [0.82, 0.79],
+    ],
+    dtype=np.float64,
+)
+
+fit = GaussianCopula.fit(data)
+print("family:", fit.model.family)
+print("dim:", fit.model.dim)
+print("AIC:", fit.diagnostics.aic)
+print("correlation:\n", fit.model.correlation)
+print("sample:\n", fit.model.sample(4, seed=7))
+```
+
+### Fit and inspect an R-vine
+
+```python
+import numpy as np
+
+from rscopulas import VineCopula
 
 data = np.array(
     [
@@ -174,21 +285,114 @@ data = np.array(
     dtype=np.float64,
 )
 
-gaussian_fit = GaussianCopula.fit(data[:, :2])
-print(gaussian_fit.diagnostics.aic)
-print(gaussian_fit.model.sample(4, seed=7))
-
-vine_fit = VineCopula.fit_r(
+fit = VineCopula.fit_r(
     data,
     family_set=["independence", "gaussian", "clayton", "frank", "gumbel"],
+    include_rotations=True,
+    criterion="aic",
     truncation_level=1,
 )
-print(vine_fit.model.structure_kind)
-print(vine_fit.model.order)
+
+print("kind:", fit.model.structure_kind)
+print("order:", fit.model.order)
+print("pair parameters:", fit.model.pair_parameters)
+print("structure info matrix:\n", fit.model.structure_info.matrix)
+print("tree count:", len(fit.model.trees))
 ```
 
-Deliberately deferred in Python for now:
+### Build models from known parameters
 
-- model save/load helpers
-- backend selection (`ExecPolicy` / `Device`)
-- packaging for published wheels and PyPI
+```python
+import numpy as np
+
+from rscopulas import GaussianCopula, StudentTCopula, VineCopula
+
+gaussian = GaussianCopula.from_params(
+    np.array([[1.0, 0.6], [0.6, 1.0]], dtype=np.float64)
+)
+
+student_t = StudentTCopula.from_params(
+    np.array([[1.0, 0.5], [0.5, 1.0]], dtype=np.float64),
+    degrees_of_freedom=6.0,
+)
+
+vine = VineCopula.gaussian_c_vine(
+    [0, 1, 2],
+    np.array(
+        [
+            [1.0, 0.60, 0.35],
+            [0.60, 1.0, 0.25],
+            [0.35, 0.25, 1.0],
+        ],
+        dtype=np.float64,
+    ),
+)
+
+print(gaussian.correlation)
+print(student_t.degrees_of_freedom)
+print(vine.order)
+```
+
+### Python API shape
+
+- `GaussianCopula`, `StudentTCopula`, `ClaytonCopula`, `FrankCopula`,
+  `GumbelCopula`, and `VineCopula` are the main model classes.
+- `fit(...)` returns a `FitResult` with `model` and `diagnostics`.
+- `diagnostics` exposes `loglik`, `aic`, `bic`, `converged`, and `n_iter`.
+- `log_pdf(...)` accepts array-like input and returns a NumPy array.
+- `sample(...)` returns a NumPy array and accepts an optional integer seed.
+- Vine models additionally expose `structure_kind`, `truncation_level`, `order`,
+  `pair_parameters`, `structure_info`, and `trees`.
+
+### Python caveats
+
+- Inputs still need to be pseudo-observations in the open interval `(0, 1)`.
+- The Python layer uses the Rust core with `ExecPolicy::Auto`; backend selection
+  is not exposed as a Python API yet.
+- The current workflow is local-development-first rather than published-wheel
+  distribution.
+
+## Current status
+
+### Implemented now
+
+- `PseudoObs` validation for `(0, 1)^d` inputs.
+- Single-family copulas with `new`, `fit`, `log_pdf`, and `sample`.
+- Pair-copula kernels for independence, Gaussian, Student t, Clayton, Frank,
+  and Gumbel, including rotations where supported.
+- `fit_pair_copula(...)` with AIC/BIC-driven family selection.
+- `VineCopula::gaussian_c_vine(...)` and `VineCopula::gaussian_d_vine(...)`.
+- `VineCopula::fit_c_vine(...)`, `fit_d_vine(...)`, and `fit_r_vine(...)`.
+- `VineCopula::from_trees(...)` for explicit vine construction.
+- R-based reference fixtures for single-family, pair-copula, and vine coverage.
+
+### Deliberately not polished yet
+
+- There is no top-level one-call facade that fits an unknown family and returns
+  a single ergonomic model wrapper.
+- The exported `Copula` enum exists, but the crate does not yet center its UX
+  around it.
+- The Python package is local-development-first and is not set up for published
+  wheel distribution.
+
+## Reference fixtures
+
+Fixture generation scripts live under `scripts/reference/` and regenerate JSON
+fixtures in place for:
+
+- `fixtures/reference/r-copula/v1_1_3/` from R package `copula` 1.1-3,
+- `fixtures/reference/vinecopula/v2/` from R package `VineCopula` 2.6.1.
+
+This fixture suite is what keeps the numerical claims grounded rather than
+hand-wavy.
+
+## Development
+
+Run the main quality gates from the workspace root:
+
+```bash
+cargo fmt --check
+cargo test
+cargo bench --no-run
+cargo clippy --all-targets --all-features -- -D warnings
+```
