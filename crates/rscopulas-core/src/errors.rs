@@ -32,6 +32,8 @@ pub enum InputError {
 pub enum FitError {
     #[error("family {family} does not support dimension {dim}")]
     UnsupportedDimension { family: &'static str, dim: usize },
+    #[error("fit failed: {reason}")]
+    Failed { reason: &'static str },
     #[error("optimization is not implemented yet")]
     NotImplemented,
 }
@@ -40,6 +42,8 @@ pub enum FitError {
 pub enum NumericalError {
     #[error("matrix is not a valid correlation matrix")]
     InvalidCorrelationMatrix,
+    #[error("matrix decomposition failed")]
+    DecompositionFailed,
     #[error("numerical routine not implemented yet")]
     NotImplemented,
 }

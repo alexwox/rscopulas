@@ -9,6 +9,15 @@ authors.workspace = true
 faer.workspace = true
 ndarray.workspace = true
 rand.workspace = true
+rand_distr.workspace = true
 serde.workspace = true
+statrs.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "gaussian"
+harness = false

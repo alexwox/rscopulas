@@ -62,3 +62,23 @@ fn validate_pseudo_obs(values: ArrayView2<'_, f64>) -> Result<(), InputError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use ndarray::array;
+
+    use crate::errors::InputError;
+
+    use super::PseudoObs;
+
+    #[test]
+    fn rejects_values_outside_open_unit_interval() {
+        let error =
+            PseudoObs::new(array![[0.0, 0.5], [0.2, 0.8]]).expect_err("zero should be rejected");
+
+        assert!(matches!(
+            error,
+            InputError::OutOfUnitInterval { row: 0, col: 0, .. }
+        ));
+    }
+}
