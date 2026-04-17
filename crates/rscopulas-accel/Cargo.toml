@@ -8,10 +8,11 @@ authors.workspace = true
 [features]
 default = []
 cuda = []
-metal = []
+metal = ["dep:metal"]
 
 [dependencies]
-rscopulas-core = { path = "../rscopulas-core" }
+rayon.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+metal = { version = "0.31", optional = true }
 

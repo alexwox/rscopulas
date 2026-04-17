@@ -89,7 +89,7 @@ fn gumbel_sample_statistics_match_r_fixture() {
     let mut rng = StdRng::seed_from_u64(fixture.seed);
 
     let samples = model
-        .sample(fixture.sample_size, &mut rng, &SampleOptions)
+        .sample(fixture.sample_size, &mut rng, &SampleOptions::default())
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("generated sample should stay inside (0,1)");
     let means = column_means(&sample_obs);

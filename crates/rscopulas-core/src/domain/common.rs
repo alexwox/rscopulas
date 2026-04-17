@@ -4,35 +4,74 @@ use serde::{Deserialize, Serialize};
 
 use crate::{data::PseudoObs, errors::CopulaError};
 
+/// Execution target requested by the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Device {
+    Cpu,
+    Cuda(u32),
+    Metal,
+}
+
+/// Policy for selecting which execution backend to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecPolicy {
+    Auto,
+    Force(Device),
+}
+
 /// Options shared by fitting routines in the core crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FitOptions {
+    /// Backend policy used for dependence estimation and pair scoring.
+    pub exec: ExecPolicy,
     /// Probability clipping applied by fitters that evaluate densities internally.
     pub clip_eps: f64,
+    /// Upper bound for iterative search routines used during fitting.
+    pub max_iter: usize,
 }
 
 impl Default for FitOptions {
     fn default() -> Self {
-        Self { clip_eps: 1e-12 }
+        Self {
+            exec: ExecPolicy::Auto,
+            clip_eps: 1e-12,
+            max_iter: 500,
+        }
     }
 }
 
 /// Options shared by density evaluation routines.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalOptions {
+    /// Backend policy used for batch density evaluation.
+    pub exec: ExecPolicy,
     /// Clamp pseudo-observations into `[clip_eps, 1 - clip_eps]` before inversion.
     pub clip_eps: f64,
 }
 
 impl Default for EvalOptions {
     fn default() -> Self {
-        Self { clip_eps: 1e-12 }
+        Self {
+            exec: ExecPolicy::Auto,
+            clip_eps: 1e-12,
+        }
     }
 }
 
 /// Options shared by sampling routines.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SampleOptions;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SampleOptions {
+    /// Backend policy used for batch sampling.
+    pub exec: ExecPolicy,
+}
+
+impl Default for SampleOptions {
+    fn default() -> Self {
+        Self {
+            exec: ExecPolicy::Auto,
+        }
+    }
+}
 
 /// Common diagnostics returned alongside fitted models.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,27 +1,44 @@
 use ndarray::Array2;
 
 use crate::{
+    backend::{Operation, resolve_strategy},
     data::PseudoObs,
+    domain::ExecPolicy,
     errors::{CopulaError, FitError},
 };
 
 pub fn kendall_tau_matrix(data: &PseudoObs) -> Array2<f64> {
+    try_kendall_tau_matrix(data, ExecPolicy::Auto)
+        .expect("pseudo-observations should yield valid Kendall tau")
+}
+
+pub fn try_kendall_tau_matrix(
+    data: &PseudoObs,
+    exec: ExecPolicy,
+) -> Result<Array2<f64>, CopulaError> {
     let dim = data.dim();
     let view = data.as_view();
     let mut tau = Array2::eye(dim);
+    let strategy = resolve_strategy(exec, Operation::KendallTauMatrix, dim.saturating_mul(dim - 1) / 2)?;
+    let columns = (0..dim)
+        .map(|idx| view.column(idx).iter().copied().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let pairs = crate::backend::parallel_try_map_range_collect(
+        dim.saturating_mul(dim - 1) / 2,
+        strategy,
+        |pair_idx| {
+            let (left, right) = decode_upper_triangle_index(pair_idx, dim);
+            let value = kendall_tau_bivariate(&columns[left], &columns[right])?;
+            Ok((left, right, value))
+        },
+    )?;
 
-    for left in 0..dim {
-        for right in (left + 1)..dim {
-            let left_values = view.column(left).iter().copied().collect::<Vec<_>>();
-            let right_values = view.column(right).iter().copied().collect::<Vec<_>>();
-            let value = kendall_tau_bivariate(&left_values, &right_values)
-                .expect("pseudo-observations should yield valid Kendall tau");
-            tau[(left, right)] = value;
-            tau[(right, left)] = value;
-        }
+    for (left, right, value) in pairs {
+        tau[(left, right)] = value;
+        tau[(right, left)] = value;
     }
 
-    tau
+    Ok(tau)
 }
 
 pub fn kendall_tau_bivariate(x: &[f64], y: &[f64]) -> Result<f64, CopulaError> {
@@ -65,6 +82,19 @@ fn count_inversions(values: &[usize]) -> usize {
     }
 
     inversions
+}
+
+fn decode_upper_triangle_index(mut index: usize, dim: usize) -> (usize, usize) {
+    let mut left = 0usize;
+    while left + 1 < dim {
+        let remaining = dim - left - 1;
+        if index < remaining {
+            return (left, left + 1 + index);
+        }
+        index -= remaining;
+        left += 1;
+    }
+    unreachable!("pair index should stay inside the strict upper triangle");
 }
 
 fn fenwick_add(tree: &mut [usize], mut idx: usize, delta: usize) {

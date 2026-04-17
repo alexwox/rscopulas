@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    backend::{Operation, parallel_try_map_range_collect, resolve_strategy},
     errors::{CopulaError, FitError},
     math::maximize_scalar,
     vine::{SelectionCriterion, VineFitOptions},
@@ -53,6 +54,13 @@ pub struct PairFitResult {
     pub bic: f64,
     pub cond_on_first: Vec<f64>,
     pub cond_on_second: Vec<f64>,
+}
+
+#[derive(Debug)]
+struct PairBatchEvaluation {
+    log_pdf: Vec<f64>,
+    cond_on_first: Vec<f64>,
+    cond_on_second: Vec<f64>,
 }
 
 impl PairCopulaSpec {
@@ -336,28 +344,34 @@ pub fn fit_pair_copula(
         return finalize_pair_fit(PairCopulaSpec::independence(), u1, u2, options);
     }
 
-    let mut best: Option<PairFitResult> = None;
+    let mut candidates = Vec::new();
     for family in &options.family_set {
         for rotation in candidate_rotations(*family, options.include_rotations) {
-            let spec = match fit_family_with_rotation(*family, *rotation, u1, u2, tau) {
+            let spec = match fit_family_with_rotation(
+                *family,
+                *rotation,
+                u1,
+                u2,
+                tau,
+                options.base.max_iter,
+            ) {
                 Ok(spec) => spec,
                 Err(_) => continue,
             };
-            let fit = match finalize_pair_fit(spec, u1, u2, options) {
-                Ok(fit) => fit,
-                Err(_) => continue,
-            };
-            if let Some(current) = &best {
-                if criterion_value(&fit, options.criterion)
-                    < criterion_value(current, options.criterion)
-                {
-                    best = Some(fit);
-                }
-            } else {
-                best = Some(fit);
-            }
+            candidates.push(spec);
         }
     }
+
+    let strategy = resolve_strategy(options.base.exec, Operation::PairFitScoring, candidates.len())?;
+    let fits = parallel_try_map_range_collect(candidates.len(), strategy, |idx| {
+        finalize_pair_fit(candidates[idx], u1, u2, options)
+    })?;
+    let best = fits
+        .into_iter()
+        .min_by(|left, right| {
+            criterion_value(left, options.criterion)
+                .total_cmp(&criterion_value(right, options.criterion))
+        });
 
     best.ok_or(
         FitError::Failed {
@@ -373,14 +387,8 @@ fn finalize_pair_fit(
     u2: &[f64],
     options: &VineFitOptions,
 ) -> Result<PairFitResult, CopulaError> {
-    let mut loglik = 0.0;
-    let mut cond_on_first = Vec::with_capacity(u1.len());
-    let mut cond_on_second = Vec::with_capacity(u1.len());
-    for (&left, &right) in u1.iter().zip(u2.iter()) {
-        loglik += spec.log_pdf(left, right, options.base.clip_eps)?;
-        cond_on_first.push(spec.cond_first_given_second(left, right, options.base.clip_eps)?);
-        cond_on_second.push(spec.cond_second_given_first(left, right, options.base.clip_eps)?);
-    }
+    let batch = evaluate_pair_batch(spec, u1, u2, options.base.clip_eps, options.base.exec)?;
+    let loglik = batch.log_pdf.iter().sum::<f64>();
 
     let k = spec.parameter_count() as f64;
     let n = u1.len() as f64;
@@ -389,8 +397,8 @@ fn finalize_pair_fit(
         loglik,
         aic: 2.0 * k - 2.0 * loglik,
         bic: k * n.ln() - 2.0 * loglik,
-        cond_on_first,
-        cond_on_second,
+        cond_on_first: batch.cond_on_first,
+        cond_on_second: batch.cond_on_second,
     })
 }
 
@@ -420,6 +428,7 @@ fn fit_family_with_rotation(
     u1: &[f64],
     u2: &[f64],
     tau: f64,
+    max_iter: usize,
 ) -> Result<PairCopulaSpec, CopulaError> {
     let transformed = rotated::transform_sample(rotation, u1, u2);
     let x1 = &transformed.0;
@@ -437,7 +446,7 @@ fn fit_family_with_rotation(
             let mut best_loglik = f64::NEG_INFINITY;
             let rho_seed = gaussian::tau_to_rho(tau).clamp(-0.95, 0.95);
             for nu in student_t::candidate_nus() {
-                let rho = maximize_scalar(-0.98, 0.98, 80, |rho| {
+                let rho = maximize_scalar(-0.98, 0.98, max_iter.max(1), |rho| {
                     x1.iter()
                         .zip(x2.iter())
                         .map(|(&u, &v)| {
@@ -464,7 +473,7 @@ fn fit_family_with_rotation(
         PairCopulaFamily::Clayton => {
             let init = clayton::theta_from_tau(transformed_tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1e-6, upper, 80, |theta| {
+            let theta = maximize_scalar(1e-6, upper, max_iter.max(1), |theta| {
                 x1.iter()
                     .zip(x2.iter())
                     .map(|(&u, &v)| clayton::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
@@ -475,7 +484,7 @@ fn fit_family_with_rotation(
         PairCopulaFamily::Frank => {
             let init = frank::theta_from_tau(transformed_tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1e-6, upper, 80, |theta| {
+            let theta = maximize_scalar(1e-6, upper, max_iter.max(1), |theta| {
                 x1.iter()
                     .zip(x2.iter())
                     .map(|(&u, &v)| frank::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
@@ -486,7 +495,7 @@ fn fit_family_with_rotation(
         PairCopulaFamily::Gumbel => {
             let init = gumbel::theta_from_tau(transformed_tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1.0 + 1e-6, upper, 80, |theta| {
+            let theta = maximize_scalar(1.0 + 1e-6, upper, max_iter.max(1), |theta| {
                 x1.iter()
                     .zip(x2.iter())
                     .map(|(&u, &v)| gumbel::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
@@ -500,5 +509,39 @@ fn fit_family_with_rotation(
         family,
         rotation,
         params,
+    })
+}
+
+fn evaluate_pair_batch(
+    spec: PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+    exec: crate::domain::ExecPolicy,
+) -> Result<PairBatchEvaluation, CopulaError> {
+    let strategy = resolve_strategy(exec, Operation::PairBatchEval, u1.len())?;
+    let rows = parallel_try_map_range_collect(u1.len(), strategy, |idx| {
+        let left = u1[idx];
+        let right = u2[idx];
+        Ok((
+            spec.log_pdf(left, right, clip_eps)?,
+            spec.cond_first_given_second(left, right, clip_eps)?,
+            spec.cond_second_given_first(left, right, clip_eps)?,
+        ))
+    })?;
+
+    let mut log_pdf = Vec::with_capacity(rows.len());
+    let mut cond_on_first = Vec::with_capacity(rows.len());
+    let mut cond_on_second = Vec::with_capacity(rows.len());
+    for (log_value, cond_first, cond_second) in rows {
+        log_pdf.push(log_value);
+        cond_on_first.push(cond_first);
+        cond_on_second.push(cond_second);
+    }
+
+    Ok(PairBatchEvaluation {
+        log_pdf,
+        cond_on_first,
+        cond_on_second,
     })
 }

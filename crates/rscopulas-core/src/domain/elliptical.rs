@@ -8,6 +8,7 @@ use statrs::{
 };
 
 use crate::{
+    backend::{Operation, parallel_try_map_range_collect, resolve_strategy},
     data::PseudoObs,
     errors::{CopulaError, FitError},
     fit::FitResult,
@@ -15,7 +16,7 @@ use crate::{
         cholesky, log_determinant_from_cholesky, make_spd_correlation,
         quadratic_form_from_cholesky, validate_correlation_matrix,
     },
-    stats::kendall_tau_matrix,
+    stats::try_kendall_tau_matrix,
 };
 
 use super::{CopulaFamily, CopulaModel, EvalOptions, FitOptions, SampleOptions};
@@ -46,13 +47,19 @@ impl GaussianCopula {
     }
 
     /// Fits a Gaussian copula by inverting the Kendall tau matrix.
-    pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
-        let tau = kendall_tau_matrix(data);
+    pub fn fit(data: &PseudoObs, options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        let tau = try_kendall_tau_matrix(data, options.exec)?;
         let correlation =
             make_spd_correlation(&tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin()))?;
         let model = Self::new(correlation)?;
         let loglik = model
-            .log_pdf(data, &EvalOptions::default())?
+            .log_pdf(
+                data,
+                &EvalOptions {
+                    exec: options.exec,
+                    clip_eps: options.clip_eps,
+                },
+            )?
             .into_iter()
             .sum::<f64>();
         let parameter_count = (model.dim * (model.dim - 1) / 2) as f64;
@@ -126,8 +133,10 @@ impl CopulaModel for GaussianCopula {
         }
 
         let standard_normal = Self::standard_normal();
-        let mut values = Vec::with_capacity(data.n_obs());
-        for row in data.as_view().rows() {
+        let strategy = resolve_strategy(options.exec, Operation::DensityEval, data.n_obs())?;
+        let view = data.as_view();
+        parallel_try_map_range_collect(data.n_obs(), strategy, |row_idx| {
+            let row = view.row(row_idx);
             let z = row
                 .iter()
                 .map(|value| {
@@ -137,18 +146,17 @@ impl CopulaModel for GaussianCopula {
                 .collect::<Vec<_>>();
             let quadratic = quadratic_form_from_cholesky(&self.cholesky, &z)?;
             let euclidean = z.iter().map(|value| value * value).sum::<f64>();
-            values.push(-0.5 * self.log_det - 0.5 * (quadratic - euclidean));
-        }
-
-        Ok(values)
+            Ok(-0.5 * self.log_det - 0.5 * (quadratic - euclidean))
+        })
     }
 
     fn sample<R: Rng + ?Sized>(
         &self,
         n: usize,
         rng: &mut R,
-        _options: &SampleOptions,
+        options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
+        resolve_strategy(options.exec, Operation::Sample, n)?;
         let standard_normal = Self::standard_normal();
         let mut samples = Array2::zeros((n, self.dim));
 
@@ -209,8 +217,8 @@ impl StudentTCopula {
     }
 
     /// Fits a Student t copula by Kendall tau inversion plus a grid search over `nu`.
-    pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
-        let tau = kendall_tau_matrix(data);
+    pub fn fit(data: &PseudoObs, options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        let tau = try_kendall_tau_matrix(data, options.exec)?;
         let correlation =
             make_spd_correlation(&tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin()))?;
 
@@ -221,7 +229,13 @@ impl StudentTCopula {
             iterations += 1;
             let candidate = Self::new(correlation.clone(), degrees_of_freedom)?;
             let loglik = candidate
-                .log_pdf(data, &EvalOptions::default())?
+                .log_pdf(
+                    data,
+                    &EvalOptions {
+                        exec: options.exec,
+                        clip_eps: options.clip_eps,
+                    },
+                )?
                 .into_iter()
                 .sum::<f64>();
 
@@ -320,8 +334,10 @@ impl CopulaModel for StudentTCopula {
             - 0.5 * self.log_det
             - 0.5 * dim * (nu * std::f64::consts::PI).ln();
 
-        let mut values = Vec::with_capacity(data.n_obs());
-        for row in data.as_view().rows() {
+        let strategy = resolve_strategy(options.exec, Operation::DensityEval, data.n_obs())?;
+        let view = data.as_view();
+        parallel_try_map_range_collect(data.n_obs(), strategy, |row_idx| {
+            let row = view.row(row_idx);
             let z = row
                 .iter()
                 .map(|value| {
@@ -335,18 +351,17 @@ impl CopulaModel for StudentTCopula {
                 .iter()
                 .map(|value| t_distribution.ln_pdf(*value))
                 .sum::<f64>();
-            values.push(mv_log_pdf - marginal_log_pdf);
-        }
-
-        Ok(values)
+            Ok(mv_log_pdf - marginal_log_pdf)
+        })
     }
 
     fn sample<R: Rng + ?Sized>(
         &self,
         n: usize,
         rng: &mut R,
-        _options: &SampleOptions,
+        options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
+        resolve_strategy(options.exec, Operation::Sample, n)?;
         let t_distribution = self.univariate_t();
         let chi_squared =
             ChiSquared::new(self.degrees_of_freedom).map_err(|_| FitError::Failed {

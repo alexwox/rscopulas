@@ -121,7 +121,7 @@ fn gaussian_c_vine_sample_statistics_match_fixture() {
     let mut rng = StdRng::seed_from_u64(fixture.seed);
 
     let samples = model
-        .sample(fixture.sample_size, &mut rng, &SampleOptions)
+        .sample(fixture.sample_size, &mut rng, &SampleOptions::default())
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("sample should be valid");
     let means = column_means(&sample_obs);
@@ -161,7 +161,7 @@ fn gaussian_d_vine_sample_statistics_match_fixture() {
     let mut rng = StdRng::seed_from_u64(fixture.seed);
 
     let samples = model
-        .sample(fixture.sample_size, &mut rng, &SampleOptions)
+        .sample(fixture.sample_size, &mut rng, &SampleOptions::default())
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("sample should be valid");
     let means = column_means(&sample_obs);

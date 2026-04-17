@@ -5,10 +5,16 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+cuda = ["rscopulas-accel/cuda"]
+metal = ["rscopulas-accel/metal"]
+
 [dependencies]
 ndarray.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
+rscopulas-accel = { path = "../rscopulas-accel" }
 serde.workspace = true
 statrs.workspace = true
 thiserror.workspace = true

@@ -1,7 +1,11 @@
 use ndarray::Array2;
 use rand::Rng;
 
-use crate::errors::{CopulaError, FitError};
+use crate::{
+    backend::{Operation, resolve_strategy},
+    domain::SampleOptions,
+    errors::{CopulaError, FitError},
+};
 
 use super::{
     VineCopula,
@@ -13,9 +17,11 @@ impl VineCopula {
         &self,
         n: usize,
         rng: &mut R,
-        clip_eps: f64,
+        options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
+        resolve_strategy(options.exec, Operation::Sample, n)?;
         let d = self.dim;
+        let clip_eps = 1e-12;
         let mat = revert_matrix(&self.normalized_matrix);
         let maxmat = revert_matrix(&self.max_matrix);
         let cindirect = revert_matrix(&self.cond_indirect);

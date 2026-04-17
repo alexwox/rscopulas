@@ -105,7 +105,7 @@ fn student_t_sample_statistics_match_r_fixture() {
     let mut rng = StdRng::seed_from_u64(fixture.seed);
 
     let samples = model
-        .sample(fixture.sample_size, &mut rng, &SampleOptions)
+        .sample(fixture.sample_size, &mut rng, &SampleOptions::default())
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("generated sample should stay inside (0,1)");
     let means = column_means(&sample_obs);
@@ -154,10 +154,10 @@ fn student_t_serde_round_trip_preserves_log_pdf_and_sampling() {
     let mut original_rng = StdRng::seed_from_u64(sample_fixture.seed);
     let mut restored_rng = StdRng::seed_from_u64(sample_fixture.seed);
     let original_samples = model
-        .sample(128, &mut original_rng, &SampleOptions)
+        .sample(128, &mut original_rng, &SampleOptions::default())
         .expect("original sampling should succeed");
     let restored_samples = restored
-        .sample(128, &mut restored_rng, &SampleOptions)
+        .sample(128, &mut restored_rng, &SampleOptions::default())
         .expect("restored sampling should succeed");
     assert_eq!(original_samples, restored_samples);
 }

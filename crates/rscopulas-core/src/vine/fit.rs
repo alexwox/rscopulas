@@ -10,7 +10,7 @@ use crate::{
         PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult, Rotation,
         fit_pair_copula,
     },
-    stats::kendall_tau_matrix,
+    stats::try_kendall_tau_matrix,
 };
 
 use super::{
@@ -122,7 +122,7 @@ impl VineCopula {
         data: &PseudoObs,
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
-        let order = c_vine_order(data);
+        let order = c_vine_order(data, options)?;
         let (trees, diagnostics) = fit_canonical_vine(data, &order, VineStructureKind::C, options)?;
         let model = build_model_from_trees(VineStructureKind::C, trees, options.truncation_level)?;
         Ok(FitResult { model, diagnostics })
@@ -133,7 +133,7 @@ impl VineCopula {
         data: &PseudoObs,
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
-        let order = d_vine_order(data);
+        let order = d_vine_order(data, options)?;
         let (trees, diagnostics) = fit_canonical_vine(data, &order, VineStructureKind::D, options)?;
         let model = build_model_from_trees(VineStructureKind::D, trees, options.truncation_level)?;
         Ok(FitResult { model, diagnostics })
@@ -145,7 +145,7 @@ impl VineCopula {
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
         let truncation_level = options.truncation_level.unwrap_or(data.dim() - 1);
-        let mut graph = initialize_first_graph(data)?;
+        let mut graph = initialize_first_graph(data, options)?;
         let mut internal_trees = Vec::with_capacity(data.dim() - 1);
         let mut public_trees = Vec::with_capacity(data.dim() - 1);
         let mut total_loglik = 0.0;
@@ -392,8 +392,8 @@ fn resolve_internal_conditional(
     .into())
 }
 
-fn initialize_first_graph(data: &PseudoObs) -> Result<Graph, CopulaError> {
-    let tau = kendall_tau_matrix(data);
+fn initialize_first_graph(data: &PseudoObs, options: &VineFitOptions) -> Result<Graph, CopulaError> {
+    let tau = try_kendall_tau_matrix(data, options.base.exec)?;
     let mut edges = Vec::new();
     for left in 0..data.dim() {
         for right in (left + 1)..data.dim() {
@@ -753,8 +753,8 @@ fn set_intersection(left: &[usize], right: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-fn c_vine_order(data: &PseudoObs) -> Vec<usize> {
-    let tau = kendall_tau_matrix(data);
+fn c_vine_order(data: &PseudoObs, options: &VineFitOptions) -> Result<Vec<usize>, CopulaError> {
+    let tau = try_kendall_tau_matrix(data, options.base.exec)?;
     let mut indices = (0..data.dim()).collect::<Vec<_>>();
     indices.sort_by(|left, right| {
         let left_score = (0..data.dim())
@@ -769,11 +769,12 @@ fn c_vine_order(data: &PseudoObs) -> Vec<usize> {
             .total_cmp(&left_score)
             .then_with(|| left.cmp(right))
     });
-    indices
+    Ok(indices)
 }
 
-fn d_vine_order(data: &PseudoObs) -> Vec<usize> {
-    d_vine_order_from_weights(&kendall_tau_matrix(data).mapv(f64::abs))
+fn d_vine_order(data: &PseudoObs, options: &VineFitOptions) -> Result<Vec<usize>, CopulaError> {
+    let tau = try_kendall_tau_matrix(data, options.base.exec)?;
+    Ok(d_vine_order_from_weights(&tau.mapv(f64::abs)))
 }
 
 fn d_vine_order_from_weights(weights: &Array2<f64>) -> Vec<usize> {

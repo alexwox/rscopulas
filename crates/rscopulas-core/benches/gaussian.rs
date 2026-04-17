@@ -6,8 +6,8 @@ use rand::{SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 
 use rscopulas_core::{
-    ClaytonCopula, CopulaModel, EvalOptions, FitOptions, FrankCopula, GaussianCopula,
-    GumbelHougaardCopula, PseudoObs, SampleOptions, StudentTCopula, VineCopula,
+    ClaytonCopula, CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, FrankCopula,
+    GaussianCopula, GumbelHougaardCopula, PseudoObs, SampleOptions, StudentTCopula, VineCopula,
 };
 
 #[derive(Debug, Deserialize)]
@@ -66,16 +66,24 @@ fn gaussian_log_pdf_benchmark(criterion: &mut Criterion) {
     let model = GaussianCopula::new(array2(&fixture.correlation))
         .expect("fixture correlation should be valid");
     let input = PseudoObs::new(array2(&fixture.inputs)).expect("fixture inputs should be valid");
-    let options = EvalOptions::default();
+    let serial = serial_eval_options();
+    let auto = EvalOptions::default();
     let baseline = model
-        .log_pdf(&input, &options)
+        .log_pdf(&input, &serial)
         .expect("log pdf should evaluate");
     assert_eq!(baseline.len(), fixture.expected_log_pdf.len());
 
-    criterion.bench_function("gaussian_log_pdf_fixture_case01", |bench| {
+    criterion.bench_function("gaussian_log_pdf_serial_fixture_case01", |bench| {
         bench.iter(|| {
             model
-                .log_pdf(black_box(&input), black_box(&options))
+                .log_pdf(black_box(&input), black_box(&serial))
+                .expect("log pdf should evaluate")
+        });
+    });
+    criterion.bench_function("gaussian_log_pdf_auto_fixture_case01", |bench| {
+        bench.iter(|| {
+            model
+                .log_pdf(black_box(&input), black_box(&auto))
                 .expect("log pdf should evaluate")
         });
     });
@@ -85,12 +93,17 @@ fn gaussian_fit_benchmark(criterion: &mut Criterion) {
     let fixture: GaussianFitFixture = load_fixture("gaussian_fit_d2_case01.json");
     let input =
         PseudoObs::new(array2(&fixture.input_pobs)).expect("fixture inputs should be valid");
-    let options = FitOptions::default();
+    let serial = serial_fit_options();
+    let auto = FitOptions::default();
 
-    criterion.bench_function("gaussian_fit_fixture_case01", |bench| {
+    criterion.bench_function("gaussian_fit_serial_fixture_case01", |bench| {
         bench.iter(|| {
-            GaussianCopula::fit(black_box(&input), black_box(&options))
-                .expect("fit should evaluate")
+            GaussianCopula::fit(black_box(&input), black_box(&serial)).expect("fit should evaluate")
+        });
+    });
+    criterion.bench_function("gaussian_fit_auto_fixture_case01", |bench| {
+        bench.iter(|| {
+            GaussianCopula::fit(black_box(&input), black_box(&auto)).expect("fit should evaluate")
         });
     });
 }
@@ -100,7 +113,7 @@ fn gaussian_sample_benchmark(criterion: &mut Criterion) {
         load_fixture("gaussian_sample_summary_d2_case01.json");
     let model = GaussianCopula::new(array2(&fixture.correlation))
         .expect("fixture correlation should be valid");
-    let options = SampleOptions;
+    let options = SampleOptions::default();
 
     criterion.bench_function("gaussian_sample_fixture_case01", |bench| {
         bench.iter(|| {
@@ -182,12 +195,20 @@ fn gaussian_c_vine_log_pdf_benchmark(criterion: &mut Criterion) {
     let model = VineCopula::gaussian_c_vine(fixture.order, array2(&fixture.correlation))
         .expect("fixture parameters should be valid");
     let input = PseudoObs::new(array2(&fixture.inputs)).expect("fixture inputs should be valid");
-    let options = EvalOptions::default();
+    let serial = serial_eval_options();
+    let auto = EvalOptions::default();
 
-    criterion.bench_function("gaussian_c_vine_log_pdf_fixture_case01", |bench| {
+    criterion.bench_function("gaussian_c_vine_log_pdf_serial_fixture_case01", |bench| {
         bench.iter(|| {
             model
-                .log_pdf(black_box(&input), black_box(&options))
+                .log_pdf(black_box(&input), black_box(&serial))
+                .expect("log pdf should evaluate")
+        });
+    });
+    criterion.bench_function("gaussian_c_vine_log_pdf_auto_fixture_case01", |bench| {
+        bench.iter(|| {
+            model
+                .log_pdf(black_box(&input), black_box(&auto))
                 .expect("log pdf should evaluate")
         });
     });
@@ -198,12 +219,20 @@ fn gaussian_d_vine_log_pdf_benchmark(criterion: &mut Criterion) {
     let model = VineCopula::gaussian_d_vine(fixture.order, array2(&fixture.correlation))
         .expect("fixture parameters should be valid");
     let input = PseudoObs::new(array2(&fixture.inputs)).expect("fixture inputs should be valid");
-    let options = EvalOptions::default();
+    let serial = serial_eval_options();
+    let auto = EvalOptions::default();
 
-    criterion.bench_function("gaussian_d_vine_log_pdf_fixture_case01", |bench| {
+    criterion.bench_function("gaussian_d_vine_log_pdf_serial_fixture_case01", |bench| {
         bench.iter(|| {
             model
-                .log_pdf(black_box(&input), black_box(&options))
+                .log_pdf(black_box(&input), black_box(&serial))
+                .expect("log pdf should evaluate")
+        });
+    });
+    criterion.bench_function("gaussian_d_vine_log_pdf_auto_fixture_case01", |bench| {
+        bench.iter(|| {
+            model
+                .log_pdf(black_box(&input), black_box(&auto))
                 .expect("log pdf should evaluate")
         });
     });
@@ -251,4 +280,18 @@ fn array2(rows: &[Vec<f64>]) -> Array2<f64> {
         .flat_map(|row| row.iter().copied())
         .collect::<Vec<_>>();
     Array2::from_shape_vec((nrows, ncols), data).expect("rows should form a matrix")
+}
+
+fn serial_eval_options() -> EvalOptions {
+    EvalOptions {
+        exec: ExecPolicy::Force(Device::Cpu),
+        ..EvalOptions::default()
+    }
+}
+
+fn serial_fit_options() -> FitOptions {
+    FitOptions {
+        exec: ExecPolicy::Force(Device::Cpu),
+        ..FitOptions::default()
+    }
 }

@@ -1,7 +1,9 @@
 use ndarray::Array2;
 
 use crate::{
+    backend::{Operation, parallel_try_map_range_collect, resolve_strategy},
     data::PseudoObs,
+    domain::ExecPolicy,
     errors::{CopulaError, FitError},
 };
 
@@ -14,6 +16,7 @@ impl VineCopula {
     pub(crate) fn log_pdf_internal(
         &self,
         data: &PseudoObs,
+        exec: ExecPolicy,
         clip_eps: f64,
     ) -> Result<Vec<f64>, CopulaError> {
         if data.dim() != self.dim {
@@ -29,11 +32,12 @@ impl VineCopula {
         let cindirect = revert_matrix(&self.cond_indirect);
         let specs = revert_pair_matrix(&self.pair_matrix);
         let view = data.as_view();
-        let mut totals = vec![0.0; data.n_obs()];
+        let strategy = resolve_strategy(exec, Operation::VineLogPdf, data.n_obs())?;
 
-        for obs in 0..data.n_obs() {
+        parallel_try_map_range_collect(data.n_obs(), strategy, |obs| {
             let mut vdirect = Array2::zeros((d, d));
             let mut vindirect = Array2::zeros((d, d));
+            let mut total = 0.0;
 
             for (idx, var) in self.variable_order.iter().copied().enumerate() {
                 vdirect[(0, idx)] = view[(obs, var)].clamp(clip_eps, 1.0 - clip_eps);
@@ -54,7 +58,7 @@ impl VineCopula {
                         reason: "missing pair-copula specification for vine evaluation",
                     })?;
 
-                    totals[obs] += spec.log_pdf(source, target, clip_eps)?;
+                    total += spec.log_pdf(source, target, clip_eps)?;
                     vdirect[(k + 1, i)] = spec.cond_second_given_first(source, target, clip_eps)?;
                     if i + 1 < d && cindirect[(k + 1, i)] {
                         vindirect[(k + 1, i)] =
@@ -62,8 +66,7 @@ impl VineCopula {
                     }
                 }
             }
-        }
-
-        Ok(totals)
+            Ok(total)
+        })
     }
 }
