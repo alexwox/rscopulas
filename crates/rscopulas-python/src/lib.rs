@@ -9,9 +9,10 @@ use pyo3::{
 use rand::{SeedableRng, random, rngs::StdRng};
 use rscopulas_core::{
     ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FitDiagnostics,
-    FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, PairCopulaFamily,
-    PairCopulaParams, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, VineCopula,
-    VineFitOptions, VineStructureKind,
+    FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod,
+    HacFitOptions, HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula,
+    PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions, SelectionCriterion,
+    StudentTCopula, VineCopula, VineFitOptions, VineStructureKind,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -120,8 +121,145 @@ fn family_name(family: CopulaFamily) -> &'static str {
         CopulaFamily::Clayton => "clayton",
         CopulaFamily::Frank => "frank",
         CopulaFamily::Gumbel => "gumbel",
+        CopulaFamily::HierarchicalArchimedean => "hierarchical_archimedean",
         CopulaFamily::Vine => "vine",
     }
+}
+
+fn hac_family_name(family: HacFamily) -> &'static str {
+    match family {
+        HacFamily::Clayton => "clayton",
+        HacFamily::Frank => "frank",
+        HacFamily::Gumbel => "gumbel",
+    }
+}
+
+fn hac_family_from_name(name: &str) -> PyResult<HacFamily> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "clayton" => Ok(HacFamily::Clayton),
+        "frank" => Ok(HacFamily::Frank),
+        "gumbel" => Ok(HacFamily::Gumbel),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported HAC family '{other}'; expected one of clayton, frank, gumbel"
+        ))),
+    }
+}
+
+fn hac_structure_method_name(method: HacStructureMethod) -> &'static str {
+    match method {
+        HacStructureMethod::GivenTree => "given_tree",
+        HacStructureMethod::AgglomerativeTau => "agglomerative_tau",
+        HacStructureMethod::AgglomerativeTauThenCollapse => "agglomerative_tau_then_collapse",
+    }
+}
+
+fn hac_structure_method_from_name(name: &str) -> PyResult<HacStructureMethod> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "given_tree" | "given" => Ok(HacStructureMethod::GivenTree),
+        "agglomerative_tau" | "agglomerative" => Ok(HacStructureMethod::AgglomerativeTau),
+        "agglomerative_tau_then_collapse" | "agglomerative_then_collapse" | "collapse" => {
+            Ok(HacStructureMethod::AgglomerativeTauThenCollapse)
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unsupported HAC structure method '{other}'"
+        ))),
+    }
+}
+
+fn hac_fit_method_name(method: HacFitMethod) -> &'static str {
+    match method {
+        HacFitMethod::TauInit => "tau_init",
+        HacFitMethod::RecursiveMle => "recursive_mle",
+        HacFitMethod::FullMle => "full_mle",
+        HacFitMethod::Smle => "smle",
+        HacFitMethod::Dmle => "dmle",
+    }
+}
+
+fn hac_fit_method_from_name(name: &str) -> PyResult<HacFitMethod> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "tau_init" | "tau" => Ok(HacFitMethod::TauInit),
+        "recursive_mle" | "recursive" => Ok(HacFitMethod::RecursiveMle),
+        "full_mle" | "full" => Ok(HacFitMethod::FullMle),
+        "smle" => Ok(HacFitMethod::Smle),
+        "dmle" => Ok(HacFitMethod::Dmle),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported HAC fit method '{other}'"
+        ))),
+    }
+}
+
+fn hac_tree_from_py(value: &Bound<'_, PyAny>) -> PyResult<HacTree> {
+    if let Ok(index) = value.extract::<usize>() {
+        return Ok(HacTree::Leaf(index));
+    }
+    let dict = value.cast::<PyDict>()?;
+    let family = dict
+        .get_item("family")?
+        .ok_or_else(|| PyValueError::new_err("HAC node dictionaries require a 'family' key"))?
+        .extract::<String>()?;
+    let theta = dict
+        .get_item("theta")?
+        .ok_or_else(|| PyValueError::new_err("HAC node dictionaries require a 'theta' key"))?
+        .extract::<f64>()?;
+    let children_value = dict
+        .get_item("children")?
+        .ok_or_else(|| PyValueError::new_err("HAC node dictionaries require a 'children' key"))?;
+    let children = children_value.cast::<PyList>()?;
+    let parsed_children = children
+        .iter()
+        .map(|child| hac_tree_from_py(&child))
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(HacTree::Node(HacNode::new(
+        hac_family_from_name(&family)?,
+        theta,
+        parsed_children,
+    )))
+}
+
+fn hac_tree_to_py<'py>(py: Python<'py>, tree: &HacTree) -> PyResult<Py<PyAny>> {
+    match tree {
+        HacTree::Leaf(index) => Ok(index.into_pyobject(py)?.unbind().into()),
+        HacTree::Node(node) => {
+            let dict = PyDict::new(py);
+            dict.set_item("family", hac_family_name(node.family))?;
+            dict.set_item("theta", node.theta)?;
+            let children = PyList::empty(py);
+            for child in &node.children {
+                children.append(hac_tree_to_py(py, child)?)?;
+            }
+            dict.set_item("children", children)?;
+            Ok(dict.unbind().into())
+        }
+    }
+}
+
+fn hac_fit_options(
+    family_set: Option<Vec<String>>,
+    structure_method: &str,
+    fit_method: &str,
+    collapse_eps: f64,
+    mc_samples: usize,
+    allow_experimental: bool,
+    clip_eps: f64,
+    max_iter: usize,
+) -> PyResult<HacFitOptions> {
+    let mut options = HacFitOptions {
+        base: fit_options(clip_eps, max_iter),
+        structure_method: hac_structure_method_from_name(structure_method)?,
+        fit_method: hac_fit_method_from_name(fit_method)?,
+        collapse_eps,
+        mc_samples,
+        allow_experimental,
+        ..HacFitOptions::default()
+    };
+    if let Some(families) = family_set {
+        options.family_set = families
+            .iter()
+            .map(|family| hac_family_from_name(family))
+            .collect::<PyResult<Vec<_>>>()?;
+    }
+    Ok(options)
 }
 
 fn vine_kind_name(kind: VineStructureKind) -> &'static str {
@@ -855,6 +993,159 @@ impl PyVineCopula {
     }
 }
 
+#[pyclass(
+    skip_from_py_object,
+    module = "rscopulas._rscopulas",
+    name = "_HierarchicalArchimedeanCopula"
+)]
+#[derive(Clone)]
+struct PyHierarchicalArchimedeanCopula {
+    inner: HierarchicalArchimedeanCopula,
+}
+
+#[pymethods]
+impl PyHierarchicalArchimedeanCopula {
+    #[staticmethod]
+    fn from_tree(tree: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let tree = hac_tree_from_py(tree)?;
+        HierarchicalArchimedeanCopula::new(tree)
+            .map(|inner| Self { inner })
+            .map_err(to_pyerr)
+    }
+
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (data, tree=None, family_set=None, structure_method="agglomerative_tau_then_collapse", fit_method="recursive_mle", collapse_eps=0.05, mc_samples=256, allow_experimental=true, clip_eps=1e-12, max_iter=500))]
+    fn fit(
+        data: PyReadonlyArray2<'_, f64>,
+        tree: Option<&Bound<'_, PyAny>>,
+        family_set: Option<Vec<String>>,
+        structure_method: &str,
+        fit_method: &str,
+        collapse_eps: f64,
+        mc_samples: usize,
+        allow_experimental: bool,
+        clip_eps: f64,
+        max_iter: usize,
+    ) -> PyResult<(Self, PyFitDiagnostics)> {
+        let data = pseudo_obs_from_py(data)?;
+        let options = hac_fit_options(
+            family_set,
+            structure_method,
+            fit_method,
+            collapse_eps,
+            mc_samples,
+            allow_experimental,
+            clip_eps,
+            max_iter,
+        )?;
+        let result = match tree {
+            Some(tree) => {
+                let parsed_tree = hac_tree_from_py(tree)?;
+                HierarchicalArchimedeanCopula::fit_with_tree(&data, parsed_tree, &options)
+            }
+            None => HierarchicalArchimedeanCopula::fit(&data, &options),
+        }
+        .map_err(to_pyerr)?;
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
+    }
+
+    #[getter]
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    #[getter]
+    fn family(&self) -> &'static str {
+        family_name(self.inner.family())
+    }
+
+    #[getter]
+    fn is_exact(&self) -> bool {
+        self.inner.is_exact()
+    }
+
+    #[getter]
+    fn exact_loglik(&self) -> bool {
+        self.inner.exact_loglik()
+    }
+
+    #[getter]
+    fn used_smle(&self) -> bool {
+        self.inner.used_smle()
+    }
+
+    #[getter]
+    fn mc_samples(&self) -> usize {
+        self.inner.mc_samples()
+    }
+
+    #[getter]
+    fn structure_method(&self) -> &'static str {
+        hac_structure_method_name(self.inner.structure_method())
+    }
+
+    #[getter]
+    fn fit_method(&self) -> &'static str {
+        hac_fit_method_name(self.inner.fit_method())
+    }
+
+    fn tree<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        hac_tree_to_py(py, self.inner.tree())
+    }
+
+    fn leaf_order(&self) -> Vec<usize> {
+        self.inner.leaf_order()
+    }
+
+    fn parameters(&self) -> Vec<f64> {
+        self.inner.parameters()
+    }
+
+    fn families(&self) -> Vec<String> {
+        self.inner
+            .families()
+            .into_iter()
+            .map(|family| hac_family_name(family).to_string())
+            .collect()
+    }
+
+    #[pyo3(signature = (data, clip_eps=1e-12))]
+    fn log_pdf<'py>(
+        &self,
+        py: Python<'py>,
+        data: PyReadonlyArray2<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let data = pseudo_obs_from_py(data)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+
+    #[pyo3(signature = (n, seed=None))]
+    fn sample<'py>(
+        &self,
+        py: Python<'py>,
+        n: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let mut rng = rng_from_seed(seed);
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+}
+
 #[pymodule]
 fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RscopulasError", py.get_type::<RscopulasError>())?;
@@ -870,5 +1161,6 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyFrankCopula>()?;
     module.add_class::<PyGumbelCopula>()?;
     module.add_class::<PyVineCopula>()?;
+    module.add_class::<PyHierarchicalArchimedeanCopula>()?;
     Ok(())
 }

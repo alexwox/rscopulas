@@ -112,6 +112,7 @@ pub enum CopulaFamily {
     Clayton,
     Frank,
     Gumbel,
+    HierarchicalArchimedean,
     Vine,
 }
 
@@ -144,5 +145,6 @@ pub enum Copula {
     Clayton(super::ClaytonCopula),
     Frank(super::FrankCopula),
     Gumbel(super::GumbelHougaardCopula),
+    HierarchicalArchimedean(super::HierarchicalArchimedeanCopula),
     Vine(super::VineCopula),
 }

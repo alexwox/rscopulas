@@ -240,6 +240,82 @@ class GumbelCopula(_BaseModel):
         return float(self._core.theta)
 
 
+class HierarchicalArchimedeanCopula(_BaseModel):
+    @classmethod
+    def from_tree(cls, tree: int | dict[str, Any]) -> "HierarchicalArchimedeanCopula":
+        return cls(_rscopulas._HierarchicalArchimedeanCopula.from_tree(tree))
+
+    @classmethod
+    def fit(
+        cls,
+        data: npt.ArrayLike,
+        *,
+        tree: int | dict[str, Any] | None = None,
+        family_set: Sequence[str] | None = None,
+        structure_method: str = "agglomerative_tau_then_collapse",
+        fit_method: str = "recursive_mle",
+        collapse_eps: float = 0.05,
+        mc_samples: int = 256,
+        allow_experimental: bool = True,
+        clip_eps: float = 1e-12,
+        max_iter: int = 500,
+    ) -> FitResult["HierarchicalArchimedeanCopula"]:
+        return cls._fit_result(
+            _rscopulas._HierarchicalArchimedeanCopula.fit(
+                _as_float_matrix(data),
+                tree=tree,
+                family_set=_family_set(family_set),
+                structure_method=structure_method,
+                fit_method=fit_method,
+                collapse_eps=collapse_eps,
+                mc_samples=mc_samples,
+                allow_experimental=allow_experimental,
+                clip_eps=clip_eps,
+                max_iter=max_iter,
+            )
+        )
+
+    @property
+    def is_exact(self) -> bool:
+        return bool(self._core.is_exact)
+
+    @property
+    def exact_loglik(self) -> bool:
+        return bool(self._core.exact_loglik)
+
+    @property
+    def used_smle(self) -> bool:
+        return bool(self._core.used_smle)
+
+    @property
+    def mc_samples(self) -> int:
+        return int(self._core.mc_samples)
+
+    @property
+    def structure_method(self) -> str:
+        return str(self._core.structure_method)
+
+    @property
+    def fit_method(self) -> str:
+        return str(self._core.fit_method)
+
+    @property
+    def tree(self) -> int | dict[str, Any]:
+        return self._core.tree()
+
+    @property
+    def leaf_order(self) -> list[int]:
+        return [int(value) for value in self._core.leaf_order()]
+
+    @property
+    def parameters(self) -> list[float]:
+        return [float(value) for value in self._core.parameters()]
+
+    @property
+    def families(self) -> list[str]:
+        return [str(value) for value in self._core.families()]
+
+
 class VineCopula(_BaseModel):
     @classmethod
     def gaussian_c_vine(cls, order: Sequence[int], correlation: npt.ArrayLike) -> "VineCopula":

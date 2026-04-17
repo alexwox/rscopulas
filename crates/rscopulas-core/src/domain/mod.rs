@@ -1,5 +1,6 @@
 mod archimedean;
 mod common;
+mod hac;
 mod elliptical;
 mod vine;
 
@@ -7,6 +8,10 @@ pub use archimedean::{ClaytonCopula, FrankCopula, GumbelHougaardCopula};
 pub use common::{
     Copula, CopulaFamily, CopulaModel, Device, EvalOptions, ExecPolicy, FitDiagnostics, FitOptions,
     SampleOptions,
+};
+pub use hac::{
+    HacFamily, HacFitMethod, HacFitOptions, HacNode, HacStructureMethod, HacTree,
+    HierarchicalArchimedeanCopula,
 };
 pub use elliptical::{GaussianCopula, StudentTCopula};
 pub use vine::{
