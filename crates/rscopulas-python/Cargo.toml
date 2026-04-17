@@ -1,0 +1,13 @@
+[package]
+name = "rscopulas-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rscopulas-core = { path = "../rscopulas-core" }
+
