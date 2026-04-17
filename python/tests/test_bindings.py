@@ -9,6 +9,7 @@ from rscopulas import (
     GumbelCopula,
     HierarchicalArchimedeanCopula,
     InvalidInputError,
+    PairCopula,
     StudentTCopula,
     VineCopula,
 )
@@ -106,6 +107,51 @@ def test_vine_fit_r_exposes_structure_and_parameters() -> None:
     assert samples.shape == (4, 4)
     assert np.all(samples > 0.0)
     assert np.all(samples < 1.0)
+
+
+def test_vine_from_trees_rebuilds_model() -> None:
+    fit = VineCopula.fit_r(
+        DATA_4D,
+        family_set=["independence", "gaussian", "clayton", "frank", "gumbel"],
+        truncation_level=2,
+        max_iter=200,
+    )
+    rebuilt = VineCopula.from_trees(
+        fit.model.structure_kind,
+        fit.model.trees,
+        truncation_level=fit.model.truncation_level,
+    )
+
+    assert rebuilt.structure_kind == fit.model.structure_kind
+    assert rebuilt.dim == fit.model.dim
+    np.testing.assert_allclose(rebuilt.log_pdf(DATA_4D), fit.model.log_pdf(DATA_4D))
+
+
+def test_pair_wrapper_exposes_density_and_h_kernels() -> None:
+    model = PairCopula.from_spec("gaussian", [0.7])
+    u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+    u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+    p = np.array([0.27, 0.45, 0.73, 0.91], dtype=np.float64)
+
+    log_pdf = model.log_pdf(u1, u2)
+    cond_first = model.cond_first_given_second(u1, u2)
+    cond_second = model.cond_second_given_first(u1, u2)
+    inv_first = model.inv_first_given_second(p, u2)
+    inv_second = model.inv_second_given_first(u1, p)
+
+    assert model.family == "gaussian"
+    assert model.rotation == "R0"
+    assert model.parameters == (0.7,)
+    assert log_pdf.shape == (4,)
+    assert cond_first.shape == (4,)
+    assert cond_second.shape == (4,)
+    assert inv_first.shape == (4,)
+    assert inv_second.shape == (4,)
+    np.testing.assert_allclose(log_pdf[0], 0.6046870303398274)
+    np.testing.assert_allclose(cond_first[0], 0.27030730996634816)
+    np.testing.assert_allclose(cond_second[0], 0.46044070722116331)
+    np.testing.assert_allclose(inv_first[-1], 0.93599364105697047)
+    np.testing.assert_allclose(inv_second[-1], 0.96246049482916851)
 
 
 def test_invalid_input_error_surfaces_from_core_validation() -> None:

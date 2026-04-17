@@ -26,3 +26,7 @@ serde_json.workspace = true
 [[bench]]
 name = "gaussian"
 harness = false
+
+[[bench]]
+name = "cross_language"
+harness = false

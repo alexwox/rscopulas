@@ -1,5 +1,5 @@
 use ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::{
     Bound, create_exception,
     exceptions::{PyException, PyValueError},
@@ -12,7 +12,7 @@ use rscopulas_core::{
     FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod,
     HacFitOptions, HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula,
     PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions, SelectionCriterion,
-    StudentTCopula, VineCopula, VineFitOptions, VineStructureKind,
+    StudentTCopula, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -76,6 +76,88 @@ fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
             "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel"
         ))),
     }
+}
+
+fn rotation_from_name(name: &str) -> PyResult<Rotation> {
+    match name.trim().to_ascii_uppercase().as_str() {
+        "R0" => Ok(Rotation::R0),
+        "R90" => Ok(Rotation::R90),
+        "R180" => Ok(Rotation::R180),
+        "R270" => Ok(Rotation::R270),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported rotation '{other}'; expected one of R0, R90, R180, R270"
+        ))),
+    }
+}
+
+fn pair_params_from_values(
+    family: PairCopulaFamily,
+    parameters: Vec<f64>,
+) -> PyResult<PairCopulaParams> {
+    match (family, parameters.as_slice()) {
+        (PairCopulaFamily::Independence, []) => Ok(PairCopulaParams::None),
+        (PairCopulaFamily::Gaussian, [value])
+        | (PairCopulaFamily::Clayton, [value])
+        | (PairCopulaFamily::Frank, [value])
+        | (PairCopulaFamily::Gumbel, [value]) => Ok(PairCopulaParams::One(*value)),
+        (PairCopulaFamily::StudentT, [rho, nu]) => Ok(PairCopulaParams::Two(*rho, *nu)),
+        (PairCopulaFamily::Independence, values) => Err(PyValueError::new_err(format!(
+            "independence pair copulas do not take parameters (got {})",
+            values.len()
+        ))),
+        (PairCopulaFamily::StudentT, values) => Err(PyValueError::new_err(format!(
+            "student_t pair copulas require exactly two parameters (got {})",
+            values.len()
+        ))),
+        (_, values) => Err(PyValueError::new_err(format!(
+            "pair family requires exactly one parameter (got {})",
+            values.len()
+        ))),
+    }
+}
+
+fn pair_spec_from_values(
+    family: &str,
+    rotation: &str,
+    parameters: Vec<f64>,
+) -> PyResult<rscopulas_core::PairCopulaSpec> {
+    let family = pair_family_from_name(family)?;
+    Ok(rscopulas_core::PairCopulaSpec {
+        family,
+        rotation: rotation_from_name(rotation)?,
+        params: pair_params_from_values(family, parameters)?,
+    })
+}
+
+fn vine_kind_from_name(name: &str) -> PyResult<VineStructureKind> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "c" => Ok(VineStructureKind::C),
+        "d" => Ok(VineStructureKind::D),
+        "r" => Ok(VineStructureKind::R),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported vine kind '{other}'; expected one of c, d, r"
+        ))),
+    }
+}
+
+fn vector_from_py(data: PyReadonlyArray1<'_, f64>) -> Vec<f64> {
+    data.as_array().iter().copied().collect()
+}
+
+fn paired_vectors_from_py(
+    left: PyReadonlyArray1<'_, f64>,
+    right: PyReadonlyArray1<'_, f64>,
+    left_name: &str,
+    right_name: &str,
+) -> PyResult<(Vec<f64>, Vec<f64>)> {
+    let left_values = vector_from_py(left);
+    let right_values = vector_from_py(right);
+    if left_values.len() != right_values.len() {
+        return Err(PyValueError::new_err(format!(
+            "{left_name} and {right_name} must have the same length"
+        )));
+    }
+    Ok((left_values, right_values))
 }
 
 fn criterion_from_name(name: &str) -> PyResult<SelectionCriterion> {
@@ -296,6 +378,57 @@ fn params_to_vec(params: PairCopulaParams) -> Vec<f64> {
         PairCopulaParams::One(value) => vec![value],
         PairCopulaParams::Two(first, second) => vec![first, second],
     }
+}
+
+fn vine_edge_from_py(value: &Bound<'_, PyAny>, level: usize) -> PyResult<VineEdge> {
+    let dict = value.cast::<PyDict>()?;
+    let conditioned = dict
+        .get_item("conditioned")?
+        .ok_or_else(|| PyValueError::new_err("vine edge dictionaries require 'conditioned'"))?
+        .extract::<(usize, usize)>()?;
+    let conditioning = match dict.get_item("conditioning")? {
+        Some(value) => value.extract::<Vec<usize>>()?,
+        None => Vec::new(),
+    };
+    let family = dict
+        .get_item("family")?
+        .ok_or_else(|| PyValueError::new_err("vine edge dictionaries require 'family'"))?
+        .extract::<String>()?;
+    let rotation = dict
+        .get_item("rotation")?
+        .ok_or_else(|| PyValueError::new_err("vine edge dictionaries require 'rotation'"))?
+        .extract::<String>()?;
+    let parameters = if let Some(value) = dict.get_item("parameters")? {
+        value.extract::<Vec<f64>>()?
+    } else if let Some(value) = dict.get_item("params")? {
+        value.extract::<Vec<f64>>()?
+    } else {
+        return Err(PyValueError::new_err(
+            "vine edge dictionaries require 'parameters' or 'params'",
+        ));
+    };
+    Ok(VineEdge {
+        tree: level,
+        conditioned,
+        conditioning,
+        copula: pair_spec_from_values(&family, &rotation, parameters)?,
+    })
+}
+
+fn vine_tree_from_py(value: &Bound<'_, PyAny>) -> PyResult<VineTree> {
+    let dict = value.cast::<PyDict>()?;
+    let level = dict
+        .get_item("level")?
+        .ok_or_else(|| PyValueError::new_err("vine tree dictionaries require 'level'"))?
+        .extract::<usize>()?;
+    let edges = dict
+        .get_item("edges")?
+        .ok_or_else(|| PyValueError::new_err("vine tree dictionaries require 'edges'"))?
+        .cast::<PyList>()?
+        .iter()
+        .map(|edge| vine_edge_from_py(&edge, level))
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(VineTree { level, edges })
 }
 
 #[pyclass(
@@ -778,6 +911,136 @@ impl PyGumbelCopula {
 #[pyclass(
     skip_from_py_object,
     module = "rscopulas._rscopulas",
+    name = "_PairCopula"
+)]
+#[derive(Clone)]
+struct PyPairCopula {
+    inner: rscopulas_core::PairCopulaSpec,
+}
+
+impl PyPairCopula {
+    fn eval_pair_batch<'py, F>(
+        &self,
+        py: Python<'py>,
+        left: PyReadonlyArray1<'_, f64>,
+        right: PyReadonlyArray1<'_, f64>,
+        clip_eps: f64,
+        left_name: &str,
+        right_name: &str,
+        mut callback: F,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>>
+    where
+        F: FnMut(&rscopulas_core::PairCopulaSpec, f64, f64, f64) -> Result<f64, CopulaError>,
+    {
+        let (left_values, right_values) = paired_vectors_from_py(left, right, left_name, right_name)?;
+        let values = left_values
+            .into_iter()
+            .zip(right_values)
+            .map(|(first, second)| callback(&self.inner, first, second, clip_eps).map_err(to_pyerr))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(values.into_pyarray(py))
+    }
+}
+
+#[pymethods]
+impl PyPairCopula {
+    #[staticmethod]
+    #[pyo3(signature = (family, parameters=None, rotation="R0"))]
+    fn from_spec(family: &str, parameters: Option<Vec<f64>>, rotation: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: pair_spec_from_values(family, rotation, parameters.unwrap_or_default())?,
+        })
+    }
+
+    #[getter]
+    fn family(&self) -> &'static str {
+        pair_family_name(self.inner.family)
+    }
+
+    #[getter]
+    fn rotation(&self) -> &'static str {
+        rotation_name(self.inner.rotation)
+    }
+
+    #[getter]
+    fn parameters(&self) -> Vec<f64> {
+        params_to_vec(self.inner.params)
+    }
+
+    #[getter]
+    fn dim(&self) -> usize {
+        2
+    }
+
+    #[pyo3(signature = (u1, u2, clip_eps=1e-12))]
+    fn log_pdf<'py>(
+        &self,
+        py: Python<'py>,
+        u1: PyReadonlyArray1<'_, f64>,
+        u2: PyReadonlyArray1<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.eval_pair_batch(py, u1, u2, clip_eps, "u1", "u2", |spec, left, right, eps| {
+            spec.log_pdf(left, right, eps)
+        })
+    }
+
+    #[pyo3(signature = (u1, u2, clip_eps=1e-12))]
+    fn cond_first_given_second<'py>(
+        &self,
+        py: Python<'py>,
+        u1: PyReadonlyArray1<'_, f64>,
+        u2: PyReadonlyArray1<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.eval_pair_batch(py, u1, u2, clip_eps, "u1", "u2", |spec, left, right, eps| {
+            spec.cond_first_given_second(left, right, eps)
+        })
+    }
+
+    #[pyo3(signature = (u1, u2, clip_eps=1e-12))]
+    fn cond_second_given_first<'py>(
+        &self,
+        py: Python<'py>,
+        u1: PyReadonlyArray1<'_, f64>,
+        u2: PyReadonlyArray1<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.eval_pair_batch(py, u1, u2, clip_eps, "u1", "u2", |spec, left, right, eps| {
+            spec.cond_second_given_first(left, right, eps)
+        })
+    }
+
+    #[pyo3(signature = (p, u2, clip_eps=1e-12))]
+    fn inv_first_given_second<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray1<'_, f64>,
+        u2: PyReadonlyArray1<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.eval_pair_batch(py, p, u2, clip_eps, "p", "u2", |spec, left, right, eps| {
+            spec.inv_first_given_second(left, right, eps)
+        })
+    }
+
+    #[pyo3(signature = (u1, p, clip_eps=1e-12))]
+    fn inv_second_given_first<'py>(
+        &self,
+        py: Python<'py>,
+        u1: PyReadonlyArray1<'_, f64>,
+        p: PyReadonlyArray1<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.eval_pair_batch(py, u1, p, clip_eps, "u1", "p", |spec, left, right, eps| {
+            spec.inv_second_given_first(left, right, eps)
+        })
+    }
+}
+
+#[pyclass(
+    skip_from_py_object,
+    module = "rscopulas._rscopulas",
     name = "_VineCopula"
 )]
 #[derive(Clone)]
@@ -787,6 +1050,22 @@ struct PyVineCopula {
 
 #[pymethods]
 impl PyVineCopula {
+    #[staticmethod]
+    fn from_trees(
+        kind: &str,
+        trees: &Bound<'_, PyAny>,
+        truncation_level: Option<usize>,
+    ) -> PyResult<Self> {
+        let trees = trees
+            .cast::<PyList>()?
+            .iter()
+            .map(|tree| vine_tree_from_py(&tree))
+            .collect::<PyResult<Vec<_>>>()?;
+        VineCopula::from_trees(vine_kind_from_name(kind)?, trees, truncation_level)
+            .map(|inner| Self { inner })
+            .map_err(to_pyerr)
+    }
+
     #[staticmethod]
     fn gaussian_c_vine(
         order: Vec<usize>,
@@ -1160,6 +1439,7 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyClaytonCopula>()?;
     module.add_class::<PyFrankCopula>()?;
     module.add_class::<PyGumbelCopula>()?;
+    module.add_class::<PyPairCopula>()?;
     module.add_class::<PyVineCopula>()?;
     module.add_class::<PyHierarchicalArchimedeanCopula>()?;
     Ok(())

@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "gaussian_log_pdf",
+      "category": "single_family",
+      "family": "gaussian",
+      "operation": "log_pdf",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/gaussian_log_pdf_d2_case01.json",
+      "iterations": 2000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "student_t_log_pdf",
+      "category": "single_family",
+      "family": "student_t",
+      "operation": "log_pdf",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/student_t_log_pdf_d2_case01.json",
+      "iterations": 2000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "clayton_log_pdf",
+      "category": "single_family",
+      "family": "clayton",
+      "operation": "log_pdf",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/clayton_log_pdf_d2_case01.json",
+      "iterations": 2000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "frank_log_pdf",
+      "category": "single_family",
+      "family": "frank",
+      "operation": "log_pdf",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/frank_log_pdf_d2_case01.json",
+      "iterations": 2000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "gumbel_log_pdf",
+      "category": "single_family",
+      "family": "gumbel",
+      "operation": "log_pdf",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/gumbel_log_pdf_d2_case01.json",
+      "iterations": 2000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "gaussian_fit",
+      "category": "single_family",
+      "family": "gaussian",
+      "operation": "fit",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/gaussian_fit_d2_case01.json",
+      "iterations": 500,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "student_t_fit",
+      "category": "single_family",
+      "family": "student_t",
+      "operation": "fit",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/student_t_fit_d2_case01.json",
+      "iterations": 300,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "clayton_fit",
+      "category": "single_family",
+      "family": "clayton",
+      "operation": "fit",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/clayton_fit_d2_case01.json",
+      "iterations": 500,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "frank_fit",
+      "category": "single_family",
+      "family": "frank",
+      "operation": "fit",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/frank_fit_d2_case01.json",
+      "iterations": 500,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "gumbel_fit",
+      "category": "single_family",
+      "family": "gumbel",
+      "operation": "fit",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/gumbel_fit_d2_case01.json",
+      "iterations": 500,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "gaussian_sample",
+      "category": "single_family",
+      "family": "gaussian",
+      "operation": "sample",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/gaussian_sample_summary_d2_case01.json",
+      "iterations": 1000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "student_t_sample",
+      "category": "single_family",
+      "family": "student_t",
+      "operation": "sample",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/student_t_sample_summary_d2_case01.json",
+      "iterations": 1000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "clayton_sample",
+      "category": "single_family",
+      "family": "clayton",
+      "operation": "sample",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/clayton_sample_summary_d2_case01.json",
+      "iterations": 1000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "frank_sample",
+      "category": "single_family",
+      "family": "frank",
+      "operation": "sample",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/frank_sample_summary_d2_case01.json",
+      "iterations": 1000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "gumbel_sample",
+      "category": "single_family",
+      "family": "gumbel",
+      "operation": "sample",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/gumbel_sample_summary_d2_case01.json",
+      "iterations": 1000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "pair_gaussian_kernels",
+      "category": "pair_copula",
+      "family": "gaussian",
+      "operation": "kernels",
+      "fixture": "fixtures/reference/vinecopula/v2/pair_gaussian_case01.json",
+      "iterations": 3000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "pair_student_t_kernels",
+      "category": "pair_copula",
+      "family": "student_t",
+      "operation": "kernels",
+      "fixture": "fixtures/reference/vinecopula/v2/pair_student_t_case01.json",
+      "iterations": 3000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "pair_clayton_kernels",
+      "category": "pair_copula",
+      "family": "clayton",
+      "operation": "kernels",
+      "fixture": "fixtures/reference/vinecopula/v2/pair_clayton_case01.json",
+      "iterations": 3000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "pair_clayton_rot90_kernels",
+      "category": "pair_copula",
+      "family": "clayton",
+      "operation": "kernels",
+      "fixture": "fixtures/reference/vinecopula/v2/pair_clayton_rot90_case01.json",
+      "iterations": 3000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "pair_frank_kernels",
+      "category": "pair_copula",
+      "family": "frank",
+      "operation": "kernels",
+      "fixture": "fixtures/reference/vinecopula/v2/pair_frank_case01.json",
+      "iterations": 3000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "pair_gumbel_rot180_kernels",
+      "category": "pair_copula",
+      "family": "gumbel",
+      "operation": "kernels",
+      "fixture": "fixtures/reference/vinecopula/v2/pair_gumbel_rot180_case01.json",
+      "iterations": 3000,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "mixed_r_vine_log_pdf",
+      "category": "vine",
+      "structure": "r",
+      "operation": "log_pdf",
+      "fixture": "fixtures/reference/vinecopula/v2/mixed_r_vine_log_pdf_d5_case01.json",
+      "iterations": 500,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "mixed_r_vine_sample",
+      "category": "vine",
+      "structure": "r",
+      "operation": "sample",
+      "fixture": "fixtures/reference/vinecopula/v2/mixed_r_vine_sample_summary_d5_case01.json",
+      "iterations": 300,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
+      "id": "mixed_r_vine_fit",
+      "category": "vine",
+      "structure": "r",
+      "operation": "fit",
+      "fixture": "fixtures/reference/vinecopula/v2/mixed_r_vine_fit_data_d5_case01.json",
+      "iterations": 50,
+      "implementations": ["rust", "python", "r"]
+    }
+  ]
+}

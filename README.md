@@ -227,13 +227,17 @@ From the repository root:
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,viz]"
 maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
 pytest
 ```
 
 The project metadata lives in the root `pyproject.toml`, and the extension
 module is exported as `rscopulas._rscopulas`.
+
+If you only need the numeric API, `python -m pip install -e ".[dev]"` is still
+enough. The optional plotting helpers live in `rscopulas.plotting` and require
+the `viz` extra.
 
 ### Fit a Gaussian copula
 
@@ -262,6 +266,46 @@ print("dim:", fit.model.dim)
 print("AIC:", fit.diagnostics.aic)
 print("correlation:\n", fit.model.correlation)
 print("sample:\n", fit.model.sample(4, seed=7))
+```
+
+### Quick visualization
+
+The plotting helpers are intentionally lightweight and sit in
+`rscopulas.plotting` so the base package stays NumPy-first.
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+from rscopulas import GaussianCopula, VineCopula
+from rscopulas.plotting import plot_density, plot_scatter, plot_vine_structure
+
+data = np.array(
+    [
+        [0.12, 0.18, 0.21],
+        [0.21, 0.25, 0.29],
+        [0.27, 0.22, 0.31],
+        [0.35, 0.42, 0.39],
+        [0.48, 0.51, 0.46],
+        [0.56, 0.49, 0.58],
+        [0.68, 0.73, 0.69],
+        [0.82, 0.79, 0.76],
+    ],
+    dtype=np.float64,
+)
+
+gaussian_fit = GaussianCopula.fit(data[:, :2])
+plot_scatter(sample=data[:, :2])
+plot_density(gaussian_fit.model)
+
+vine_fit = VineCopula.fit_r(
+    data,
+    family_set=["independence", "gaussian", "clayton", "frank", "gumbel"],
+    truncation_level=1,
+)
+plot_vine_structure(vine_fit.model)
+
+plt.show()
 ```
 
 ### Fit and inspect an R-vine
@@ -336,13 +380,15 @@ print(vine.order)
 ### Python API shape
 
 - `GaussianCopula`, `StudentTCopula`, `ClaytonCopula`, `FrankCopula`,
-  `GumbelCopula`, and `VineCopula` are the main model classes.
+  `GumbelCopula`, `HierarchicalArchimedeanCopula`, and `VineCopula` are the
+  main model classes. `PairCopula` exposes low-level bivariate kernels.
 - `fit(...)` returns a `FitResult` with `model` and `diagnostics`.
 - `diagnostics` exposes `loglik`, `aic`, `bic`, `converged`, and `n_iter`.
 - `log_pdf(...)` accepts array-like input and returns a NumPy array.
 - `sample(...)` returns a NumPy array and accepts an optional integer seed.
 - Vine models additionally expose `structure_kind`, `truncation_level`, `order`,
   `pair_parameters`, `structure_info`, and `trees`.
+- Optional plotting helpers are available from `rscopulas.plotting`.
 
 ### Python caveats
 
@@ -385,6 +431,29 @@ fixtures in place for:
 
 This fixture suite is what keeps the numerical claims grounded rather than
 hand-wavy.
+
+## Benchmarks
+
+Cross-language speed comparisons between R and `rscopulas` live under
+`benchmarks/`.
+
+The benchmark harness reuses the same JSON fixtures as the reference tests and
+covers:
+
+- single-family `log_pdf`, `fit`, and `sample`
+- pair-copula density plus h/hinv kernels
+- mixed R-vine `log_pdf`, `sample`, and `fit`
+
+Run the orchestrator from the workspace root:
+
+```bash
+python benchmarks/run.py
+```
+
+Outputs land in `benchmarks/output/` as both JSON and Markdown summaries.
+
+See `benchmarks/README.md` for prerequisites, case filters, and iteration
+scaling.
 
 ## Development
 

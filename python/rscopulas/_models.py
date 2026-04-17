@@ -22,10 +22,63 @@ def _as_order(order: Sequence[int]) -> list[int]:
     return [int(value) for value in order]
 
 
+def _as_float_vector(data: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    array = np.asarray(data, dtype=np.float64)
+    if array.ndim != 1:
+        raise ValueError("expected a 1D array")
+    return array
+
+
 def _family_set(family_set: Sequence[str] | None) -> list[str] | None:
     if family_set is None:
         return None
     return [str(family) for family in family_set]
+
+
+def _edge_parameters(edge: Any) -> list[float]:
+    if isinstance(edge, VineEdgeInfo):
+        return [float(value) for value in edge.parameters]
+    if isinstance(edge, dict):
+        raw = edge.get("parameters", edge.get("params", []))
+        return [float(value) for value in raw]
+    raise TypeError("vine edges must be VineEdgeInfo instances or dictionaries")
+
+
+def _serialize_vine_edge(edge: VineEdgeInfo | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(edge, VineEdgeInfo):
+        return {
+            "tree": edge.tree,
+            "conditioned": (edge.conditioned[0], edge.conditioned[1]),
+            "conditioning": list(edge.conditioning),
+            "family": edge.family,
+            "rotation": edge.rotation,
+            "parameters": list(edge.parameters),
+        }
+    if isinstance(edge, dict):
+        conditioned = edge["conditioned"]
+        return {
+            "tree": int(edge.get("tree", 0)),
+            "conditioned": (int(conditioned[0]), int(conditioned[1])),
+            "conditioning": [int(value) for value in edge.get("conditioning", [])],
+            "family": str(edge["family"]),
+            "rotation": str(edge.get("rotation", "R0")),
+            "parameters": _edge_parameters(edge),
+        }
+    raise TypeError("vine edges must be VineEdgeInfo instances or dictionaries")
+
+
+def _serialize_vine_tree(tree: VineTreeInfo | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(tree, VineTreeInfo):
+        return {
+            "level": tree.level,
+            "edges": [_serialize_vine_edge(edge) for edge in tree.edges],
+        }
+    if isinstance(tree, dict):
+        return {
+            "level": int(tree["level"]),
+            "edges": [_serialize_vine_edge(edge) for edge in tree["edges"]],
+        }
+    raise TypeError("vine trees must be VineTreeInfo instances or dictionaries")
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +181,86 @@ class _BaseModel:
 
     def sample(self, n: int, *, seed: int | None = None) -> npt.NDArray[np.float64]:
         return np.asarray(self._core.sample(int(n), seed=seed))
+
+
+class PairCopula:
+    def __init__(self, core_model: Any) -> None:
+        self._core = core_model
+
+    @classmethod
+    def from_spec(
+        cls,
+        family: str,
+        parameters: Sequence[float] = (),
+        *,
+        rotation: str = "R0",
+    ) -> "PairCopula":
+        return cls(
+            _rscopulas._PairCopula.from_spec(
+                str(family),
+                parameters=[float(value) for value in parameters],
+                rotation=str(rotation),
+            )
+        )
+
+    @property
+    def dim(self) -> int:
+        return int(self._core.dim)
+
+    @property
+    def family(self) -> str:
+        return str(self._core.family)
+
+    @property
+    def rotation(self) -> str:
+        return str(self._core.rotation)
+
+    @property
+    def parameters(self) -> tuple[float, ...]:
+        return tuple(float(value) for value in self._core.parameters)
+
+    def log_pdf(
+        self, u1: npt.ArrayLike, u2: npt.ArrayLike, *, clip_eps: float = 1e-12
+    ) -> npt.NDArray[np.float64]:
+        return np.asarray(
+            self._core.log_pdf(_as_float_vector(u1), _as_float_vector(u2), clip_eps=clip_eps)
+        )
+
+    def cond_first_given_second(
+        self, u1: npt.ArrayLike, u2: npt.ArrayLike, *, clip_eps: float = 1e-12
+    ) -> npt.NDArray[np.float64]:
+        return np.asarray(
+            self._core.cond_first_given_second(
+                _as_float_vector(u1), _as_float_vector(u2), clip_eps=clip_eps
+            )
+        )
+
+    def cond_second_given_first(
+        self, u1: npt.ArrayLike, u2: npt.ArrayLike, *, clip_eps: float = 1e-12
+    ) -> npt.NDArray[np.float64]:
+        return np.asarray(
+            self._core.cond_second_given_first(
+                _as_float_vector(u1), _as_float_vector(u2), clip_eps=clip_eps
+            )
+        )
+
+    def inv_first_given_second(
+        self, p: npt.ArrayLike, u2: npt.ArrayLike, *, clip_eps: float = 1e-12
+    ) -> npt.NDArray[np.float64]:
+        return np.asarray(
+            self._core.inv_first_given_second(
+                _as_float_vector(p), _as_float_vector(u2), clip_eps=clip_eps
+            )
+        )
+
+    def inv_second_given_first(
+        self, u1: npt.ArrayLike, p: npt.ArrayLike, *, clip_eps: float = 1e-12
+    ) -> npt.NDArray[np.float64]:
+        return np.asarray(
+            self._core.inv_second_given_first(
+                _as_float_vector(u1), _as_float_vector(p), clip_eps=clip_eps
+            )
+        )
 
 
 class GaussianCopula(_BaseModel):
@@ -317,6 +450,17 @@ class HierarchicalArchimedeanCopula(_BaseModel):
 
 
 class VineCopula(_BaseModel):
+    @classmethod
+    def from_trees(
+        cls,
+        kind: str,
+        trees: Sequence[VineTreeInfo | dict[str, Any]],
+        *,
+        truncation_level: int | None = None,
+    ) -> "VineCopula":
+        payload = [_serialize_vine_tree(tree) for tree in trees]
+        return cls(_rscopulas._VineCopula.from_trees(str(kind), payload, truncation_level))
+
     @classmethod
     def gaussian_c_vine(cls, order: Sequence[int], correlation: npt.ArrayLike) -> "VineCopula":
         return cls(
