@@ -5,9 +5,11 @@ use ndarray::Array2;
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 
+use rscopulas_accel::is_device_available as accel_device_available;
 use rscopulas_core::{
     ClaytonCopula, CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, FrankCopula,
-    GaussianCopula, GumbelHougaardCopula, PseudoObs, SampleOptions, StudentTCopula, VineCopula,
+    GaussianCopula, GumbelHougaardCopula, PairCopulaFamily, PseudoObs, SampleOptions,
+    StudentTCopula, VineCopula, VineFitOptions, paircopula::fit_pair_copula,
 };
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +61,12 @@ struct VineLogPdfFixture {
     order: Vec<usize>,
     correlation: Vec<Vec<f64>>,
     inputs: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PairFixture {
+    u1: Vec<f64>,
+    u2: Vec<f64>,
 }
 
 fn gaussian_log_pdf_benchmark(criterion: &mut Criterion) {
@@ -212,6 +220,26 @@ fn gaussian_c_vine_log_pdf_benchmark(criterion: &mut Criterion) {
                 .expect("log pdf should evaluate")
         });
     });
+    if accel_device_available(rscopulas_accel::Device::Metal) {
+        let metal = metal_eval_options();
+        criterion.bench_function("gaussian_c_vine_log_pdf_metal_fixture_case01", |bench| {
+            bench.iter(|| {
+                model
+                    .log_pdf(black_box(&input), black_box(&metal))
+                    .expect("log pdf should evaluate")
+            });
+        });
+    }
+    if accel_device_available(rscopulas_accel::Device::Cuda(0)) {
+        let cuda = cuda_eval_options();
+        criterion.bench_function("gaussian_c_vine_log_pdf_cuda_fixture_case01", |bench| {
+            bench.iter(|| {
+                model
+                    .log_pdf(black_box(&input), black_box(&cuda))
+                    .expect("log pdf should evaluate")
+            });
+        });
+    }
 }
 
 fn gaussian_d_vine_log_pdf_benchmark(criterion: &mut Criterion) {
@@ -236,6 +264,56 @@ fn gaussian_d_vine_log_pdf_benchmark(criterion: &mut Criterion) {
                 .expect("log pdf should evaluate")
         });
     });
+    if accel_device_available(rscopulas_accel::Device::Metal) {
+        let metal = metal_eval_options();
+        criterion.bench_function("gaussian_d_vine_log_pdf_metal_fixture_case01", |bench| {
+            bench.iter(|| {
+                model
+                    .log_pdf(black_box(&input), black_box(&metal))
+                    .expect("log pdf should evaluate")
+            });
+        });
+    }
+    if accel_device_available(rscopulas_accel::Device::Cuda(0)) {
+        let cuda = cuda_eval_options();
+        criterion.bench_function("gaussian_d_vine_log_pdf_cuda_fixture_case01", |bench| {
+            bench.iter(|| {
+                model
+                    .log_pdf(black_box(&input), black_box(&cuda))
+                    .expect("log pdf should evaluate")
+            });
+        });
+    }
+}
+
+fn gaussian_pair_fit_backend_benchmark(criterion: &mut Criterion) {
+    let fixture: PairFixture = load_vine_fixture("pair_gaussian_case01.json");
+    let serial = gaussian_pair_fit_options(ExecPolicy::Force(Device::Cpu));
+
+    criterion.bench_function("gaussian_pair_fit_serial_fixture_case01", |bench| {
+        bench.iter(|| {
+            fit_pair_copula(black_box(&fixture.u1), black_box(&fixture.u2), black_box(&serial))
+                .expect("pair fit should evaluate")
+        });
+    });
+    if accel_device_available(rscopulas_accel::Device::Metal) {
+        let metal = gaussian_pair_fit_options(ExecPolicy::Force(Device::Metal));
+        criterion.bench_function("gaussian_pair_fit_metal_fixture_case01", |bench| {
+            bench.iter(|| {
+                fit_pair_copula(black_box(&fixture.u1), black_box(&fixture.u2), black_box(&metal))
+                    .expect("pair fit should evaluate")
+            });
+        });
+    }
+    if accel_device_available(rscopulas_accel::Device::Cuda(0)) {
+        let cuda = gaussian_pair_fit_options(ExecPolicy::Force(Device::Cuda(0)));
+        criterion.bench_function("gaussian_pair_fit_cuda_fixture_case01", |bench| {
+            bench.iter(|| {
+                fit_pair_copula(black_box(&fixture.u1), black_box(&fixture.u2), black_box(&cuda))
+                    .expect("pair fit should evaluate")
+            });
+        });
+    }
 }
 
 criterion_group!(
@@ -247,6 +325,7 @@ criterion_group!(
     clayton_log_pdf_benchmark,
     frank_log_pdf_benchmark,
     gumbel_log_pdf_benchmark,
+    gaussian_pair_fit_backend_benchmark,
     gaussian_c_vine_log_pdf_benchmark,
     gaussian_d_vine_log_pdf_benchmark
 );
@@ -293,5 +372,31 @@ fn serial_fit_options() -> FitOptions {
     FitOptions {
         exec: ExecPolicy::Force(Device::Cpu),
         ..FitOptions::default()
+    }
+}
+
+fn metal_eval_options() -> EvalOptions {
+    EvalOptions {
+        exec: ExecPolicy::Force(Device::Metal),
+        ..EvalOptions::default()
+    }
+}
+
+fn cuda_eval_options() -> EvalOptions {
+    EvalOptions {
+        exec: ExecPolicy::Force(Device::Cuda(0)),
+        ..EvalOptions::default()
+    }
+}
+
+fn gaussian_pair_fit_options(exec: ExecPolicy) -> VineFitOptions {
+    VineFitOptions {
+        base: FitOptions {
+            exec,
+            ..FitOptions::default()
+        },
+        family_set: vec![PairCopulaFamily::Gaussian],
+        include_rotations: false,
+        ..VineFitOptions::default()
     }
 }

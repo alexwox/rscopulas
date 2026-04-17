@@ -4,6 +4,7 @@ use ndarray::Array2;
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 
+use rscopulas_accel::is_device_available as accel_device_available;
 use rscopulas_core::{
     CopulaError, CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, GaussianCopula,
     PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PseudoObs, Rotation, SampleOptions,
@@ -191,6 +192,126 @@ fn mixed_r_vine_auto_matches_forced_cpu() {
 }
 
 #[test]
+fn forced_metal_gaussian_pair_fit_matches_cpu_with_tolerance() {
+    if !accel_device_available(rscopulas_accel::Device::Metal) {
+        return;
+    }
+
+    let fixture: PairFixture = load_vine_fixture("pair_gaussian_case01.json");
+    let serial = fit_pair_copula(
+        &fixture.u1,
+        &fixture.u2,
+        &gaussian_only_pair_fit_options(ExecPolicy::Force(Device::Cpu)),
+    )
+    .expect("serial gaussian pair fit should succeed");
+    let metal = fit_pair_copula(
+        &fixture.u1,
+        &fixture.u2,
+        &gaussian_only_pair_fit_options(ExecPolicy::Force(Device::Metal)),
+    )
+    .expect("metal gaussian pair fit should succeed");
+
+    assert_eq!(metal.spec, serial.spec);
+    assert!((metal.loglik - serial.loglik).abs() < 1e-4);
+    assert_close_slice(&metal.cond_on_first, &serial.cond_on_first, 1e-5);
+    assert_close_slice(&metal.cond_on_second, &serial.cond_on_second, 1e-5);
+}
+
+#[test]
+fn forced_metal_gaussian_vines_match_cpu_with_tolerance() {
+    if !accel_device_available(rscopulas_accel::Device::Metal) {
+        return;
+    }
+
+    for fixture_name in [
+        ("gaussian_c_vine_log_pdf_d4_case01.json", VineStructureKind::C),
+        ("gaussian_d_vine_log_pdf_d4_case01.json", VineStructureKind::D),
+    ] {
+        let fixture: VineLogPdfFixture = load_vine_fixture(fixture_name.0);
+        let model = match fixture_name.1 {
+            VineStructureKind::C => {
+                VineCopula::gaussian_c_vine(fixture.order.clone(), array2(&fixture.correlation))
+            }
+            VineStructureKind::D => {
+                VineCopula::gaussian_d_vine(fixture.order.clone(), array2(&fixture.correlation))
+            }
+            VineStructureKind::R => unreachable!("only C and D vines are exercised here"),
+        }
+        .expect("vine model should build");
+        let data = PseudoObs::new(array2(&fixture.inputs)).expect("inputs should be valid");
+
+        let serial = model
+            .log_pdf(&data, &serial_eval_options())
+            .expect("serial vine log pdf should evaluate");
+        let metal = model
+            .log_pdf(
+                &data,
+                &EvalOptions {
+                    exec: ExecPolicy::Force(Device::Metal),
+                    ..EvalOptions::default()
+                },
+            )
+            .expect("metal vine log pdf should evaluate");
+
+        assert_close_slice(&metal, &serial, 1e-3);
+    }
+}
+
+#[test]
+fn forced_metal_mixed_r_vine_falls_back_to_cpu() {
+    if !accel_device_available(rscopulas_accel::Device::Metal) {
+        return;
+    }
+
+    let fixture: RVineLogPdfFixture = load_vine_fixture("mixed_r_vine_log_pdf_d5_case01.json");
+    let model = build_r_vine_model(&fixture.trees, fixture.truncation_level);
+    let data = PseudoObs::new(array2(&fixture.inputs)).expect("inputs should be valid");
+
+    let serial = model
+        .log_pdf(&data, &serial_eval_options())
+        .expect("serial log pdf should evaluate");
+    let metal = model
+        .log_pdf(
+            &data,
+            &EvalOptions {
+                exec: ExecPolicy::Force(Device::Metal),
+                ..EvalOptions::default()
+            },
+        )
+        .expect("metal fallback log pdf should evaluate");
+
+    assert_eq!(metal, serial);
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+#[test]
+fn forced_cuda_gaussian_vines_match_cpu_when_available() {
+    if !accel_device_available(rscopulas_accel::Device::Cuda(0)) {
+        return;
+    }
+
+    let fixture: VineLogPdfFixture = load_vine_fixture("gaussian_c_vine_log_pdf_d4_case01.json");
+    let model = VineCopula::gaussian_c_vine(fixture.order, array2(&fixture.correlation))
+        .expect("vine model should build");
+    let data = PseudoObs::new(array2(&fixture.inputs)).expect("inputs should be valid");
+
+    let serial = model
+        .log_pdf(&data, &serial_eval_options())
+        .expect("serial vine log pdf should evaluate");
+    let cuda = model
+        .log_pdf(
+            &data,
+            &EvalOptions {
+                exec: ExecPolicy::Force(Device::Cuda(0)),
+                ..EvalOptions::default()
+            },
+        )
+        .expect("cuda vine log pdf should evaluate");
+
+    assert_close_slice(&cuda, &serial, 1e-10);
+}
+
+#[test]
 fn unsupported_accelerator_requests_surface_backend_errors() {
     let fixture: GaussianLogPdfFixture = load_copula_fixture("gaussian_log_pdf_d2_case01.json");
     let model = GaussianCopula::new(array2(&fixture.correlation)).expect("correlation should be valid");
@@ -251,6 +372,18 @@ fn pair_fit_options(exec: ExecPolicy) -> VineFitOptions {
             PairCopulaFamily::Gumbel,
         ],
         include_rotations: true,
+        ..VineFitOptions::default()
+    }
+}
+
+fn gaussian_only_pair_fit_options(exec: ExecPolicy) -> VineFitOptions {
+    VineFitOptions {
+        base: FitOptions {
+            exec,
+            ..FitOptions::default()
+        },
+        family_set: vec![PairCopulaFamily::Gaussian],
+        include_rotations: false,
         ..VineFitOptions::default()
     }
 }
@@ -351,4 +484,14 @@ fn array2(rows: &[Vec<f64>]) -> Array2<f64> {
     let ncols = rows.first().map_or(0, Vec::len);
     let data = rows.iter().flat_map(|row| row.iter().copied()).collect::<Vec<_>>();
     Array2::from_shape_vec((nrows, ncols), data).expect("rows should form a matrix")
+}
+
+fn assert_close_slice(left: &[f64], right: &[f64], tol: f64) {
+    assert_eq!(left.len(), right.len());
+    for (idx, (lhs, rhs)) in left.iter().zip(right.iter()).enumerate() {
+        assert!(
+            (lhs - rhs).abs() <= tol,
+            "values differed at index {idx}: left={lhs}, right={rhs}, tol={tol}"
+        );
+    }
 }

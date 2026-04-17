@@ -8,11 +8,16 @@ authors.workspace = true
 [features]
 default = []
 cuda = []
-metal = ["dep:metal"]
+metal = []
 
 [dependencies]
 rayon.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-metal = { version = "0.31", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.31"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+cudarc = { version = "0.19.4", default-features = false, features = ["driver", "nvrtc", "dynamic-loading"] }
 

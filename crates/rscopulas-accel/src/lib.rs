@@ -1,3 +1,20 @@
+//! Acceleration support for `rscopulas`.
+//!
+//! This crate has three roles:
+//! - provide CPU-parallel helpers used by `rscopulas-core`
+//! - report backend capability information for CUDA and Metal
+//! - expose a narrow GPU facade for the first batch kernels that have true device
+//!   implementations
+//!
+//! The current GPU surface is intentionally narrow:
+//! - CUDA targets `f64` Gaussian pair batch evaluation and is the primary GPU
+//!   path for the current numerics
+//! - Metal targets a bounded `f32` Gaussian pair batch kernel and is only used
+//!   where the reduced-precision contract is acceptable
+
+mod cuda_backend;
+mod metal_backend;
+
 #[cfg(feature = "cuda")]
 use std::process::Command;
 
@@ -5,6 +22,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Device targets understood by the acceleration facade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Device {
     Cpu,
@@ -12,6 +30,7 @@ pub enum Device {
     Metal,
 }
 
+/// Capability snapshot reported by the accel crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeCapabilities {
     pub cpu_simd: bool,
@@ -20,16 +39,35 @@ pub struct ComputeCapabilities {
     pub metal: Option<MetalCaps>,
 }
 
+/// Runtime-reported CUDA capability summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CudaCaps {
     pub device_count: usize,
     pub fp64: bool,
 }
 
+/// Runtime-reported Metal capability summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetalCaps {
     pub device_count: usize,
     pub fp64: bool,
+}
+
+/// Narrow Gaussian pair-kernel request shared by CUDA and Metal backends.
+#[derive(Debug, Clone, Copy)]
+pub struct GaussianPairBatchRequest<'a> {
+    pub u1: &'a [f64],
+    pub u2: &'a [f64],
+    pub rho: f64,
+    pub clip_eps: f64,
+}
+
+/// Outputs produced by the first GPU-backed Gaussian pair kernel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GaussianPairBatchResult {
+    pub log_pdf: Vec<f64>,
+    pub cond_on_first: Vec<f64>,
+    pub cond_on_second: Vec<f64>,
 }
 
 #[derive(Debug, Error)]
@@ -41,8 +79,14 @@ pub enum DispatchError {
         backend: &'static str,
         operation: &'static str,
     },
+    #[error("backend {backend} failed: {reason}")]
+    Runtime {
+        backend: &'static str,
+        reason: String,
+    },
 }
 
+/// Returns the currently visible acceleration capabilities.
 pub fn detect_capabilities() -> ComputeCapabilities {
     ComputeCapabilities {
         cpu_simd: cpu_simd_available(),
@@ -52,6 +96,7 @@ pub fn detect_capabilities() -> ComputeCapabilities {
     }
 }
 
+/// Returns whether the requested backend appears available on this machine.
 pub fn is_device_available(device: Device) -> bool {
     let caps = detect_capabilities();
     match device {
@@ -63,6 +108,7 @@ pub fn is_device_available(device: Device) -> bool {
     }
 }
 
+/// Executes a CPU-parallel map over `0..len`.
 pub fn parallel_try_map_range_collect<T, E, F>(len: usize, f: F) -> Result<Vec<T>, E>
 where
     T: Send,
@@ -72,12 +118,32 @@ where
     (0..len).into_par_iter().map(f).collect()
 }
 
+/// Executes a CPU-parallel map over `0..len`.
 pub fn parallel_map_range_collect<T, F>(len: usize, f: F) -> Vec<T>
 where
     T: Send,
     F: Fn(usize) -> T + Sync + Send,
 {
     (0..len).into_par_iter().map(f).collect()
+}
+
+/// Runs the bounded Gaussian pair batch kernel on the requested GPU backend.
+///
+/// CUDA uses `f64` kernels. Metal uses an `f32` shader and therefore should be
+/// reserved for operations whose tolerance budget has been explicitly accepted
+/// by the caller or the surrounding dispatch policy.
+pub fn evaluate_gaussian_pair_batch(
+    device: Device,
+    request: GaussianPairBatchRequest<'_>,
+) -> Result<GaussianPairBatchResult, DispatchError> {
+    match device {
+        Device::Cpu => Err(DispatchError::OperationUnsupported {
+            backend: "cpu",
+            operation: "gaussian pair batch gpu evaluation",
+        }),
+        Device::Cuda(ordinal) => cuda_backend::evaluate_gaussian_pair_batch(ordinal, request),
+        Device::Metal => metal_backend::evaluate_gaussian_pair_batch(request),
+    }
 }
 
 fn cpu_simd_available() -> bool {
@@ -91,22 +157,38 @@ fn detect_cuda_caps() -> Option<CudaCaps> {
     #[cfg(feature = "cuda")]
     {
         let output = Command::new("nvidia-smi")
-            .args(["--query-gpu=name", "--format=csv,noheader"])
+            .args([
+                "--query-gpu=compute_cap,name",
+                "--format=csv,noheader,nounits",
+            ])
             .output()
             .ok()?;
         if !output.status.success() {
             return None;
         }
-        let count = String::from_utf8_lossy(&output.stdout)
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let rows = stdout
             .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count();
-        if count == 0 {
+            .filter_map(|line| {
+                let mut parts = line.split(',').map(str::trim);
+                let capability = parts.next()?;
+                let _name = parts.next()?;
+                Some(capability.to_owned())
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
             None
         } else {
+            let fp64 = rows.iter().all(|capability| {
+                capability
+                    .split('.')
+                    .next()
+                    .and_then(|major| major.parse::<u32>().ok())
+                    .is_some_and(|major| major >= 6)
+            });
             Some(CudaCaps {
-                device_count: count,
-                fp64: true,
+                device_count: rows.len(),
+                fp64,
             })
         }
     }
@@ -117,7 +199,7 @@ fn detect_cuda_caps() -> Option<CudaCaps> {
 }
 
 fn detect_metal_caps() -> Option<MetalCaps> {
-    #[cfg(feature = "metal")]
+    #[cfg(all(feature = "metal", target_os = "macos"))]
     {
         let devices = metal::Device::all();
         if devices.is_empty() {
@@ -129,7 +211,7 @@ fn detect_metal_caps() -> Option<MetalCaps> {
             })
         }
     }
-    #[cfg(not(feature = "metal"))]
+    #[cfg(not(all(feature = "metal", target_os = "macos")))]
     {
         None
     }

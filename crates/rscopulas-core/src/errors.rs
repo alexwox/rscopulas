@@ -54,4 +54,9 @@ pub enum BackendError {
     Unavailable { backend: &'static str },
     #[error("requested operation is not supported on backend {backend}")]
     Unsupported { backend: &'static str },
+    #[error("backend {backend} failed: {reason}")]
+    Failed {
+        backend: &'static str,
+        reason: String,
+    },
 }

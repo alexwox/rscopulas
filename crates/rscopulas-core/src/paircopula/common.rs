@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backend::{Operation, parallel_try_map_range_collect, resolve_strategy},
-    errors::{CopulaError, FitError},
+    backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
+    errors::{BackendError, CopulaError, FitError},
     math::maximize_scalar,
     vine::{SelectionCriterion, VineFitOptions},
 };
@@ -520,15 +520,42 @@ fn evaluate_pair_batch(
     exec: crate::domain::ExecPolicy,
 ) -> Result<PairBatchEvaluation, CopulaError> {
     let strategy = resolve_strategy(exec, Operation::PairBatchEval, u1.len())?;
-    let rows = parallel_try_map_range_collect(u1.len(), strategy, |idx| {
-        let left = u1[idx];
-        let right = u2[idx];
-        Ok((
-            spec.log_pdf(left, right, clip_eps)?,
-            spec.cond_first_given_second(left, right, clip_eps)?,
-            spec.cond_second_given_first(left, right, clip_eps)?,
-        ))
-    })?;
+    let rows = match strategy {
+        ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => {
+            evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, strategy)?
+        }
+        ExecutionStrategy::Cuda(ordinal) => match gaussian_pair_request(spec, u1, u2, clip_eps) {
+            Some(request) => {
+                let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
+                    rscopulas_accel::Device::Cuda(ordinal),
+                    request,
+                )
+                .map_err(|err| BackendError::Failed {
+                    backend: "cuda",
+                    reason: err.to_string(),
+                })?;
+                to_pair_rows(batch)
+            }
+            None => evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?,
+        },
+        ExecutionStrategy::Metal => match gaussian_pair_request(spec, u1, u2, clip_eps) {
+            Some(request) => {
+                let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
+                    rscopulas_accel::Device::Metal,
+                    request,
+                )
+                .map_err(|err| BackendError::Failed {
+                    backend: "metal",
+                    reason: err.to_string(),
+                })?;
+                to_pair_rows(batch)
+            }
+            // Metal stays bounded to the mixed-precision Gaussian pair kernel; the
+            // remaining pair families continue on CPU until they get a validated
+            // tolerance budget of their own.
+            None => evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?,
+        },
+    };
 
     let mut log_pdf = Vec::with_capacity(rows.len());
     let mut cond_on_first = Vec::with_capacity(rows.len());
@@ -544,4 +571,54 @@ fn evaluate_pair_batch(
         cond_on_first,
         cond_on_second,
     })
+}
+
+fn evaluate_pair_batch_cpu(
+    spec: PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+    strategy: ExecutionStrategy,
+) -> Result<Vec<(f64, f64, f64)>, CopulaError> {
+    parallel_try_map_range_collect(u1.len(), strategy, |idx| {
+        let left = u1[idx];
+        let right = u2[idx];
+        Ok((
+            spec.log_pdf(left, right, clip_eps)?,
+            spec.cond_first_given_second(left, right, clip_eps)?,
+            spec.cond_second_given_first(left, right, clip_eps)?,
+        ))
+    })
+}
+
+fn gaussian_pair_request<'a>(
+    spec: PairCopulaSpec,
+    u1: &'a [f64],
+    u2: &'a [f64],
+    clip_eps: f64,
+) -> Option<rscopulas_accel::GaussianPairBatchRequest<'a>> {
+    match (spec.family, spec.rotation, spec.params) {
+        (PairCopulaFamily::Gaussian, Rotation::R0, PairCopulaParams::One(rho)) => {
+            Some(rscopulas_accel::GaussianPairBatchRequest {
+                u1,
+                u2,
+                rho,
+                clip_eps,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn to_pair_rows(batch: rscopulas_accel::GaussianPairBatchResult) -> Vec<(f64, f64, f64)> {
+    let len = batch.log_pdf.len();
+    let mut rows = Vec::with_capacity(len);
+    for idx in 0..len {
+        rows.push((
+            batch.log_pdf[idx],
+            batch.cond_on_first[idx],
+            batch.cond_on_second[idx],
+        ));
+    }
+    rows
 }

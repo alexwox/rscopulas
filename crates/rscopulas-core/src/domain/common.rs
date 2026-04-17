@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::{data::PseudoObs, errors::CopulaError};
 
 /// Execution target requested by the caller.
+///
+/// `Cuda` is the first `f64`-native GPU target. `Metal` is intentionally
+/// bounded to mixed-precision kernels whose tolerance budget has been reviewed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Device {
     Cpu,
@@ -13,6 +16,15 @@ pub enum Device {
 }
 
 /// Policy for selecting which execution backend to use.
+///
+/// `Auto` currently means CPU reference / CPU parallel dispatch only.
+/// `Force(Device::Cuda(_))` and `Force(Device::Metal)` opt into the narrow
+/// GPU-aware paths that exist today:
+/// - Gaussian pair batch evaluation used by pair-fit scoring
+/// - Gaussian vine log-density evaluation built from those pair batches
+///
+/// Other operations still return a backend error instead of pretending they are
+/// accelerated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExecPolicy {
     Auto,
@@ -23,6 +35,9 @@ pub enum ExecPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FitOptions {
     /// Backend policy used for dependence estimation and pair scoring.
+    ///
+    /// Pair-family selection remains CPU-driven, but forced GPU backends can
+    /// accelerate the Gaussian pair batch substeps inside that scoring loop.
     pub exec: ExecPolicy,
     /// Probability clipping applied by fitters that evaluate densities internally.
     pub clip_eps: f64,
@@ -44,6 +59,9 @@ impl Default for FitOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalOptions {
     /// Backend policy used for batch density evaluation.
+    ///
+    /// GPU-backed evaluation is currently limited to Gaussian vine log-density.
+    /// Single-family copula density evaluation remains on CPU.
     pub exec: ExecPolicy,
     /// Clamp pseudo-observations into `[clip_eps, 1 - clip_eps]` before inversion.
     pub clip_eps: f64,
@@ -62,6 +80,9 @@ impl Default for EvalOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SampleOptions {
     /// Backend policy used for batch sampling.
+    ///
+    /// Sampling is still CPU-only; forced GPU sampling requests remain
+    /// unsupported until dedicated kernels are added.
     pub exec: ExecPolicy,
 }
 

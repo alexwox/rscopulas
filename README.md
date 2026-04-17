@@ -8,8 +8,8 @@ from pseudo-observations.
 - `crates/rscopulas-core`: core data validation, copula models, pair-copula
   primitives, vine structure / fitting / evaluation / sampling, math, stats,
   reference tests, and benchmarks
-- `crates/rscopulas-accel`: backend capability detection scaffolding for future
-  CPU/GPU dispatch
+- `crates/rscopulas-accel`: CPU-parallel helpers plus the first narrow CUDA /
+  Metal batch-kernel facade
 - `crates/rscopulas-python`: placeholder crate for future Python bindings
 
 ## Current Status
@@ -52,6 +52,7 @@ from pseudo-observations.
 - Criterion benchmarks for Gaussian `fit`, `log_pdf`, and `sample`; Student t,
   Clayton, Frank, and Gumbel `log_pdf`; and Gaussian C-vine and D-vine
   `log_pdf`
+- execution controls through `ExecPolicy` / `Device`
 - quality gates enforced in CI:
   - `cargo fmt --check`
   - `cargo test`
@@ -60,9 +61,6 @@ from pseudo-observations.
 
 ### Not working yet / scaffolding
 
-- `rscopulas-accel` only reports detected capabilities (`cpu_simd`,
-  `rayon_threads`, empty `cuda` / `metal`); it does not execute any accelerated
-  kernels yet
 - `rscopulas-python` exposes no Python API yet; the crate is a `cdylib`
   placeholder
 - there is no top-level ergonomic facade yet for selecting a family and
@@ -74,8 +72,37 @@ from pseudo-observations.
 
 ### Known caveats
 
-- the core crate is still the scalar CPU reference implementation; no
-  accelerated CUDA or Metal kernels are wired into model evaluation yet
+- `ExecPolicy::Auto` is intentionally conservative: it can pick CPU-parallel
+  execution, but it does not automatically jump to CUDA or Metal yet
+- forced GPU execution is narrow and explicit:
+  - CUDA currently accelerates the Gaussian pair batch kernel used by
+    pair-fit scoring and Gaussian vine `log_pdf`
+  - Metal currently accelerates the same Gaussian pair batch surface through an
+    `f32` mixed-precision kernel; broader `f64`-sensitive work remains on CPU
+    or unsupported, depending on the operation
+- single-family copula `log_pdf`, Kendall tau, and sampling remain CPU paths;
+  forcing CUDA/Metal for those top-level operations still surfaces a backend
+  error
+- mixed-family pair and vine work can still contain deliberate CPU fallback
+  within a forced GPU request, because only the Gaussian pair kernel is
+  accelerated today
+
+## Acceleration Contract
+
+The backend story is intentionally staged and honest:
+
+- CPU: the reference implementation is complete, and `Auto` can choose Rayon
+  parallelism for batch-heavy paths that already support it
+- CUDA: first true GPU backend for this library's `f64`-heavy numerics; the
+  current kernel set is the Gaussian pair batch surface reused by Gaussian vine
+  evaluation
+- Metal: bounded mixed-precision backend; it shares the same Gaussian pair
+  batch contract as CUDA, but with parity checked against tolerances instead of
+  exact equality
+
+If you need predictable device behavior today, prefer
+`Force(Device::Cpu)`, `Force(Device::Cuda(_))`, or `Force(Device::Metal)`
+instead of relying on `Auto`.
 
 ## Reference Fixtures
 
