@@ -5,7 +5,7 @@ mod imp {
     use std::sync::OnceLock;
 
     use cudarc::{
-        driver::{CudaContext, LaunchConfig},
+        driver::{CudaContext, LaunchConfig, PushKernelArg},
         nvrtc::compile_ptx,
     };
 
@@ -94,7 +94,7 @@ extern "C" __global__ void gaussian_pair_batch(
         static PTX: OnceLock<Result<cudarc::nvrtc::Ptx, String>> = OnceLock::new();
         PTX.get_or_init(|| {
             compile_ptx(CUDA_GAUSSIAN_PAIR_SRC)
-                .map_err(|err| format!("failed to compile CUDA gaussian pair kernel: {err}"))
+                .map_err(|err| format!("failed to compile CUDA gaussian pair kernel: {err:?}"))
         })
         .as_ref()
         .map_err(|reason| DispatchError::Runtime {
@@ -117,55 +117,56 @@ extern "C" __global__ void gaussian_pair_batch(
 
         let ctx = CudaContext::new(ordinal as usize).map_err(|err| DispatchError::Runtime {
             backend: "cuda",
-            reason: format!("failed to create CUDA context: {err}"),
+            reason: format!("failed to create CUDA context: {err:?}"),
         })?;
         let stream = ctx.default_stream();
         let module = ctx
             .load_module(gaussian_pair_ptx()?.clone())
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to load CUDA module: {err}"),
+                reason: format!("failed to load CUDA module: {err:?}"),
             })?;
         let function =
             module
                 .load_function("gaussian_pair_batch")
                 .map_err(|err| DispatchError::Runtime {
                     backend: "cuda",
-                    reason: format!("failed to load gaussian_pair_batch: {err}"),
+                    reason: format!("failed to load gaussian_pair_batch: {err:?}"),
                 })?;
 
         let u1 = stream
             .clone_htod(request.u1)
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to upload u1: {err}"),
+                reason: format!("failed to upload u1: {err:?}"),
             })?;
         let u2 = stream
             .clone_htod(request.u2)
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to upload u2: {err}"),
+                reason: format!("failed to upload u2: {err:?}"),
             })?;
         let mut out_log_pdf =
             stream
                 .alloc_zeros::<f64>(n)
                 .map_err(|err| DispatchError::Runtime {
                     backend: "cuda",
-                    reason: format!("failed to allocate log_pdf output: {err}"),
+                    reason: format!("failed to allocate log_pdf output: {err:?}"),
                 })?;
         let mut out_h12 = stream
             .alloc_zeros::<f64>(n)
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to allocate h12 output: {err}"),
+                reason: format!("failed to allocate h12 output: {err:?}"),
             })?;
         let mut out_h21 = stream
             .alloc_zeros::<f64>(n)
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to allocate h21 output: {err}"),
+                reason: format!("failed to allocate h21 output: {err:?}"),
             })?;
 
+        let n_elems = n as i32;
         let mut builder = stream.launch_builder(&function);
         builder.arg(&u1);
         builder.arg(&u2);
@@ -174,11 +175,11 @@ extern "C" __global__ void gaussian_pair_batch(
         builder.arg(&mut out_h21);
         builder.arg(&request.rho);
         builder.arg(&request.clip_eps);
-        builder.arg(&(n as i32));
+        builder.arg(&n_elems);
         unsafe { builder.launch(LaunchConfig::for_num_elems(n as u32)) }.map_err(|err| {
             DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to launch gaussian_pair_batch: {err}"),
+                reason: format!("failed to launch gaussian_pair_batch: {err:?}"),
             }
         })?;
 
@@ -186,19 +187,19 @@ extern "C" __global__ void gaussian_pair_batch(
             .clone_dtoh(&out_log_pdf)
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to download log_pdf: {err}"),
+                reason: format!("failed to download log_pdf: {err:?}"),
             })?;
         let cond_on_first = stream
             .clone_dtoh(&out_h12)
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to download h12: {err}"),
+                reason: format!("failed to download h12: {err:?}"),
             })?;
         let cond_on_second = stream
             .clone_dtoh(&out_h21)
             .map_err(|err| DispatchError::Runtime {
                 backend: "cuda",
-                reason: format!("failed to download h21: {err}"),
+                reason: format!("failed to download h21: {err:?}"),
             })?;
 
         Ok(GaussianPairBatchResult {
