@@ -10,7 +10,8 @@ from pseudo-observations.
   reference tests, and benchmarks
 - `crates/rscopulas-accel`: CPU-parallel helpers plus the first narrow CUDA /
   Metal batch-kernel facade
-- `crates/rscopulas-python`: placeholder crate for future Python bindings
+- `crates/rscopulas-python`: PyO3 extension crate plus the local NumPy-first
+  Python package surface
 
 ## Current Status
 
@@ -61,14 +62,14 @@ from pseudo-observations.
 
 ### Not working yet / scaffolding
 
-- `rscopulas-python` exposes no Python API yet; the crate is a `cdylib`
-  placeholder
 - there is no top-level ergonomic facade yet for selecting a family and
   returning a boxed or enum-backed fitted model from one entry point; the
   `Copula` enum is exported but unused by the library
 - reference coverage is strongest at `d = 2` for single families, `d = 4` for
   Gaussian vines, and `d = 5` for mixed R-vines; broader dimensional
   regression coverage still needs to be added
+- Python packaging currently targets local development through `maturin develop`;
+  wheel automation and PyPI publishing are not set up yet
 
 ### Known caveats
 
@@ -128,3 +129,66 @@ cargo test
 cargo bench --no-run
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+## Python Bindings
+
+The Python package is intentionally scoped for local development first. It wraps
+the stable `rscopulas-core` surface with a NumPy-first API and avoids exposing
+backend-selection or persistence features that are still evolving.
+
+Current Python surface:
+
+- `GaussianCopula`, `StudentTCopula`, `ClaytonCopula`, `FrankCopula`,
+  `GumbelCopula`, and `VineCopula`
+- `fit(...)`, `from_params(...)`, `log_pdf(...)`, and `sample(...)`
+- fit diagnostics and vine structure inspection helpers
+
+Local install workflow:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip maturin ".[dev]"
+maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
+pytest python/tests
+```
+
+Minimal example:
+
+```python
+import numpy as np
+
+from rscopulas import GaussianCopula, VineCopula
+
+data = np.array(
+    [
+        [0.12, 0.18, 0.21],
+        [0.21, 0.25, 0.29],
+        [0.27, 0.22, 0.31],
+        [0.35, 0.42, 0.39],
+        [0.48, 0.51, 0.46],
+        [0.56, 0.49, 0.58],
+        [0.68, 0.73, 0.69],
+        [0.82, 0.79, 0.76],
+    ],
+    dtype=np.float64,
+)
+
+gaussian_fit = GaussianCopula.fit(data[:, :2])
+print(gaussian_fit.diagnostics.aic)
+print(gaussian_fit.model.sample(4, seed=7))
+
+vine_fit = VineCopula.fit_r(
+    data,
+    family_set=["independence", "gaussian", "clayton", "frank", "gumbel"],
+    truncation_level=1,
+)
+print(vine_fit.model.structure_kind)
+print(vine_fit.model.order)
+```
+
+Deliberately deferred in Python for now:
+
+- model save/load helpers
+- backend selection (`ExecPolicy` / `Device`)
+- packaging for published wheels and PyPI

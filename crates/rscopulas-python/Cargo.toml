@@ -6,8 +6,13 @@ license.workspace = true
 authors.workspace = true
 
 [lib]
+name = "_rscopulas"
 crate-type = ["cdylib"]
 
 [dependencies]
+ndarray.workspace = true
+numpy = "0.28.0"
+pyo3 = { version = "0.28.3", features = ["extension-module"] }
+rand.workspace = true
 rscopulas-core = { path = "../rscopulas-core" }
 
