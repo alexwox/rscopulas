@@ -362,16 +362,18 @@ pub fn fit_pair_copula(
         }
     }
 
-    let strategy = resolve_strategy(options.base.exec, Operation::PairFitScoring, candidates.len())?;
+    let strategy = resolve_strategy(
+        options.base.exec,
+        Operation::PairFitScoring,
+        candidates.len(),
+    )?;
     let fits = parallel_try_map_range_collect(candidates.len(), strategy, |idx| {
         finalize_pair_fit(candidates[idx], u1, u2, options)
     })?;
-    let best = fits
-        .into_iter()
-        .min_by(|left, right| {
-            criterion_value(left, options.criterion)
-                .total_cmp(&criterion_value(right, options.criterion))
-        });
+    let best = fits.into_iter().min_by(|left, right| {
+        criterion_value(left, options.criterion)
+            .total_cmp(&criterion_value(right, options.criterion))
+    });
 
     best.ok_or(
         FitError::Failed {
@@ -536,7 +538,9 @@ fn evaluate_pair_batch(
                 })?;
                 to_pair_rows(batch)
             }
-            None => evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?,
+            None => {
+                evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?
+            }
         },
         ExecutionStrategy::Metal => match gaussian_pair_request(spec, u1, u2, clip_eps) {
             Some(request) => {
@@ -553,7 +557,9 @@ fn evaluate_pair_batch(
             // Metal stays bounded to the mixed-precision Gaussian pair kernel; the
             // remaining pair families continue on CPU until they get a validated
             // tolerance budget of their own.
-            None => evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?,
+            None => {
+                evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?
+            }
         },
     };
 

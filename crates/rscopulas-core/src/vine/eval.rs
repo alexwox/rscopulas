@@ -57,7 +57,9 @@ impl VineCopula {
         };
 
         match strategy {
-            ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => evaluate_vine_cpu(&ctx, strategy),
+            ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => {
+                evaluate_vine_cpu(&ctx, strategy)
+            }
             ExecutionStrategy::Cuda(ordinal) => evaluate_vine_with_gpu_pair_batches(
                 &ctx,
                 rscopulas_accel::Device::Cuda(ordinal),
@@ -99,8 +101,7 @@ fn evaluate_vine_cpu(
                 })?;
 
                 total += spec.log_pdf(source, target, ctx.clip_eps)?;
-                vdirect[(k + 1, i)] =
-                    spec.cond_second_given_first(source, target, ctx.clip_eps)?;
+                vdirect[(k + 1, i)] = spec.cond_second_given_first(source, target, ctx.clip_eps)?;
                 if i + 1 < ctx.d && ctx.cindirect[(k + 1, i)] {
                     vindirect[(k + 1, i)] =
                         spec.cond_first_given_second(source, target, ctx.clip_eps)?;
@@ -139,8 +140,8 @@ fn evaluate_vine_with_gpu_pair_batches(
     let mut vindirect = (0..n_obs)
         .map(|obs| {
             let mut indirect = Array2::zeros((ctx.d, ctx.d));
-            indirect[(0, 0)] = ctx.view[(obs, ctx.variable_order[0])]
-                .clamp(ctx.clip_eps, 1.0 - ctx.clip_eps);
+            indirect[(0, 0)] =
+                ctx.view[(obs, ctx.variable_order[0])].clamp(ctx.clip_eps, 1.0 - ctx.clip_eps);
             indirect
         })
         .collect::<Vec<_>>();
@@ -193,11 +194,7 @@ fn evaluate_vine_with_gpu_pair_batches(
                         spec.cond_second_given_first(sources[obs], targets[obs], ctx.clip_eps)?;
                     if i + 1 < ctx.d && ctx.cindirect[(k + 1, i)] {
                         vindirect[obs][(k + 1, i)] =
-                            spec.cond_first_given_second(
-                                sources[obs],
-                                targets[obs],
-                                ctx.clip_eps,
-                            )?;
+                            spec.cond_first_given_second(sources[obs], targets[obs], ctx.clip_eps)?;
                     }
                 }
             }

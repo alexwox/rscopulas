@@ -9,8 +9,7 @@ use rscopulas_core::{
     CopulaError, CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, GaussianCopula,
     PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PseudoObs, Rotation, SampleOptions,
     StudentTCopula, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
-    paircopula::fit_pair_copula,
-    stats::try_kendall_tau_matrix,
+    paircopula::fit_pair_copula, stats::try_kendall_tau_matrix,
 };
 
 #[derive(Debug, Deserialize)]
@@ -69,7 +68,8 @@ struct RVineLogPdfFixture {
 #[test]
 fn gaussian_log_pdf_auto_matches_forced_cpu() {
     let fixture: GaussianLogPdfFixture = load_copula_fixture("gaussian_log_pdf_d2_case01.json");
-    let model = GaussianCopula::new(array2(&fixture.correlation)).expect("correlation should be valid");
+    let model =
+        GaussianCopula::new(array2(&fixture.correlation)).expect("correlation should be valid");
     let data = PseudoObs::new(array2(&fixture.inputs)).expect("inputs should be valid");
 
     let auto = model
@@ -129,8 +129,12 @@ fn kendall_tau_auto_matches_forced_cpu() {
 fn pair_fit_auto_matches_forced_cpu_for_base_and_rotation() {
     for fixture_name in ["pair_clayton_case01.json", "pair_clayton_rot90_case01.json"] {
         let fixture: PairFixture = load_vine_fixture(fixture_name);
-        let auto = fit_pair_copula(&fixture.u1, &fixture.u2, &pair_fit_options(ExecPolicy::Auto))
-            .expect("auto pair fit should succeed");
+        let auto = fit_pair_copula(
+            &fixture.u1,
+            &fixture.u2,
+            &pair_fit_options(ExecPolicy::Auto),
+        )
+        .expect("auto pair fit should succeed");
         let serial = fit_pair_copula(
             &fixture.u1,
             &fixture.u2,
@@ -148,8 +152,14 @@ fn pair_fit_auto_matches_forced_cpu_for_base_and_rotation() {
 #[test]
 fn gaussian_c_and_d_vine_auto_match_forced_cpu() {
     for fixture_name in [
-        ("gaussian_c_vine_log_pdf_d4_case01.json", VineStructureKind::C),
-        ("gaussian_d_vine_log_pdf_d4_case01.json", VineStructureKind::D),
+        (
+            "gaussian_c_vine_log_pdf_d4_case01.json",
+            VineStructureKind::C,
+        ),
+        (
+            "gaussian_d_vine_log_pdf_d4_case01.json",
+            VineStructureKind::D,
+        ),
     ] {
         let fixture: VineLogPdfFixture = load_vine_fixture(fixture_name.0);
         let model = match fixture_name.1 {
@@ -224,8 +234,14 @@ fn forced_metal_gaussian_vines_match_cpu_with_tolerance() {
     }
 
     for fixture_name in [
-        ("gaussian_c_vine_log_pdf_d4_case01.json", VineStructureKind::C),
-        ("gaussian_d_vine_log_pdf_d4_case01.json", VineStructureKind::D),
+        (
+            "gaussian_c_vine_log_pdf_d4_case01.json",
+            VineStructureKind::C,
+        ),
+        (
+            "gaussian_d_vine_log_pdf_d4_case01.json",
+            VineStructureKind::D,
+        ),
     ] {
         let fixture: VineLogPdfFixture = load_vine_fixture(fixture_name.0);
         let model = match fixture_name.1 {
@@ -314,7 +330,8 @@ fn forced_cuda_gaussian_vines_match_cpu_when_available() {
 #[test]
 fn unsupported_accelerator_requests_surface_backend_errors() {
     let fixture: GaussianLogPdfFixture = load_copula_fixture("gaussian_log_pdf_d2_case01.json");
-    let model = GaussianCopula::new(array2(&fixture.correlation)).expect("correlation should be valid");
+    let model =
+        GaussianCopula::new(array2(&fixture.correlation)).expect("correlation should be valid");
     let data = PseudoObs::new(array2(&fixture.inputs)).expect("inputs should be valid");
 
     for exec in [
@@ -337,7 +354,8 @@ fn unsupported_accelerator_requests_surface_backend_errors() {
 #[test]
 fn sample_force_cpu_matches_auto_for_gaussian() {
     let fixture: GaussianLogPdfFixture = load_copula_fixture("gaussian_log_pdf_d2_case01.json");
-    let model = GaussianCopula::new(array2(&fixture.correlation)).expect("correlation should be valid");
+    let model =
+        GaussianCopula::new(array2(&fixture.correlation)).expect("correlation should be valid");
     let mut auto_rng = StdRng::seed_from_u64(1234);
     let mut serial_rng = StdRng::seed_from_u64(1234);
 
@@ -482,7 +500,10 @@ fn load_vine_fixture<T: for<'de> Deserialize<'de>>(name: &str) -> T {
 fn array2(rows: &[Vec<f64>]) -> Array2<f64> {
     let nrows = rows.len();
     let ncols = rows.first().map_or(0, Vec::len);
-    let data = rows.iter().flat_map(|row| row.iter().copied()).collect::<Vec<_>>();
+    let data = rows
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
     Array2::from_shape_vec((nrows, ncols), data).expect("rows should form a matrix")
 }
 

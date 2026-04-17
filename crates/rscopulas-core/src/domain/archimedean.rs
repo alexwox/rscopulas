@@ -222,7 +222,10 @@ impl CopulaModel for GumbelHougaardCopula {
         let dim = self.dim;
         evaluate_density_rows(data, options, move |row| {
             let clipped = clipped_row(row, options.clip_eps);
-            let t = clipped.iter().map(|value| (-value.ln()).powf(theta)).sum::<f64>();
+            let t = clipped
+                .iter()
+                .map(|value| (-value.ln()).powf(theta))
+                .sum::<f64>();
             let log_abs_derivative = gumbel::log_abs_generator_derivative(dim, t, alpha);
             let log_phi = clipped
                 .iter()
@@ -286,7 +289,11 @@ fn validate_archimedean_parameters(
     Ok(())
 }
 
-fn fit_result<T>(model: T, data: &PseudoObs, options: &FitOptions) -> Result<FitResult<T>, CopulaError>
+fn fit_result<T>(
+    model: T,
+    data: &PseudoObs,
+    options: &FitOptions,
+) -> Result<FitResult<T>, CopulaError>
 where
     T: CopulaModel,
 {

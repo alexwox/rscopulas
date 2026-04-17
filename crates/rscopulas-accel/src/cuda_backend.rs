@@ -126,12 +126,13 @@ extern "C" __global__ void gaussian_pair_batch(
                 backend: "cuda",
                 reason: format!("failed to load CUDA module: {err}"),
             })?;
-        let function = module
-            .load_function("gaussian_pair_batch")
-            .map_err(|err| DispatchError::Runtime {
-                backend: "cuda",
-                reason: format!("failed to load gaussian_pair_batch: {err}"),
-            })?;
+        let function =
+            module
+                .load_function("gaussian_pair_batch")
+                .map_err(|err| DispatchError::Runtime {
+                    backend: "cuda",
+                    reason: format!("failed to load gaussian_pair_batch: {err}"),
+                })?;
 
         let u1 = stream
             .clone_htod(request.u1)
@@ -145,12 +146,13 @@ extern "C" __global__ void gaussian_pair_batch(
                 backend: "cuda",
                 reason: format!("failed to upload u2: {err}"),
             })?;
-        let mut out_log_pdf = stream
-            .alloc_zeros::<f64>(n)
-            .map_err(|err| DispatchError::Runtime {
-                backend: "cuda",
-                reason: format!("failed to allocate log_pdf output: {err}"),
-            })?;
+        let mut out_log_pdf =
+            stream
+                .alloc_zeros::<f64>(n)
+                .map_err(|err| DispatchError::Runtime {
+                    backend: "cuda",
+                    reason: format!("failed to allocate log_pdf output: {err}"),
+                })?;
         let mut out_h12 = stream
             .alloc_zeros::<f64>(n)
             .map_err(|err| DispatchError::Runtime {

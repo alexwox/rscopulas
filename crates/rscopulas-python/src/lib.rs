@@ -55,7 +55,8 @@ fn rng_from_seed(seed: Option<u64>) -> StdRng {
 }
 
 fn pseudo_obs_from_py(data: PyReadonlyArray2<'_, f64>) -> PyResult<rscopulas_core::PseudoObs> {
-    rscopulas_core::PseudoObs::from_view(data.as_array()).map_err(|err| InvalidInputError::new_err(err.to_string()))
+    rscopulas_core::PseudoObs::from_view(data.as_array())
+        .map_err(|err| InvalidInputError::new_err(err.to_string()))
 }
 
 fn matrix_from_py(data: PyReadonlyArray2<'_, f64>) -> Array2<f64> {
@@ -241,8 +242,14 @@ impl PyGaussianCopula {
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         let data = pseudo_obs_from_py(data)?;
-        let result = GaussianCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        let result =
+            GaussianCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[getter]
@@ -268,7 +275,10 @@ impl PyGaussianCopula {
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let data = pseudo_obs_from_py(data)?;
-        let values = self.inner.log_pdf(&data, &eval_options(clip_eps)).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 
@@ -280,7 +290,10 @@ impl PyGaussianCopula {
         seed: Option<u64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let mut rng = rng_from_seed(seed);
-        let values = self.inner.sample(n, &mut rng, &sample_options()).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 }
@@ -298,7 +311,10 @@ struct PyStudentTCopula {
 #[pymethods]
 impl PyStudentTCopula {
     #[staticmethod]
-    fn from_params(correlation: PyReadonlyArray2<'_, f64>, degrees_of_freedom: f64) -> PyResult<Self> {
+    fn from_params(
+        correlation: PyReadonlyArray2<'_, f64>,
+        degrees_of_freedom: f64,
+    ) -> PyResult<Self> {
         StudentTCopula::new(matrix_from_py(correlation), degrees_of_freedom)
             .map(|inner| Self { inner })
             .map_err(to_pyerr)
@@ -312,8 +328,14 @@ impl PyStudentTCopula {
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         let data = pseudo_obs_from_py(data)?;
-        let result = StudentTCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        let result =
+            StudentTCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[getter]
@@ -344,7 +366,10 @@ impl PyStudentTCopula {
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let data = pseudo_obs_from_py(data)?;
-        let values = self.inner.log_pdf(&data, &eval_options(clip_eps)).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 
@@ -356,7 +381,10 @@ impl PyStudentTCopula {
         seed: Option<u64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let mut rng = rng_from_seed(seed);
-        let values = self.inner.sample(n, &mut rng, &sample_options()).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 }
@@ -388,8 +416,14 @@ impl PyClaytonCopula {
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         let data = pseudo_obs_from_py(data)?;
-        let result = ClaytonCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        let result =
+            ClaytonCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[getter]
@@ -415,7 +449,10 @@ impl PyClaytonCopula {
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let data = pseudo_obs_from_py(data)?;
-        let values = self.inner.log_pdf(&data, &eval_options(clip_eps)).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 
@@ -427,7 +464,10 @@ impl PyClaytonCopula {
         seed: Option<u64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let mut rng = rng_from_seed(seed);
-        let values = self.inner.sample(n, &mut rng, &sample_options()).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 }
@@ -460,7 +500,12 @@ impl PyFrankCopula {
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         let data = pseudo_obs_from_py(data)?;
         let result = FrankCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[getter]
@@ -486,7 +531,10 @@ impl PyFrankCopula {
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let data = pseudo_obs_from_py(data)?;
-        let values = self.inner.log_pdf(&data, &eval_options(clip_eps)).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 
@@ -498,7 +546,10 @@ impl PyFrankCopula {
         seed: Option<u64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let mut rng = rng_from_seed(seed);
-        let values = self.inner.sample(n, &mut rng, &sample_options()).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 }
@@ -532,7 +583,12 @@ impl PyGumbelCopula {
         let data = pseudo_obs_from_py(data)?;
         let result =
             GumbelHougaardCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[getter]
@@ -558,7 +614,10 @@ impl PyGumbelCopula {
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let data = pseudo_obs_from_py(data)?;
-        let values = self.inner.log_pdf(&data, &eval_options(clip_eps)).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 
@@ -570,7 +629,10 @@ impl PyGumbelCopula {
         seed: Option<u64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let mut rng = rng_from_seed(seed);
-        let values = self.inner.sample(n, &mut rng, &sample_options()).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 }
@@ -588,14 +650,20 @@ struct PyVineCopula {
 #[pymethods]
 impl PyVineCopula {
     #[staticmethod]
-    fn gaussian_c_vine(order: Vec<usize>, correlation: PyReadonlyArray2<'_, f64>) -> PyResult<Self> {
+    fn gaussian_c_vine(
+        order: Vec<usize>,
+        correlation: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Self> {
         VineCopula::gaussian_c_vine(order, matrix_from_py(correlation))
             .map(|inner| Self { inner })
             .map_err(to_pyerr)
     }
 
     #[staticmethod]
-    fn gaussian_d_vine(order: Vec<usize>, correlation: PyReadonlyArray2<'_, f64>) -> PyResult<Self> {
+    fn gaussian_d_vine(
+        order: Vec<usize>,
+        correlation: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Self> {
         VineCopula::gaussian_d_vine(order, matrix_from_py(correlation))
             .map(|inner| Self { inner })
             .map_err(to_pyerr)
@@ -625,7 +693,12 @@ impl PyVineCopula {
             max_iter,
         )?;
         let result = VineCopula::fit_c_vine(&data, &options).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[staticmethod]
@@ -652,7 +725,12 @@ impl PyVineCopula {
             max_iter,
         )?;
         let result = VineCopula::fit_d_vine(&data, &options).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[staticmethod]
@@ -679,7 +757,12 @@ impl PyVineCopula {
             max_iter,
         )?;
         let result = VineCopula::fit_r_vine(&data, &options).map_err(to_pyerr)?;
-        Ok((Self { inner: result.model }, result.diagnostics.into()))
+        Ok((
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        ))
     }
 
     #[getter]
@@ -749,7 +832,10 @@ impl PyVineCopula {
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let data = pseudo_obs_from_py(data)?;
-        let values = self.inner.log_pdf(&data, &eval_options(clip_eps)).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 
@@ -761,7 +847,10 @@ impl PyVineCopula {
         seed: Option<u64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let mut rng = rng_from_seed(seed);
-        let values = self.inner.sample(n, &mut rng, &sample_options()).map_err(to_pyerr)?;
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
 }

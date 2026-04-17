@@ -74,9 +74,7 @@ fn resolve_accelerated_device(
         // still use the forced GPU backend for supported Gaussian kernels.
         Operation::PairFitScoring => return Ok(cpu_strategy(operation, batch_len)),
         Operation::PairBatchEval | Operation::VineLogPdf => {}
-        Operation::DensityEval
-        | Operation::KendallTauMatrix
-        | Operation::Sample => {
+        Operation::DensityEval | Operation::KendallTauMatrix | Operation::Sample => {
             let backend = backend_name(device);
             return Err(BackendError::Unsupported { backend }.into());
         }

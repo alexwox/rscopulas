@@ -292,16 +292,24 @@ fn gaussian_pair_fit_backend_benchmark(criterion: &mut Criterion) {
 
     criterion.bench_function("gaussian_pair_fit_serial_fixture_case01", |bench| {
         bench.iter(|| {
-            fit_pair_copula(black_box(&fixture.u1), black_box(&fixture.u2), black_box(&serial))
-                .expect("pair fit should evaluate")
+            fit_pair_copula(
+                black_box(&fixture.u1),
+                black_box(&fixture.u2),
+                black_box(&serial),
+            )
+            .expect("pair fit should evaluate")
         });
     });
     if accel_device_available(rscopulas_accel::Device::Metal) {
         let metal = gaussian_pair_fit_options(ExecPolicy::Force(Device::Metal));
         criterion.bench_function("gaussian_pair_fit_metal_fixture_case01", |bench| {
             bench.iter(|| {
-                fit_pair_copula(black_box(&fixture.u1), black_box(&fixture.u2), black_box(&metal))
-                    .expect("pair fit should evaluate")
+                fit_pair_copula(
+                    black_box(&fixture.u1),
+                    black_box(&fixture.u2),
+                    black_box(&metal),
+                )
+                .expect("pair fit should evaluate")
             });
         });
     }
@@ -309,8 +317,12 @@ fn gaussian_pair_fit_backend_benchmark(criterion: &mut Criterion) {
         let cuda = gaussian_pair_fit_options(ExecPolicy::Force(Device::Cuda(0)));
         criterion.bench_function("gaussian_pair_fit_cuda_fixture_case01", |bench| {
             bench.iter(|| {
-                fit_pair_copula(black_box(&fixture.u1), black_box(&fixture.u2), black_box(&cuda))
-                    .expect("pair fit should evaluate")
+                fit_pair_copula(
+                    black_box(&fixture.u1),
+                    black_box(&fixture.u2),
+                    black_box(&cuda),
+                )
+                .expect("pair fit should evaluate")
             });
         });
     }

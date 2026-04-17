@@ -19,7 +19,11 @@ pub fn try_kendall_tau_matrix(
     let dim = data.dim();
     let view = data.as_view();
     let mut tau = Array2::eye(dim);
-    let strategy = resolve_strategy(exec, Operation::KendallTauMatrix, dim.saturating_mul(dim - 1) / 2)?;
+    let strategy = resolve_strategy(
+        exec,
+        Operation::KendallTauMatrix,
+        dim.saturating_mul(dim - 1) / 2,
+    )?;
     let columns = (0..dim)
         .map(|idx| view.column(idx).iter().copied().collect::<Vec<_>>())
         .collect::<Vec<_>>();

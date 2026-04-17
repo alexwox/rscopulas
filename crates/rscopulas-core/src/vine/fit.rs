@@ -392,7 +392,10 @@ fn resolve_internal_conditional(
     .into())
 }
 
-fn initialize_first_graph(data: &PseudoObs, options: &VineFitOptions) -> Result<Graph, CopulaError> {
+fn initialize_first_graph(
+    data: &PseudoObs,
+    options: &VineFitOptions,
+) -> Result<Graph, CopulaError> {
     let tau = try_kendall_tau_matrix(data, options.base.exec)?;
     let mut edges = Vec::new();
     for left in 0..data.dim() {

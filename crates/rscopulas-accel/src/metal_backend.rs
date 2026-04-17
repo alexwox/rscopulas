@@ -124,8 +124,8 @@ kernel void gaussian_pair_batch(
         static RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
         RUNTIME
             .get_or_init(|| {
-                let device =
-                    Device::system_default().ok_or_else(|| "no Metal device is available".to_owned())?;
+                let device = Device::system_default()
+                    .ok_or_else(|| "no Metal device is available".to_owned())?;
                 let options = CompileOptions::new();
                 let library = device
                     .new_library_with_source(METAL_GAUSSIAN_PAIR_SRC, &options)
@@ -162,8 +162,16 @@ kernel void gaussian_pair_batch(
             });
         }
 
-        let u1 = request.u1.iter().map(|value| *value as f32).collect::<Vec<_>>();
-        let u2 = request.u2.iter().map(|value| *value as f32).collect::<Vec<_>>();
+        let u1 = request
+            .u1
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let u2 = request
+            .u2
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
 
         let bytes_len = (n * size_of::<f32>()) as u64;
         let u1_buffer = runtime
