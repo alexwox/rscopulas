@@ -1,0 +1,182 @@
+{
+  "metadata": {
+    "source_package": "VineCopula",
+    "source_version": "2.6.1"
+  },
+  "structure": "R",
+  "truncation_level": null,
+  "matrix": [
+    [0, 0, 0, 0, 0],
+    [4, 3, 0, 0, 0],
+    [3, 4, 1, 0, 0],
+    [2, 1, 4, 2, 0],
+    [1, 2, 2, 4, 4]
+  ],
+  "trees": [
+    {
+      "level": 1,
+      "edges": [
+        {
+          "conditioned": [
+            0,
+            1
+          ],
+          "conditioning": [],
+          "family": "Gaussian",
+          "rotation": "R0",
+          "params": [
+            0.65000000000000002
+          ]
+        },
+        {
+          "conditioned": [
+            1,
+            2
+          ],
+          "conditioning": [],
+          "family": "Clayton",
+          "rotation": "R0",
+          "params": [
+            1.3999999999999999
+          ]
+        },
+        {
+          "conditioned": [
+            2,
+            3
+          ],
+          "conditioning": [],
+          "family": "Frank",
+          "rotation": "R0",
+          "params": [
+            3.2000000000000002
+          ]
+        },
+        {
+          "conditioned": [
+            2,
+            4
+          ],
+          "conditioning": [],
+          "family": "Gumbel",
+          "rotation": "R90",
+          "params": [
+            1.25
+          ]
+        }
+      ]
+    },
+    {
+      "level": 2,
+      "edges": [
+        {
+          "conditioned": [
+            0,
+            2
+          ],
+          "conditioning": [
+            1
+          ],
+          "family": "StudentT",
+          "rotation": "R0",
+          "params": [
+            0.45000000000000001,
+            5
+          ]
+        },
+        {
+          "conditioned": [
+            1,
+            3
+          ],
+          "conditioning": [
+            2
+          ],
+          "family": "Gumbel",
+          "rotation": "R180",
+          "params": [
+            1.3500000000000001
+          ]
+        },
+        {
+          "conditioned": [
+            1,
+            4
+          ],
+          "conditioning": [
+            2
+          ],
+          "family": "Gaussian",
+          "rotation": "R0",
+          "params": [
+            -0.25
+          ]
+        }
+      ]
+    },
+    {
+      "level": 3,
+      "edges": [
+        {
+          "conditioned": [
+            0,
+            3
+          ],
+          "conditioning": [
+            1,
+            2
+          ],
+          "family": "Clayton",
+          "rotation": "R90",
+          "params": [
+            1.1499999999999999
+          ]
+        },
+        {
+          "conditioned": [
+            3,
+            4
+          ],
+          "conditioning": [
+            1,
+            2
+          ],
+          "family": "Frank",
+          "rotation": "R0",
+          "params": [
+            2.1000000000000001
+          ]
+        }
+      ]
+    },
+    {
+      "level": 4,
+      "edges": [
+        {
+          "conditioned": [
+            0,
+            4
+          ],
+          "conditioning": [
+            1,
+            2,
+            3
+          ],
+          "family": "Clayton",
+          "rotation": "R0",
+          "params": [
+            0.90000000000000002
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    [0.17450276389718056, 0.72285333764739335, 0.78141566435806453, 0.31595504516735673, 0.948854586109519],
+    [0.81578839686699212, 0.70866369549185038, 0.32944633974693716, 0.99898626329377294, 0.68599751638248563],
+    [0.51079020858742297, 0.60706394352018833, 0.26756808906793594, 0.21686963480897248, 0.92977510229684412],
+    [0.015570423565804958, 0.89605533936992288, 0.5704473527148366, 0.62617618613876402, 0.62908034794963896],
+    [0.42190591502003372, 0.23114606039598584, 0.19370530312880874, 0.96516975830309093, 0.82350027118809521]
+  ],
+  "expected_log_pdf": [-14.775198608145317, -8.153407414907953, -0.28791675847922055, -39.768536289701188, -4.6635315794600984]
+}

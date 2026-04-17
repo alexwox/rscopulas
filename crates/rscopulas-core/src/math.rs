@@ -204,6 +204,36 @@ pub fn inverse(matrix: &Array2<f64>) -> Result<Array2<f64>, NumericalError> {
     Ok(result)
 }
 
+pub fn maximize_scalar<F>(mut low: f64, mut high: f64, iterations: usize, f: F) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
+    let resphi = 2.0 - phi;
+    let mut x1 = low + resphi * (high - low);
+    let mut x2 = high - resphi * (high - low);
+    let mut f1 = f(x1);
+    let mut f2 = f(x2);
+
+    for _ in 0..iterations {
+        if f1 < f2 {
+            low = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = high - resphi * (high - low);
+            f2 = f(x2);
+        } else {
+            high = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = low + resphi * (high - low);
+            f1 = f(x1);
+        }
+    }
+
+    if f1 > f2 { x1 } else { x2 }
+}
+
 #[cfg(test)]
 mod tests {
     use ndarray::array;

@@ -93,6 +93,7 @@ pub trait CopulaModel {
     ) -> Result<Array2<f64>, CopulaError>;
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Copula {
     Gaussian(super::GaussianCopula),

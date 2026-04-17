@@ -30,14 +30,21 @@ from pseudo-observations.
   - Clayton `new`, `fit`, `log_pdf`, `sample`
   - Frank `new`, `fit`, `log_pdf`, `sample`
   - Gumbel-Hougaard `new`, `fit`, `log_pdf`, `sample`
-- Gaussian vine copulas:
+- pair copulas for vines:
+  - Independence, Gaussian, Student t, Clayton, Frank, Gumbel
+  - rotated Clayton and Gumbel through `R90`, `R180`, and `R270`
+  - `log_pdf`
+  - h-functions and inverse h-functions
+- simplified vine copulas:
   - `gaussian_c_vine`
   - `gaussian_d_vine`
   - `fit_c_vine`
   - `fit_d_vine`
   - `fit_r_vine`
+  - `from_trees`
   - `log_pdf`
   - `sample`
+  - truncation via `VineFitOptions::truncation_level`
 - reference tests against fixtures generated from R package `copula` `1.1-3`
   for:
   - Gaussian
@@ -45,8 +52,11 @@ from pseudo-observations.
   - Clayton
   - Frank
   - Gumbel
-- reference tests against R package `VineCopula` `2.6.1` for Gaussian C-vine
-  and D-vine fixtures
+- reference tests against R package `VineCopula` `2.6.1` for:
+  - pair-copula densities, h-functions, inverse h-functions, and rotations
+  - Gaussian C-vine and D-vine fixtures
+  - mixed-family R-vine fixtures
+  - truncated R-vine fixtures
 - Criterion benchmarks for Gaussian fit/log-density/sample and the additional
   family log-density paths, including Gaussian vine log-density
 - `cargo test`
@@ -55,18 +65,17 @@ from pseudo-observations.
 
 ### Not working yet
 
-- full mixed-family pair-copula vines are not implemented yet:
-  - the current `VineCopula` path is a Gaussian vine layer backed by the
-    equivalent Gaussian copula
-  - there are no non-Gaussian pair-copula h-functions or inverse h-functions
-    in the core crate yet
+- non-simplified vines are not implemented
+- there is no full external fit-parity suite against `VineCopula` for
+  `fit_r_vine`; the current reference coverage is strongest for pair kernels,
+  vine density evaluation, and sampling
 - `rscopulas-accel` only reports detected capabilities; it does not execute any
   accelerated kernels yet
 - `rscopulas-python` does not expose a Python API yet
 - there is no top-level ergonomic facade yet for selecting a family and
   returning a boxed or enum-backed fitted model from one entry point
-- coverage is currently strongest for the 2D reference fixtures checked against
-  R; broader dimensional regression coverage still needs to be added
+- broader dimensional regression coverage still needs to be added for larger
+  vine models and more fit scenarios
 
 ## Reference Fixtures
 
