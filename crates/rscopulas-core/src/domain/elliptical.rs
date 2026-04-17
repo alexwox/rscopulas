@@ -1,16 +1,19 @@
 use ndarray::Array2;
 use rand::Rng;
-use rand_distr::StandardNormal;
+use rand_distr::{ChiSquared, StandardNormal};
 use serde::{Deserialize, Serialize};
-use statrs::distribution::{ContinuousCDF, Normal};
+use statrs::{
+    distribution::{Continuous, ContinuousCDF, Normal, StudentsT},
+    function::gamma::ln_gamma,
+};
 
 use crate::{
     data::PseudoObs,
     errors::{CopulaError, FitError},
     fit::FitResult,
     math::{
-        cholesky, log_determinant_from_cholesky, quadratic_form_from_cholesky,
-        validate_correlation_matrix,
+        cholesky, log_determinant_from_cholesky, make_spd_correlation,
+        quadratic_form_from_cholesky, validate_correlation_matrix,
     },
     stats::kendall_tau_matrix,
 };
@@ -42,7 +45,8 @@ impl GaussianCopula {
 
     pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
         let tau = kendall_tau_matrix(data);
-        let correlation = tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin());
+        let correlation =
+            make_spd_correlation(&tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin()))?;
         let model = Self::new(correlation)?;
         let loglik = model
             .log_pdf(data, &EvalOptions::default())?
@@ -119,12 +123,12 @@ impl CopulaModel for GaussianCopula {
                 .map(|_| rng.sample::<f64, _>(StandardNormal))
                 .collect::<Vec<_>>();
             let mut correlated = vec![0.0; self.dim];
-            for i in 0..self.dim {
+            for (i, correlated_value) in correlated.iter_mut().enumerate() {
                 let mut value = 0.0;
-                for j in 0..=i {
-                    value += self.cholesky[(i, j)] * epsilon[j];
+                for (j, epsilon_value) in epsilon.iter().enumerate().take(i + 1) {
+                    value += self.cholesky[(i, j)] * epsilon_value;
                 }
-                correlated[i] = value;
+                *correlated_value = value;
             }
 
             for col_idx in 0..self.dim {
@@ -141,20 +145,69 @@ pub struct StudentTCopula {
     dim: usize,
     correlation: Array2<f64>,
     degrees_of_freedom: f64,
+    #[serde(skip)]
+    cholesky: Array2<f64>,
+    log_det: f64,
 }
 
 impl StudentTCopula {
-    pub fn new(correlation: Array2<f64>, degrees_of_freedom: f64) -> Self {
+    pub fn new(correlation: Array2<f64>, degrees_of_freedom: f64) -> Result<Self, CopulaError> {
+        if !degrees_of_freedom.is_finite() || degrees_of_freedom <= 0.0 {
+            return Err(FitError::Failed {
+                reason: "degrees of freedom must be positive",
+            }
+            .into());
+        }
+
+        validate_correlation_matrix(&correlation)?;
+        let cholesky = cholesky(&correlation)?;
+        let log_det = log_determinant_from_cholesky(&cholesky);
         let dim = correlation.ncols();
-        Self {
+        Ok(Self {
             dim,
             correlation,
             degrees_of_freedom,
-        }
+            cholesky,
+            log_det,
+        })
     }
 
-    pub fn fit(_data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
-        Err(FitError::NotImplemented.into())
+    pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        let tau = kendall_tau_matrix(data);
+        let correlation =
+            make_spd_correlation(&tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin()))?;
+
+        let mut best_model = None;
+        let mut best_loglik = f64::NEG_INFINITY;
+        let mut iterations = 0usize;
+        for degrees_of_freedom in candidate_degrees_of_freedom() {
+            iterations += 1;
+            let candidate = Self::new(correlation.clone(), degrees_of_freedom)?;
+            let loglik = candidate
+                .log_pdf(data, &EvalOptions::default())?
+                .into_iter()
+                .sum::<f64>();
+
+            if loglik > best_loglik {
+                best_loglik = loglik;
+                best_model = Some(candidate);
+            }
+        }
+
+        let model = best_model.ok_or(FitError::Failed {
+            reason: "failed to select degrees of freedom",
+        })?;
+        let parameter_count = (model.dim * (model.dim - 1) / 2 + 1) as f64;
+        let n_obs = data.n_obs() as f64;
+        let diagnostics = super::FitDiagnostics {
+            loglik: best_loglik,
+            aic: 2.0 * parameter_count - 2.0 * best_loglik,
+            bic: parameter_count * n_obs.ln() - 2.0 * best_loglik,
+            converged: true,
+            n_iter: iterations,
+        };
+
+        Ok(FitResult { model, diagnostics })
     }
 
     pub fn correlation(&self) -> &Array2<f64> {
@@ -163,6 +216,11 @@ impl StudentTCopula {
 
     pub fn degrees_of_freedom(&self) -> f64 {
         self.degrees_of_freedom
+    }
+
+    fn univariate_t(&self) -> StudentsT {
+        StudentsT::new(0.0, 1.0, self.degrees_of_freedom)
+            .expect("validated degrees of freedom should construct a t distribution")
     }
 }
 
@@ -175,16 +233,88 @@ impl CopulaModel for StudentTCopula {
         self.dim
     }
 
-    fn log_pdf(&self, _data: &PseudoObs, _options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
-        Err(FitError::NotImplemented.into())
+    fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
+        if data.dim() != self.dim {
+            return Err(FitError::Failed {
+                reason: "input dimension does not match model dimension",
+            }
+            .into());
+        }
+
+        let t_distribution = self.univariate_t();
+        let dim = self.dim as f64;
+        let nu = self.degrees_of_freedom;
+        let constant = ln_gamma((nu + dim) / 2.0)
+            - ln_gamma(nu / 2.0)
+            - 0.5 * self.log_det
+            - 0.5 * dim * (nu * std::f64::consts::PI).ln();
+
+        let mut values = Vec::with_capacity(data.n_obs());
+        for row in data.as_view().rows() {
+            let z = row
+                .iter()
+                .map(|value| {
+                    let clipped = value.clamp(options.clip_eps, 1.0 - options.clip_eps);
+                    t_distribution.inverse_cdf(clipped)
+                })
+                .collect::<Vec<_>>();
+            let quadratic = quadratic_form_from_cholesky(&self.cholesky, &z)?;
+            let mv_log_pdf = constant - 0.5 * (nu + dim) * (1.0 + quadratic / nu).ln();
+            let marginal_log_pdf = z
+                .iter()
+                .map(|value| t_distribution.ln_pdf(*value))
+                .sum::<f64>();
+            values.push(mv_log_pdf - marginal_log_pdf);
+        }
+
+        Ok(values)
     }
 
     fn sample<R: Rng + ?Sized>(
         &self,
-        _n: usize,
-        _rng: &mut R,
+        n: usize,
+        rng: &mut R,
         _options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
-        Err(FitError::NotImplemented.into())
+        let t_distribution = self.univariate_t();
+        let chi_squared =
+            ChiSquared::new(self.degrees_of_freedom).map_err(|_| FitError::Failed {
+                reason: "degrees of freedom must be positive",
+            })?;
+        let mut samples = Array2::zeros((n, self.dim));
+
+        for row_idx in 0..n {
+            let epsilon = (0..self.dim)
+                .map(|_| rng.sample::<f64, _>(StandardNormal))
+                .collect::<Vec<_>>();
+            let scale = (self.degrees_of_freedom / rng.sample::<f64, _>(chi_squared)).sqrt();
+            let mut correlated = vec![0.0; self.dim];
+            for (i, correlated_value) in correlated.iter_mut().enumerate() {
+                let mut value = 0.0;
+                for (j, epsilon_value) in epsilon.iter().enumerate().take(i + 1) {
+                    value += self.cholesky[(i, j)] * epsilon_value;
+                }
+                *correlated_value = value * scale;
+            }
+
+            for col_idx in 0..self.dim {
+                samples[(row_idx, col_idx)] = t_distribution.cdf(correlated[col_idx]);
+            }
+        }
+
+        Ok(samples)
     }
+}
+
+fn candidate_degrees_of_freedom() -> Vec<f64> {
+    let min = 2.1_f64.ln();
+    let max = 50.0_f64.ln();
+    let steps = 40usize;
+
+    (0..steps)
+        .map(|idx| {
+            let fraction = idx as f64 / (steps - 1) as f64;
+            (min + (max - min) * fraction).exp()
+        })
+        .collect()
 }

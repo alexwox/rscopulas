@@ -37,6 +37,25 @@ pub fn kendall_tau_matrix(data: &PseudoObs) -> Array2<f64> {
     tau
 }
 
+pub fn mean_off_diagonal(matrix: &Array2<f64>) -> f64 {
+    let dim = matrix.nrows();
+    let mut total = 0.0;
+    let mut count = 0usize;
+
+    for row in 0..dim {
+        for col in (row + 1)..dim {
+            total += matrix[(row, col)];
+            count += 1;
+        }
+    }
+
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ndarray::array;

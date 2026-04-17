@@ -9,4 +9,4 @@ pub use common::{
     SampleOptions,
 };
 pub use elliptical::{GaussianCopula, StudentTCopula};
-pub use vine::VineCopula;
+pub use vine::{VineCopula, VineStructureKind};

@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "source_package": "copula",
+    "source_version": "1.1.3"
+  },
+  "theta": 5,
+  "seed": 737373,
+  "sample_size": 10000,
+  "expected_mean": [0.49862451479150915, 0.49555684362273716],
+  "expected_kendall_tau": [
+    [1, 0.45322948294829474],
+    [0.45322948294829474, 1]
+  ]
+}

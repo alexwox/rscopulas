@@ -8,7 +8,7 @@ pub mod stats;
 pub use data::PseudoObs;
 pub use domain::{
     ClaytonCopula, Copula, CopulaFamily, CopulaModel, Device, EvalOptions, ExecPolicy,
-    FitDiagnostics, FitOptions, GaussianCopula, GumbelHougaardCopula, SampleOptions,
-    StudentTCopula, VineCopula,
+    FitDiagnostics, FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, SampleOptions,
+    StudentTCopula, VineCopula, VineStructureKind,
 };
 pub use errors::{BackendError, CopulaError, FitError, InputError, NumericalError};
