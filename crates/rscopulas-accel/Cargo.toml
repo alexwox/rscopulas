@@ -19,5 +19,5 @@ thiserror.workspace = true
 metal = "0.31"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-cudarc = { version = "0.19.4", default-features = false, features = ["driver", "nvrtc", "dynamic-loading"] }
+cudarc = { version = "0.19.4", default-features = false, features = ["driver", "nvrtc", "dynamic-loading", "cuda-12040"] }
 
