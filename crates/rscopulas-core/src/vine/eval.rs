@@ -55,8 +55,7 @@ impl VineCopula {
                     })?;
 
                     totals[obs] += spec.log_pdf(source, target, clip_eps)?;
-                    vdirect[(k + 1, i)] =
-                        spec.cond_second_given_first(source, target, clip_eps)?;
+                    vdirect[(k + 1, i)] = spec.cond_second_given_first(source, target, clip_eps)?;
                     if i + 1 < d && cindirect[(k + 1, i)] {
                         vindirect[(k + 1, i)] =
                             spec.cond_first_given_second(source, target, clip_eps)?;

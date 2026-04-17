@@ -1,7 +1,12 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use rscopulas_core::domain::Device;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Device {
+    Cpu,
+    Cuda(u32),
+    Metal,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeCapabilities {

@@ -1,6 +1,11 @@
 use super::common::Rotation;
 
-pub fn to_base_inputs(rotation: Rotation, u1: f64, u2: f64, clip_eps: f64) -> ((f64, f64), Rotation) {
+pub fn to_base_inputs(
+    rotation: Rotation,
+    u1: f64,
+    u2: f64,
+    clip_eps: f64,
+) -> ((f64, f64), Rotation) {
     let transformed = match rotation {
         Rotation::R0 => (u1, u2),
         Rotation::R90 => (1.0 - u1, u2),

@@ -4,6 +4,7 @@ use rand_distr::{Exp1, Gamma};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    archimedean_math::{frank, gumbel},
     data::PseudoObs,
     errors::{CopulaError, FitError},
     fit::FitResult,
@@ -12,6 +13,7 @@ use crate::{
 
 use super::{CopulaFamily, CopulaModel, EvalOptions, FitOptions, SampleOptions};
 
+/// Clayton copula with `theta > 0`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaytonCopula {
     dim: usize,
@@ -19,11 +21,13 @@ pub struct ClaytonCopula {
 }
 
 impl ClaytonCopula {
+    /// Constructs a Clayton copula of dimension `dim` with `theta > 0`.
     pub fn new(dim: usize, theta: f64) -> Result<Self, CopulaError> {
         validate_archimedean_parameters("Clayton", dim, theta, 0.0, false)?;
         Ok(Self { dim, theta })
     }
 
+    /// Fits a Clayton copula from the mean pairwise Kendall tau.
     pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
         let mean_tau = fit_mean_tau("Clayton", data)?;
         let theta = 2.0 * mean_tau / (1.0 - mean_tau);
@@ -31,6 +35,7 @@ impl ClaytonCopula {
         fit_result(model, data)
     }
 
+    /// Returns the fitted `theta` parameter.
     pub fn theta(&self) -> f64 {
         self.theta
     }
@@ -89,6 +94,7 @@ impl CopulaModel for ClaytonCopula {
     }
 }
 
+/// Frank copula with `theta > 0`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrankCopula {
     dim: usize,
@@ -96,18 +102,21 @@ pub struct FrankCopula {
 }
 
 impl FrankCopula {
+    /// Constructs a Frank copula of dimension `dim` with `theta > 0`.
     pub fn new(dim: usize, theta: f64) -> Result<Self, CopulaError> {
         validate_archimedean_parameters("Frank", dim, theta, 0.0, false)?;
         Ok(Self { dim, theta })
     }
 
+    /// Fits a Frank copula from the mean pairwise Kendall tau.
     pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
         let target_tau = fit_mean_tau("Frank", data)?;
-        let theta = invert_frank_tau(target_tau)?;
+        let theta = frank::invert_tau(target_tau, "Frank tau inversion failed to bracket root")?;
         let model = Self::new(data.dim(), theta)?;
         fit_result(model, data)
     }
 
+    /// Returns the fitted `theta` parameter.
     pub fn theta(&self) -> f64 {
         self.theta
     }
@@ -140,7 +149,7 @@ impl CopulaModel for FrankCopula {
                 })
                 .sum::<f64>();
             let q = a * (-t).exp();
-            let log_abs_derivative = frank_log_abs_generator_derivative(dim, q, theta);
+            let log_abs_derivative = frank::log_abs_generator_derivative(dim, q, theta);
             let log_phi = clipped
                 .iter()
                 .map(|value| theta.ln() - (theta * value).exp_m1().ln())
@@ -165,7 +174,7 @@ impl CopulaModel for FrankCopula {
             for col_idx in 0..self.dim {
                 let exponential = rng.sample::<f64, _>(Exp1);
                 samples[(row_idx, col_idx)] =
-                    frank_generator(exponential / frailty as f64, self.theta);
+                    frank::generator(exponential / frailty as f64, self.theta);
             }
         }
 
@@ -173,6 +182,7 @@ impl CopulaModel for FrankCopula {
     }
 }
 
+/// Gumbel-Hougaard copula with `theta >= 1`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GumbelHougaardCopula {
     dim: usize,
@@ -180,11 +190,13 @@ pub struct GumbelHougaardCopula {
 }
 
 impl GumbelHougaardCopula {
+    /// Constructs a Gumbel-Hougaard copula of dimension `dim` with `theta >= 1`.
     pub fn new(dim: usize, theta: f64) -> Result<Self, CopulaError> {
         validate_archimedean_parameters("Gumbel", dim, theta, 1.0, true)?;
         Ok(Self { dim, theta })
     }
 
+    /// Fits a Gumbel-Hougaard copula from the mean pairwise Kendall tau.
     pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
         let mean_tau = fit_mean_tau("Gumbel", data)?;
         let theta = 1.0 / (1.0 - mean_tau);
@@ -192,6 +204,7 @@ impl GumbelHougaardCopula {
         fit_result(model, data)
     }
 
+    /// Returns the fitted `theta` parameter.
     pub fn theta(&self) -> f64 {
         self.theta
     }
@@ -217,7 +230,7 @@ impl CopulaModel for GumbelHougaardCopula {
                 .iter()
                 .map(|value| (-value.ln()).powf(self.theta))
                 .sum::<f64>();
-            let log_abs_derivative = gumbel_log_abs_generator_derivative(self.dim, t, alpha);
+            let log_abs_derivative = gumbel::log_abs_generator_derivative(self.dim, t, alpha);
             let log_phi = clipped
                 .iter()
                 .map(|value| self.theta.ln() + (self.theta - 1.0) * (-value.ln()).ln() - value.ln())
@@ -336,95 +349,6 @@ fn clipped_row(row: &[f64], clip_eps: f64) -> Vec<f64> {
         .collect()
 }
 
-fn frank_generator(t: f64, theta: f64) -> f64 {
-    let scale = 1.0 - (-theta).exp();
-    -(1.0 - scale * (-t).exp()).ln() / theta
-}
-
-fn frank_log_abs_generator_derivative(dim: usize, q: f64, theta: f64) -> f64 {
-    let numerator_poly = frank_derivative_polynomial(dim, q);
-    q.ln() + numerator_poly.abs().ln() - (dim as f64) * (1.0 - q).ln() - theta.ln()
-}
-
-fn frank_derivative_polynomial(dim: usize, q: f64) -> f64 {
-    let mut coeffs = vec![1.0];
-    for n in 1..dim {
-        let mut deriv = vec![0.0; coeffs.len().saturating_sub(1)];
-        for idx in 1..coeffs.len() {
-            deriv[idx - 1] = idx as f64 * coeffs[idx];
-        }
-
-        let mut next = vec![0.0; coeffs.len() + 1];
-        for (idx, coeff) in coeffs.iter().enumerate() {
-            next[idx] += coeff;
-            next[idx + 1] += (n as f64 - 1.0) * coeff;
-        }
-        for (idx, coeff) in deriv.iter().enumerate() {
-            next[idx + 1] += coeff;
-            next[idx + 2] -= coeff;
-        }
-        coeffs = next;
-    }
-
-    coeffs
-        .iter()
-        .enumerate()
-        .map(|(idx, coeff)| coeff * q.powi(idx as i32))
-        .sum()
-}
-
-fn debye_1(theta: f64) -> f64 {
-    if theta.abs() < 1e-6 {
-        return 1.0 - theta / 4.0 + theta * theta / 36.0;
-    }
-
-    let intervals = 1024usize;
-    let step = theta / intervals as f64;
-    let integrand = |x: f64| -> f64 { if x == 0.0 { 1.0 } else { x / x.exp_m1() } };
-
-    let mut total = integrand(0.0) + integrand(theta);
-    for idx in 1..intervals {
-        let x = idx as f64 * step;
-        total += if idx % 2 == 0 {
-            2.0 * integrand(x)
-        } else {
-            4.0 * integrand(x)
-        };
-    }
-
-    (step / 3.0) * total / theta
-}
-
-fn frank_tau(theta: f64) -> f64 {
-    1.0 - 4.0 / theta + 4.0 * debye_1(theta) / theta
-}
-
-fn invert_frank_tau(target_tau: f64) -> Result<f64, CopulaError> {
-    let mut low = 1e-6;
-    let mut high = 1.0;
-    while frank_tau(high) < target_tau && high < 1e6 {
-        high *= 2.0;
-    }
-
-    if frank_tau(high) < target_tau {
-        return Err(FitError::Failed {
-            reason: "Frank tau inversion failed to bracket root",
-        }
-        .into());
-    }
-
-    for _ in 0..80 {
-        let mid = 0.5 * (low + high);
-        if frank_tau(mid) < target_tau {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-
-    Ok(0.5 * (low + high))
-}
-
 fn sample_log_series<R: Rng + ?Sized>(rng: &mut R, p: f64) -> usize {
     let normalizer = -1.0 / (1.0 - p).ln();
     let threshold: f64 = rng.random();
@@ -441,48 +365,6 @@ fn sample_log_series<R: Rng + ?Sized>(rng: &mut R, p: f64) -> usize {
         k += 1;
         probability *= p * (k as f64 - 1.0) / k as f64;
     }
-}
-
-fn gumbel_log_abs_generator_derivative(dim: usize, t: f64, alpha: f64) -> f64 {
-    let derivatives = (1..=dim)
-        .map(|order| gumbel_g_derivative(order, t, alpha))
-        .collect::<Vec<_>>();
-    let bell = complete_bell_polynomial(&derivatives);
-    -t.powf(alpha) + bell.abs().ln()
-}
-
-fn gumbel_g_derivative(order: usize, t: f64, alpha: f64) -> f64 {
-    let falling = (0..order).fold(1.0, |acc, idx| acc * (alpha - idx as f64));
-    -falling * t.powf(alpha - order as f64)
-}
-
-fn complete_bell_polynomial(derivatives: &[f64]) -> f64 {
-    let n = derivatives.len();
-    let mut bell = vec![0.0; n + 1];
-    bell[0] = 1.0;
-
-    for order in 1..=n {
-        let mut total = 0.0;
-        for k in 1..=order {
-            total += binomial(order - 1, k - 1) * derivatives[k - 1] * bell[order - k];
-        }
-        bell[order] = total;
-    }
-
-    bell[n]
-}
-
-fn binomial(n: usize, k: usize) -> f64 {
-    if k == 0 || k == n {
-        return 1.0;
-    }
-
-    let k = k.min(n - k);
-    let mut value = 1.0;
-    for idx in 0..k {
-        value *= (n - idx) as f64 / (idx + 1) as f64;
-    }
-    value
 }
 
 fn sample_positive_stable<R: Rng + ?Sized>(rng: &mut R, alpha: f64) -> f64 {

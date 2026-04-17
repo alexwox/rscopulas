@@ -66,12 +66,17 @@ fn truncated_r_vine_matches_vinecopula_log_pdf_fixture() {
     assert_eq!(model.truncation_level(), Some(2));
     assert_eq!(model.structure_info().matrix, array2_usize(&fixture.matrix));
 
-    let input = PseudoObs::new(array2_f64(&fixture.inputs)).expect("fixture inputs should be valid");
+    let input =
+        PseudoObs::new(array2_f64(&fixture.inputs)).expect("fixture inputs should be valid");
     let actual = model
         .log_pdf(&input, &EvalOptions::default())
         .expect("log pdf should evaluate");
 
-    for (idx, (left, right)) in actual.iter().zip(fixture.expected_log_pdf.iter()).enumerate() {
+    for (idx, (left, right)) in actual
+        .iter()
+        .zip(fixture.expected_log_pdf.iter())
+        .enumerate()
+    {
         assert!(
             (left - right).abs() < 1e-8,
             "fixture {} mismatch at row {idx}: left={left}, right={right}",
@@ -94,7 +99,7 @@ fn truncated_r_vine_sample_statistics_match_vinecopula_fixture() {
 
     let mut rng = StdRng::seed_from_u64(fixture.seed);
     let samples = model
-        .sample(fixture.sample_size, &mut rng, &SampleOptions::default())
+        .sample(fixture.sample_size, &mut rng, &SampleOptions)
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("sample should be valid");
     let means = column_means(&sample_obs);
@@ -185,14 +190,20 @@ fn load_fixture<T: for<'de> Deserialize<'de>>(name: &str) -> T {
 fn array2_f64(rows: &[Vec<f64>]) -> Array2<f64> {
     let nrows = rows.len();
     let ncols = rows.first().map_or(0, Vec::len);
-    let data = rows.iter().flat_map(|row| row.iter().copied()).collect::<Vec<_>>();
+    let data = rows
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
     Array2::from_shape_vec((nrows, ncols), data).expect("rows should form a matrix")
 }
 
 fn array2_usize(rows: &[Vec<usize>]) -> Array2<usize> {
     let nrows = rows.len();
     let ncols = rows.first().map_or(0, Vec::len);
-    let data = rows.iter().flat_map(|row| row.iter().copied()).collect::<Vec<_>>();
+    let data = rows
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
     Array2::from_shape_vec((nrows, ncols), data).expect("rows should form a matrix")
 }
 

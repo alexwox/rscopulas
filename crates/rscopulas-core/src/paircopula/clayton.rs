@@ -18,11 +18,9 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
         .into());
     }
     let sum_power = u1.powf(-theta) + u2.powf(-theta) - 1.0;
-    Ok(
-        (1.0 + theta).ln()
-            - (1.0 + theta) * (u1.ln() + u2.ln())
-            - (2.0 + 1.0 / theta) * sum_power.ln(),
-    )
+    Ok((1.0 + theta).ln()
+        - (1.0 + theta) * (u1.ln() + u2.ln())
+        - (2.0 + 1.0 / theta) * sum_power.ln())
 }
 
 pub fn cond_first_given_second(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {

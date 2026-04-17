@@ -3,7 +3,10 @@ use rand::Rng;
 
 use crate::errors::{CopulaError, FitError};
 
-use super::{VineCopula, structure::{revert_matrix, revert_pair_matrix}};
+use super::{
+    VineCopula,
+    structure::{revert_matrix, revert_pair_matrix},
+};
 
 impl VineCopula {
     pub(crate) fn sample_internal<R: Rng + ?Sized>(

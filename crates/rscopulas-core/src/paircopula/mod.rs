@@ -7,6 +7,5 @@ mod rotated;
 mod student_t;
 
 pub use common::{
-    PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult, Rotation,
-    fit_pair_copula,
+    PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult, Rotation, fit_pair_copula,
 };

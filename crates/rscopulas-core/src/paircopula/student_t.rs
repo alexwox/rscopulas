@@ -65,12 +65,7 @@ pub fn cond_second_given_first(u1: f64, u2: f64, rho: f64, nu: f64) -> Result<f6
     Ok(cond.cdf((y - rho * x) / scale))
 }
 
-pub fn inv_first_given_second(
-    p: f64,
-    u2: f64,
-    rho: f64,
-    nu: f64,
-) -> Result<f64, CopulaError> {
+pub fn inv_first_given_second(p: f64, u2: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     let dist = t_dist(nu)?;
     let cond = t_dist(nu + 1.0)?;
     let y = dist.inverse_cdf(u2);
@@ -79,12 +74,7 @@ pub fn inv_first_given_second(
     Ok(dist.cdf(rho * y + scale * q))
 }
 
-pub fn inv_second_given_first(
-    u1: f64,
-    p: f64,
-    rho: f64,
-    nu: f64,
-) -> Result<f64, CopulaError> {
+pub fn inv_second_given_first(u1: f64, p: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     let dist = t_dist(nu)?;
     let cond = t_dist(nu + 1.0)?;
     let x = dist.inverse_cdf(u1);

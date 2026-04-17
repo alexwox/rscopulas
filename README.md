@@ -52,7 +52,8 @@ from pseudo-observations.
 - Criterion benchmarks for Gaussian `fit`, `log_pdf`, and `sample`; Student t,
   Clayton, Frank, and Gumbel `log_pdf`; and Gaussian C-vine and D-vine
   `log_pdf`
-- quality gates (all currently passing on the working tree):
+- quality gates enforced in CI:
+  - `cargo fmt --check`
   - `cargo test`
   - `cargo bench --no-run`
   - `cargo clippy --all-targets --all-features -- -D warnings`
@@ -64,27 +65,17 @@ from pseudo-observations.
   kernels yet
 - `rscopulas-python` exposes no Python API yet; the crate is a `cdylib`
   placeholder
-- the execution-policy surface in the public API is inert: `ExecPolicy`,
-  `Device`, and the `exec` fields on `FitOptions` / `EvalOptions` /
-  `SampleOptions` are accepted but ignored by every implementation
 - there is no top-level ergonomic facade yet for selecting a family and
   returning a boxed or enum-backed fitted model from one entry point; the
   `Copula` enum is exported but unused by the library
-- `faer` is declared in `[workspace.dependencies]` for a future matrix backend
-  but is not referenced by any source file yet
 - reference coverage is strongest at `d = 2` for single families, `d = 4` for
   Gaussian vines, and `d = 5` for mixed R-vines; broader dimensional
   regression coverage still needs to be added
 
 ### Known caveats
 
-- `GaussianCopula` and `StudentTCopula` mark their cached Cholesky factor as
-  `#[serde(skip)]` and do not rebuild it on deserialize. A deserialised model
-  must be reconstructed via `::new(correlation, …)` before calling `log_pdf`
-  or `sample`, otherwise the cached factor is zero and the output is wrong.
-- Frank and Gumbel generator / derivative helpers are currently duplicated
-  between `domain/archimedean.rs` (full-joint families) and
-  `paircopula/{frank,gumbel}.rs` (bivariate pair-copulas).
+- the core crate is still the scalar CPU reference implementation; no
+  accelerated CUDA or Metal kernels are wired into model evaluation yet
 
 ## Reference Fixtures
 
@@ -105,6 +96,7 @@ the workspace root with `Rscript` and regenerate the JSON fixtures in-place.
 Run the main quality gates from the workspace root:
 
 ```bash
+cargo fmt --check
 cargo test
 cargo bench --no-run
 cargo clippy --all-targets --all-features -- -D warnings

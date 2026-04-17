@@ -1,8 +1,9 @@
 use std::{fs, path::PathBuf};
 
-use ndarray::Array2;
+use ndarray::{Array2, array};
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Deserialize;
+use serde_json::json;
 
 use rscopulas_core::{
     CopulaModel, EvalOptions, FitOptions, GaussianCopula, PseudoObs, SampleOptions,
@@ -96,7 +97,7 @@ fn gaussian_sample_statistics_match_r_fixture() {
     let mut rng = StdRng::seed_from_u64(fixture.seed);
 
     let samples = model
-        .sample(fixture.sample_size, &mut rng, &SampleOptions::default())
+        .sample(fixture.sample_size, &mut rng, &SampleOptions)
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("generated sample should stay inside (0,1)");
     let means = column_means(&sample_obs);
@@ -119,6 +120,68 @@ fn gaussian_sample_statistics_match_r_fixture() {
             );
         }
     }
+}
+
+#[test]
+fn gaussian_serde_round_trip_preserves_log_pdf_and_sampling() {
+    let fixture: GaussianLogPdfFixture = load_fixture("gaussian_log_pdf_d2_case01.json");
+    let sample_fixture: GaussianSampleSummaryFixture =
+        load_fixture("gaussian_sample_summary_d2_case01.json");
+    let model = GaussianCopula::new(array2(&fixture.correlation))
+        .expect("fixture correlation should be valid");
+    let input = PseudoObs::new(array2(&fixture.inputs)).expect("fixture inputs should be valid");
+
+    let encoded = serde_json::to_vec(&model).expect("gaussian model should serialize");
+    let restored: GaussianCopula =
+        serde_json::from_slice(&encoded).expect("gaussian model should deserialize");
+
+    let original_log_pdf = model
+        .log_pdf(&input, &EvalOptions::default())
+        .expect("original log pdf should evaluate");
+    let restored_log_pdf = restored
+        .log_pdf(&input, &EvalOptions::default())
+        .expect("restored log pdf should evaluate");
+    assert_eq!(original_log_pdf, restored_log_pdf);
+
+    let mut original_rng = StdRng::seed_from_u64(sample_fixture.seed);
+    let mut restored_rng = StdRng::seed_from_u64(sample_fixture.seed);
+    let original_samples = model
+        .sample(128, &mut original_rng, &SampleOptions)
+        .expect("original sampling should succeed");
+    let restored_samples = restored
+        .sample(128, &mut restored_rng, &SampleOptions)
+        .expect("restored sampling should succeed");
+    assert_eq!(original_samples, restored_samples);
+}
+
+#[test]
+fn gaussian_serde_rejects_mismatched_serialized_dimension() {
+    let invalid = json!({
+        "dim": 3,
+        "correlation": [[1.0, 0.7], [0.7, 1.0]],
+        "log_det": -0.6733445532637656
+    });
+
+    serde_json::from_value::<GaussianCopula>(invalid)
+        .expect_err("mismatched dimension should be rejected");
+}
+
+#[test]
+fn gaussian_sample_then_fit_recovers_correlation() {
+    let model =
+        GaussianCopula::new(array![[1.0, 0.65], [0.65, 1.0]]).expect("correlation should be valid");
+    let mut rng = StdRng::seed_from_u64(17);
+    let sample = model
+        .sample(4_000, &mut rng, &SampleOptions)
+        .expect("sampling should succeed");
+    let sample = PseudoObs::new(sample).expect("generated sample should be valid");
+
+    let fit = GaussianCopula::fit(&sample, &FitOptions::default()).expect("fit should succeed");
+    let actual = fit.model.correlation()[(0, 1)];
+    assert!(
+        (actual - 0.65).abs() < 0.08,
+        "sample-fit correlation drifted too far: left={actual}, right=0.65"
+    );
 }
 
 fn fixture_dir() -> PathBuf {

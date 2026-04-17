@@ -10,6 +10,7 @@ use crate::paircopula::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec};
 
 pub use fit::{SelectionCriterion, VineFitOptions};
 
+/// Supported vine structure families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VineStructureKind {
     C,
@@ -17,6 +18,7 @@ pub enum VineStructureKind {
     R,
 }
 
+/// One edge in a vine tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VineEdge {
     pub tree: usize,
@@ -25,12 +27,14 @@ pub struct VineEdge {
     pub copula: PairCopulaSpec,
 }
 
+/// A single tree in a vine decomposition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VineTree {
     pub level: usize,
     pub edges: Vec<VineEdge>,
 }
 
+/// Structural metadata for a vine copula.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VineStructure {
     pub kind: VineStructureKind,
@@ -38,6 +42,7 @@ pub struct VineStructure {
     pub truncation_level: Option<usize>,
 }
 
+/// Fitted vine copula together with its structural matrices.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VineCopula {
     pub(crate) dim: usize,
@@ -52,6 +57,7 @@ pub struct VineCopula {
 }
 
 impl VineCopula {
+    /// Builds a vine copula from explicit trees and an optional truncation level.
     pub fn from_trees(
         kind: VineStructureKind,
         trees: Vec<VineTree>,
@@ -60,18 +66,22 @@ impl VineCopula {
         structure::build_model_from_trees(kind, trees, truncation_level)
     }
 
+    /// Returns the vine structure family.
     pub fn structure(&self) -> VineStructureKind {
         self.structure.kind
     }
 
+    /// Returns structure metadata including the R-vine matrix and truncation level.
     pub fn structure_info(&self) -> &VineStructure {
         &self.structure
     }
 
+    /// Returns the vine trees in evaluation order.
     pub fn trees(&self) -> &[VineTree] {
         &self.trees
     }
 
+    /// Returns the top-level variable order implied by the structure.
     pub fn order(&self) -> Vec<usize> {
         match self.structure.kind {
             VineStructureKind::C => {
@@ -100,6 +110,7 @@ impl VineCopula {
         }
     }
 
+    /// Returns the primary parameter from each pair-copula edge.
     pub fn pair_parameters(&self) -> Vec<f64> {
         self.trees
             .iter()
@@ -112,6 +123,7 @@ impl VineCopula {
             .collect()
     }
 
+    /// Returns the configured truncation level, if any.
     pub fn truncation_level(&self) -> Option<usize> {
         self.structure.truncation_level
     }

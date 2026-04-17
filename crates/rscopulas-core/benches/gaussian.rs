@@ -100,7 +100,7 @@ fn gaussian_sample_benchmark(criterion: &mut Criterion) {
         load_fixture("gaussian_sample_summary_d2_case01.json");
     let model = GaussianCopula::new(array2(&fixture.correlation))
         .expect("fixture correlation should be valid");
-    let options = SampleOptions::default();
+    let options = SampleOptions;
 
     criterion.bench_function("gaussian_sample_fixture_case01", |bench| {
         bench.iter(|| {

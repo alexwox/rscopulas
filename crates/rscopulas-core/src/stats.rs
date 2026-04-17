@@ -32,11 +32,7 @@ pub fn kendall_tau_bivariate(x: &[f64], y: &[f64]) -> Result<f64, CopulaError> {
         .into());
     }
 
-    let mut pairs = x
-        .iter()
-        .copied()
-        .zip(y.iter().copied())
-        .collect::<Vec<_>>();
+    let mut pairs = x.iter().copied().zip(y.iter().copied()).collect::<Vec<_>>();
     pairs.sort_by(|left, right| left.0.total_cmp(&right.0));
 
     let mut ys = pairs.iter().map(|(_, y)| *y).collect::<Vec<_>>();

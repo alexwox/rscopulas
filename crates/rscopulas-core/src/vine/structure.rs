@@ -64,7 +64,10 @@ fn to_structure_matrices(
     let n = trees.len() + 1;
     let mut matrix = Array2::zeros((n, n));
     let mut pair_matrix = Array2::from_elem((n, n), None);
-    let mut remaining = trees.iter().map(|tree| tree.edges.clone()).collect::<Vec<_>>();
+    let mut remaining = trees
+        .iter()
+        .map(|tree| tree.edges.clone())
+        .collect::<Vec<_>>();
 
     for k in 0..(n - 1) {
         let source_tree = n - k - 2;
@@ -181,7 +184,9 @@ pub(crate) fn revert_matrix<T: Clone + Default>(matrix: &Array2<T>) -> Array2<T>
     reverted
 }
 
-pub(crate) fn revert_pair_matrix(matrix: &Array2<Option<PairCopulaSpec>>) -> Array2<Option<PairCopulaSpec>> {
+pub(crate) fn revert_pair_matrix(
+    matrix: &Array2<Option<PairCopulaSpec>>,
+) -> Array2<Option<PairCopulaSpec>> {
     let nrows = matrix.nrows();
     let ncols = matrix.ncols();
     let mut reverted = Array2::from_elem((nrows, ncols), None);

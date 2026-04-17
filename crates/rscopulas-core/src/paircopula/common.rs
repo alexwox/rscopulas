@@ -8,6 +8,7 @@ use crate::{
 
 use super::{clayton, frank, gaussian, gumbel, rotated, student_t};
 
+/// Supported bivariate pair-copula families for vine edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PairCopulaFamily {
     Independence,
@@ -18,6 +19,7 @@ pub enum PairCopulaFamily {
     Gumbel,
 }
 
+/// Rotation applied to a bivariate pair-copula kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rotation {
     R0,
@@ -26,6 +28,7 @@ pub enum Rotation {
     R270,
 }
 
+/// Parameter storage for pair-copula families with zero, one, or two parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PairCopulaParams {
     None,
@@ -33,6 +36,7 @@ pub enum PairCopulaParams {
     Two(f64, f64),
 }
 
+/// Fully specified pair-copula family, rotation, and parameter tuple.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PairCopulaSpec {
     pub family: PairCopulaFamily,
@@ -40,6 +44,7 @@ pub struct PairCopulaSpec {
     pub params: PairCopulaParams,
 }
 
+/// Result of fitting a single pair-copula candidate to one edge.
 #[derive(Debug, Clone)]
 pub struct PairFitResult {
     pub spec: PairCopulaSpec,
@@ -51,6 +56,7 @@ pub struct PairFitResult {
 }
 
 impl PairCopulaSpec {
+    /// Returns the independence pair-copula specification.
     pub fn independence() -> Self {
         Self {
             family: PairCopulaFamily::Independence,
@@ -59,6 +65,7 @@ impl PairCopulaSpec {
         }
     }
 
+    /// Swaps the conditioning axis while preserving the represented copula.
     pub fn swap_axes(self) -> Self {
         let rotation = match self.rotation {
             Rotation::R90 => Rotation::R270,
@@ -68,6 +75,7 @@ impl PairCopulaSpec {
         Self { rotation, ..self }
     }
 
+    /// Returns the number of free parameters implied by `params`.
     pub fn parameter_count(&self) -> usize {
         match self.params {
             PairCopulaParams::None => 0,
@@ -76,6 +84,7 @@ impl PairCopulaSpec {
         }
     }
 
+    /// Evaluates the pair-copula log-density at `(u1, u2)`.
     pub fn log_pdf(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
         let ((x1, x2), rotation) = rotated::to_base_inputs(self.rotation, u1, u2, clip_eps);
         let base = match (self.family, self.params) {
@@ -105,6 +114,7 @@ impl PairCopulaSpec {
         Ok(rotated::from_base_log_pdf(rotation, base))
     }
 
+    /// Evaluates `h_{1|2}(u1 | u2)`.
     pub fn cond_first_given_second(
         &self,
         u1: f64,
@@ -113,17 +123,16 @@ impl PairCopulaSpec {
     ) -> Result<f64, CopulaError> {
         match self.rotation {
             Rotation::R0 => self.base_cond_first_given_second(u1, u2, clip_eps),
-            Rotation::R180 => Ok(
-                1.0 - self.base_cond_first_given_second(1.0 - u1, 1.0 - u2, clip_eps)?
-            ),
-            Rotation::R90 => Ok(
-                1.0 - self.base_cond_first_given_second(1.0 - u1, u2, clip_eps)?
-            ),
+            Rotation::R180 => {
+                Ok(1.0 - self.base_cond_first_given_second(1.0 - u1, 1.0 - u2, clip_eps)?)
+            }
+            Rotation::R90 => Ok(1.0 - self.base_cond_first_given_second(1.0 - u1, u2, clip_eps)?),
             Rotation::R270 => self.base_cond_first_given_second(u1, 1.0 - u2, clip_eps),
         }
         .map(|value| value.clamp(clip_eps, 1.0 - clip_eps))
     }
 
+    /// Evaluates `h_{2|1}(u2 | u1)`.
     pub fn cond_second_given_first(
         &self,
         u1: f64,
@@ -132,17 +141,16 @@ impl PairCopulaSpec {
     ) -> Result<f64, CopulaError> {
         match self.rotation {
             Rotation::R0 => self.base_cond_second_given_first(u1, u2, clip_eps),
-            Rotation::R180 => Ok(
-                1.0 - self.base_cond_second_given_first(1.0 - u1, 1.0 - u2, clip_eps)?
-            ),
+            Rotation::R180 => {
+                Ok(1.0 - self.base_cond_second_given_first(1.0 - u1, 1.0 - u2, clip_eps)?)
+            }
             Rotation::R90 => self.base_cond_second_given_first(1.0 - u1, u2, clip_eps),
-            Rotation::R270 => Ok(
-                1.0 - self.base_cond_second_given_first(u1, 1.0 - u2, clip_eps)?
-            ),
+            Rotation::R270 => Ok(1.0 - self.base_cond_second_given_first(u1, 1.0 - u2, clip_eps)?),
         }
         .map(|value| value.clamp(clip_eps, 1.0 - clip_eps))
     }
 
+    /// Evaluates the inverse h-function for the first margin conditional on the second.
     pub fn inv_first_given_second(
         &self,
         p: f64,
@@ -153,17 +161,16 @@ impl PairCopulaSpec {
         let u2 = u2.clamp(clip_eps, 1.0 - clip_eps);
         match self.rotation {
             Rotation::R0 => self.base_inv_first_given_second(p, u2, clip_eps),
-            Rotation::R180 => Ok(
-                1.0 - self.base_inv_first_given_second(1.0 - p, 1.0 - u2, clip_eps)?
-            ),
-            Rotation::R90 => Ok(
-                1.0 - self.base_inv_first_given_second(1.0 - p, u2, clip_eps)?
-            ),
+            Rotation::R180 => {
+                Ok(1.0 - self.base_inv_first_given_second(1.0 - p, 1.0 - u2, clip_eps)?)
+            }
+            Rotation::R90 => Ok(1.0 - self.base_inv_first_given_second(1.0 - p, u2, clip_eps)?),
             Rotation::R270 => self.base_inv_first_given_second(p, 1.0 - u2, clip_eps),
         }
         .map(|value| value.clamp(clip_eps, 1.0 - clip_eps))
     }
 
+    /// Evaluates the inverse h-function for the second margin conditional on the first.
     pub fn inv_second_given_first(
         &self,
         u1: f64,
@@ -174,13 +181,11 @@ impl PairCopulaSpec {
         let u1 = u1.clamp(clip_eps, 1.0 - clip_eps);
         match self.rotation {
             Rotation::R0 => self.base_inv_second_given_first(u1, p, clip_eps),
-            Rotation::R180 => Ok(
-                1.0 - self.base_inv_second_given_first(1.0 - u1, 1.0 - p, clip_eps)?
-            ),
+            Rotation::R180 => {
+                Ok(1.0 - self.base_inv_second_given_first(1.0 - u1, 1.0 - p, clip_eps)?)
+            }
             Rotation::R90 => self.base_inv_second_given_first(1.0 - u1, p, clip_eps),
-            Rotation::R270 => Ok(
-                1.0 - self.base_inv_second_given_first(u1, 1.0 - p, clip_eps)?
-            ),
+            Rotation::R270 => Ok(1.0 - self.base_inv_second_given_first(u1, 1.0 - p, clip_eps)?),
         }
         .map(|value| value.clamp(clip_eps, 1.0 - clip_eps))
     }
@@ -310,6 +315,7 @@ impl PairCopulaSpec {
     }
 }
 
+/// Fits the best pair-copula specification for one bivariate edge.
 pub fn fit_pair_copula(
     u1: &[f64],
     u2: &[f64],
@@ -342,7 +348,8 @@ pub fn fit_pair_copula(
                 Err(_) => continue,
             };
             if let Some(current) = &best {
-                if criterion_value(&fit, options.criterion) < criterion_value(current, options.criterion)
+                if criterion_value(&fit, options.criterion)
+                    < criterion_value(current, options.criterion)
                 {
                     best = Some(fit);
                 }
@@ -352,10 +359,12 @@ pub fn fit_pair_copula(
         }
     }
 
-    best.ok_or(FitError::Failed {
-        reason: "pair-copula selection produced no candidate",
-    }
-    .into())
+    best.ok_or(
+        FitError::Failed {
+            reason: "pair-copula selection produced no candidate",
+        }
+        .into(),
+    )
 }
 
 fn finalize_pair_fit(
@@ -431,7 +440,9 @@ fn fit_family_with_rotation(
                 let rho = maximize_scalar(-0.98, 0.98, 80, |rho| {
                     x1.iter()
                         .zip(x2.iter())
-                        .map(|(&u, &v)| student_t::log_pdf(u, v, rho, nu).unwrap_or(f64::NEG_INFINITY))
+                        .map(|(&u, &v)| {
+                            student_t::log_pdf(u, v, rho, nu).unwrap_or(f64::NEG_INFINITY)
+                        })
                         .sum::<f64>()
                 });
                 let rho = if rho.is_finite() { rho } else { rho_seed };

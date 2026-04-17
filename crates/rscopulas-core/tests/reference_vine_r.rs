@@ -72,12 +72,17 @@ fn mixed_r_vine_matches_vinecopula_log_pdf_fixture() {
     assert_eq!(model.structure(), VineStructureKind::R);
     assert_eq!(model.structure_info().matrix, array2_usize(&fixture.matrix));
 
-    let input = PseudoObs::new(array2_f64(&fixture.inputs)).expect("fixture inputs should be valid");
+    let input =
+        PseudoObs::new(array2_f64(&fixture.inputs)).expect("fixture inputs should be valid");
     let actual = model
         .log_pdf(&input, &EvalOptions::default())
         .expect("log pdf should evaluate");
 
-    for (idx, (left, right)) in actual.iter().zip(fixture.expected_log_pdf.iter()).enumerate() {
+    for (idx, (left, right)) in actual
+        .iter()
+        .zip(fixture.expected_log_pdf.iter())
+        .enumerate()
+    {
         assert!(
             (left - right).abs() < 1e-8,
             "fixture {} mismatch at row {idx}: left={left}, right={right}",
@@ -98,7 +103,7 @@ fn mixed_r_vine_sample_statistics_match_vinecopula_fixture() {
 
     let mut rng = StdRng::seed_from_u64(fixture.seed);
     let samples = model
-        .sample(fixture.sample_size, &mut rng, &SampleOptions::default())
+        .sample(fixture.sample_size, &mut rng, &SampleOptions)
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("sample should be valid");
     let means = column_means(&sample_obs);
@@ -117,6 +122,43 @@ fn mixed_r_vine_sample_statistics_match_vinecopula_fixture() {
             assert!((tau[(row, col)] - expected).abs() < 2.5e-2);
         }
     }
+}
+
+#[test]
+fn mixed_r_vine_serde_round_trip_preserves_log_pdf_and_sampling() {
+    let log_pdf_fixture: VineLogPdfFixture = load_fixture("mixed_r_vine_log_pdf_d5_case01.json");
+    let sample_fixture: VineSampleSummaryFixture =
+        load_fixture("mixed_r_vine_sample_summary_d5_case01.json");
+    let model = build_model(&log_pdf_fixture.trees, log_pdf_fixture.truncation_level);
+    let input = PseudoObs::new(array2_f64(&log_pdf_fixture.inputs))
+        .expect("fixture inputs should be valid");
+
+    let encoded = serde_json::to_vec(&model).expect("vine model should serialize");
+    let restored: VineCopula =
+        serde_json::from_slice(&encoded).expect("vine model should deserialize");
+
+    assert_eq!(
+        restored.structure_info().matrix,
+        model.structure_info().matrix
+    );
+
+    let original_log_pdf = model
+        .log_pdf(&input, &EvalOptions::default())
+        .expect("original log pdf should evaluate");
+    let restored_log_pdf = restored
+        .log_pdf(&input, &EvalOptions::default())
+        .expect("restored log pdf should evaluate");
+    assert_eq!(original_log_pdf, restored_log_pdf);
+
+    let mut original_rng = StdRng::seed_from_u64(sample_fixture.seed);
+    let mut restored_rng = StdRng::seed_from_u64(sample_fixture.seed);
+    let original_samples = model
+        .sample(256, &mut original_rng, &SampleOptions)
+        .expect("original sampling should succeed");
+    let restored_samples = restored
+        .sample(256, &mut restored_rng, &SampleOptions)
+        .expect("restored sampling should succeed");
+    assert_eq!(original_samples, restored_samples);
 }
 
 #[test]
@@ -139,13 +181,44 @@ fn fit_r_vine_is_not_a_relabel_of_canonical_vines_on_mixed_reference_data() {
         ..VineFitOptions::default()
     };
 
+    let reference_trees = fixture
+        .trees
+        .iter()
+        .take(
+            options
+                .truncation_level
+                .expect("truncation level should be set"),
+        )
+        .map(tree_signature)
+        .collect::<Vec<_>>();
     let r_fit = VineCopula::fit_r_vine(&data, &options).expect("R-vine fit should succeed");
     let c_fit = VineCopula::fit_c_vine(&data, &options).expect("C-vine fit should succeed");
     let d_fit = VineCopula::fit_d_vine(&data, &options).expect("D-vine fit should succeed");
 
     assert_eq!(r_fit.model.structure(), VineStructureKind::R);
+    let fitted_trees = r_fit
+        .model
+        .trees()
+        .iter()
+        .map(tree_signature)
+        .collect::<Vec<_>>();
+    let shared_first_tree = fitted_trees[0]
+        .iter()
+        .filter(|edge| reference_trees[0].contains(*edge))
+        .count();
     assert!(
-        r_fit.model
+        shared_first_tree >= 2,
+        "fitted R-vine should recover at least two fixture first-tree edges; fitted={:?}, reference={:?}",
+        fitted_trees[0],
+        reference_trees[0]
+    );
+    assert!(
+        fitted_trees[0].contains(&((2, 4), Vec::new())),
+        "fitted R-vine should recover the fixture's strongest cross-branch edge"
+    );
+    assert!(
+        r_fit
+            .model
             .trees()
             .iter()
             .flat_map(|tree| tree.edges.iter())
@@ -233,14 +306,20 @@ fn load_fixture<T: for<'de> Deserialize<'de>>(name: &str) -> T {
 fn array2_f64(rows: &[Vec<f64>]) -> Array2<f64> {
     let nrows = rows.len();
     let ncols = rows.first().map_or(0, Vec::len);
-    let data = rows.iter().flat_map(|row| row.iter().copied()).collect::<Vec<_>>();
+    let data = rows
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
     Array2::from_shape_vec((nrows, ncols), data).expect("rows should form a matrix")
 }
 
 fn array2_usize(rows: &[Vec<usize>]) -> Array2<usize> {
     let nrows = rows.len();
     let ncols = rows.first().map_or(0, Vec::len);
-    let data = rows.iter().flat_map(|row| row.iter().copied()).collect::<Vec<_>>();
+    let data = rows
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
     Array2::from_shape_vec((nrows, ncols), data).expect("rows should form a matrix")
 }
 
@@ -248,4 +327,71 @@ fn column_means(data: &PseudoObs) -> Vec<f64> {
     (0..data.dim())
         .map(|col| data.as_view().column(col).iter().sum::<f64>() / data.n_obs() as f64)
         .collect()
+}
+
+fn tree_signature<T>(tree: &T) -> Vec<((usize, usize), Vec<usize>)>
+where
+    T: TreeLike,
+{
+    let mut edges = tree
+        .edges()
+        .iter()
+        .map(|edge| {
+            let conditioned = if edge.conditioned().0 < edge.conditioned().1 {
+                edge.conditioned()
+            } else {
+                (edge.conditioned().1, edge.conditioned().0)
+            };
+            (conditioned, edge.conditioning().to_vec())
+        })
+        .collect::<Vec<_>>();
+    edges.sort();
+    edges
+}
+
+trait TreeLike {
+    type Edge: EdgeLike;
+
+    fn edges(&self) -> &[Self::Edge];
+}
+
+trait EdgeLike {
+    fn conditioned(&self) -> (usize, usize);
+    fn conditioning(&self) -> &[usize];
+}
+
+impl TreeLike for TreeFixture {
+    type Edge = EdgeFixture;
+
+    fn edges(&self) -> &[Self::Edge] {
+        &self.edges
+    }
+}
+
+impl TreeLike for VineTree {
+    type Edge = VineEdge;
+
+    fn edges(&self) -> &[Self::Edge] {
+        &self.edges
+    }
+}
+
+impl EdgeLike for EdgeFixture {
+    fn conditioned(&self) -> (usize, usize) {
+        (self.conditioned[0], self.conditioned[1])
+    }
+
+    fn conditioning(&self) -> &[usize] {
+        &self.conditioning
+    }
+}
+
+impl EdgeLike for VineEdge {
+    fn conditioned(&self) -> (usize, usize) {
+        self.conditioned
+    }
+
+    fn conditioning(&self) -> &[usize] {
+        &self.conditioning
+    }
 }

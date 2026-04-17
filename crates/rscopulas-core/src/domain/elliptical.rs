@@ -1,7 +1,7 @@
 use ndarray::Array2;
 use rand::Rng;
 use rand_distr::{ChiSquared, StandardNormal};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use statrs::{
     distribution::{Continuous, ContinuousCDF, Normal, StudentsT},
     function::gamma::ln_gamma,
@@ -20,7 +20,8 @@ use crate::{
 
 use super::{CopulaFamily, CopulaModel, EvalOptions, FitOptions, SampleOptions};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Gaussian copula parameterized by a correlation matrix.
+#[derive(Debug, Clone, Serialize)]
 pub struct GaussianCopula {
     dim: usize,
     correlation: Array2<f64>,
@@ -30,6 +31,7 @@ pub struct GaussianCopula {
 }
 
 impl GaussianCopula {
+    /// Constructs a Gaussian copula from a valid correlation matrix.
     pub fn new(correlation: Array2<f64>) -> Result<Self, CopulaError> {
         validate_correlation_matrix(&correlation)?;
         let cholesky = cholesky(&correlation)?;
@@ -43,6 +45,7 @@ impl GaussianCopula {
         })
     }
 
+    /// Fits a Gaussian copula by inverting the Kendall tau matrix.
     pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
         let tau = kendall_tau_matrix(data);
         let correlation =
@@ -65,12 +68,43 @@ impl GaussianCopula {
         Ok(FitResult { model, diagnostics })
     }
 
+    /// Returns the fitted correlation matrix.
     pub fn correlation(&self) -> &Array2<f64> {
         &self.correlation
     }
 
     fn standard_normal() -> Normal {
         Normal::new(0.0, 1.0).expect("standard normal parameters should be valid")
+    }
+}
+
+#[derive(Deserialize)]
+struct GaussianCopulaRepr {
+    #[serde(default)]
+    dim: Option<usize>,
+    correlation: Array2<f64>,
+    #[serde(default)]
+    log_det: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for GaussianCopula {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let repr = GaussianCopulaRepr::deserialize(deserializer)?;
+        let model = Self::new(repr.correlation).map_err(serde::de::Error::custom)?;
+        if repr.dim.is_some_and(|dim| dim != model.dim) {
+            return Err(serde::de::Error::custom(
+                "serialized GaussianCopula dim does not match correlation",
+            ));
+        }
+        if repr.log_det.is_some_and(|log_det| !log_det.is_finite()) {
+            return Err(serde::de::Error::custom(
+                "serialized GaussianCopula log_det must be finite",
+            ));
+        }
+        Ok(model)
     }
 }
 
@@ -140,7 +174,8 @@ impl CopulaModel for GaussianCopula {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Student t copula parameterized by a correlation matrix and degrees of freedom.
+#[derive(Debug, Clone, Serialize)]
 pub struct StudentTCopula {
     dim: usize,
     correlation: Array2<f64>,
@@ -151,6 +186,7 @@ pub struct StudentTCopula {
 }
 
 impl StudentTCopula {
+    /// Constructs a Student t copula from a valid correlation matrix and `nu > 0`.
     pub fn new(correlation: Array2<f64>, degrees_of_freedom: f64) -> Result<Self, CopulaError> {
         if !degrees_of_freedom.is_finite() || degrees_of_freedom <= 0.0 {
             return Err(FitError::Failed {
@@ -172,6 +208,7 @@ impl StudentTCopula {
         })
     }
 
+    /// Fits a Student t copula by Kendall tau inversion plus a grid search over `nu`.
     pub fn fit(data: &PseudoObs, _options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
         let tau = kendall_tau_matrix(data);
         let correlation =
@@ -210,10 +247,12 @@ impl StudentTCopula {
         Ok(FitResult { model, diagnostics })
     }
 
+    /// Returns the fitted correlation matrix.
     pub fn correlation(&self) -> &Array2<f64> {
         &self.correlation
     }
 
+    /// Returns the fitted degrees of freedom.
     pub fn degrees_of_freedom(&self) -> f64 {
         self.degrees_of_freedom
     }
@@ -221,6 +260,38 @@ impl StudentTCopula {
     fn univariate_t(&self) -> StudentsT {
         StudentsT::new(0.0, 1.0, self.degrees_of_freedom)
             .expect("validated degrees of freedom should construct a t distribution")
+    }
+}
+
+#[derive(Deserialize)]
+struct StudentTCopulaRepr {
+    #[serde(default)]
+    dim: Option<usize>,
+    correlation: Array2<f64>,
+    degrees_of_freedom: f64,
+    #[serde(default)]
+    log_det: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for StudentTCopula {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let repr = StudentTCopulaRepr::deserialize(deserializer)?;
+        let model = Self::new(repr.correlation, repr.degrees_of_freedom)
+            .map_err(serde::de::Error::custom)?;
+        if repr.dim.is_some_and(|dim| dim != model.dim) {
+            return Err(serde::de::Error::custom(
+                "serialized StudentTCopula dim does not match correlation",
+            ));
+        }
+        if repr.log_det.is_some_and(|log_det| !log_det.is_finite()) {
+            return Err(serde::de::Error::custom(
+                "serialized StudentTCopula log_det must be finite",
+            ));
+        }
+        Ok(model)
     }
 }
 

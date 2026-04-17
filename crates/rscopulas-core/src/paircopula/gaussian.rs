@@ -22,10 +22,8 @@ pub fn log_pdf(u1: f64, u2: f64, rho: f64) -> Result<f64, CopulaError> {
     let z1 = normal.inverse_cdf(u1);
     let z2 = normal.inverse_cdf(u2);
     let one_minus = 1.0 - rho * rho;
-    Ok(
-        -0.5 * one_minus.ln()
-            - (rho * rho * (z1 * z1 + z2 * z2) - 2.0 * rho * z1 * z2) / (2.0 * one_minus),
-    )
+    Ok(-0.5 * one_minus.ln()
+        - (rho * rho * (z1 * z1 + z2 * z2) - 2.0 * rho * z1 * z2) / (2.0 * one_minus))
 }
 
 pub fn cond_first_given_second(u1: f64, u2: f64, rho: f64) -> Result<f64, CopulaError> {

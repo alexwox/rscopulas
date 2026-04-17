@@ -5,8 +5,7 @@ mod vine;
 
 pub use archimedean::{ClaytonCopula, FrankCopula, GumbelHougaardCopula};
 pub use common::{
-    Copula, CopulaFamily, CopulaModel, Device, EvalOptions, ExecPolicy, FitDiagnostics, FitOptions,
-    SampleOptions,
+    Copula, CopulaFamily, CopulaModel, EvalOptions, FitDiagnostics, FitOptions, SampleOptions,
 };
 pub use elliptical::{GaussianCopula, StudentTCopula};
 pub use vine::{

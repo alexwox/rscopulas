@@ -47,7 +47,9 @@ fn rotated_pair_families_match_vinecopula_fixtures() {
             let u2 = fixture.u2[idx];
             let p = fixture.p[idx];
 
-            let actual_log_pdf = spec.log_pdf(u1, u2, 1e-12).expect("log pdf should evaluate");
+            let actual_log_pdf = spec
+                .log_pdf(u1, u2, 1e-12)
+                .expect("log pdf should evaluate");
             assert!(
                 (actual_log_pdf - fixture.expected_log_pdf[idx]).abs() < 1e-9,
                 "{} {} log pdf mismatch at row {idx}: left={actual_log_pdf}, right={}",

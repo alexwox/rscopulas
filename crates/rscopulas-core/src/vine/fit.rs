@@ -15,22 +15,32 @@ use crate::{
 
 use super::{
     VineCopula, VineEdge, VineStructureKind, VineTree, default_family_set,
-    structure::{build_model_from_trees, canonical_c_vine_trees, canonical_d_vine_trees, validate_order},
+    structure::{
+        build_model_from_trees, canonical_c_vine_trees, canonical_d_vine_trees, validate_order,
+    },
 };
 
+/// Information criterion used to compare candidate pair-copula fits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SelectionCriterion {
     Aic,
     Bic,
 }
 
+/// Options controlling vine structure and pair-copula selection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VineFitOptions {
+    /// Base options shared with the single-family fitters.
     pub base: crate::domain::FitOptions,
+    /// Candidate pair-copula families considered for each edge.
     pub family_set: Vec<PairCopulaFamily>,
+    /// Whether rotated Archimedean families may be selected.
     pub include_rotations: bool,
+    /// Criterion used when comparing candidate pair-copula fits.
     pub criterion: SelectionCriterion,
+    /// Optional maximum tree level to fit and retain.
     pub truncation_level: Option<usize>,
+    /// Optional absolute Kendall tau threshold for selecting independence.
     pub independence_threshold: Option<f64>,
 }
 
@@ -83,7 +93,11 @@ struct Graph {
 }
 
 impl VineCopula {
-    pub fn gaussian_c_vine(order: Vec<usize>, correlation: Array2<f64>) -> Result<Self, CopulaError> {
+    /// Constructs a Gaussian C-vine from an explicit variable order and correlation matrix.
+    pub fn gaussian_c_vine(
+        order: Vec<usize>,
+        correlation: Array2<f64>,
+    ) -> Result<Self, CopulaError> {
         validate_correlation_matrix(&correlation)?;
         validate_order(&order, correlation.nrows())?;
         let specs = c_vine_gaussian_specs(&order, &correlation)?;
@@ -91,7 +105,11 @@ impl VineCopula {
         build_model_from_trees(VineStructureKind::C, trees, None)
     }
 
-    pub fn gaussian_d_vine(order: Vec<usize>, correlation: Array2<f64>) -> Result<Self, CopulaError> {
+    /// Constructs a Gaussian D-vine from an explicit variable order and correlation matrix.
+    pub fn gaussian_d_vine(
+        order: Vec<usize>,
+        correlation: Array2<f64>,
+    ) -> Result<Self, CopulaError> {
         validate_correlation_matrix(&correlation)?;
         validate_order(&order, correlation.nrows())?;
         let specs = d_vine_gaussian_specs(&order, &correlation)?;
@@ -99,6 +117,7 @@ impl VineCopula {
         build_model_from_trees(VineStructureKind::D, trees, None)
     }
 
+    /// Fits a simplified C-vine with pair-copula selection on each edge.
     pub fn fit_c_vine(
         data: &PseudoObs,
         options: &VineFitOptions,
@@ -109,6 +128,7 @@ impl VineCopula {
         Ok(FitResult { model, diagnostics })
     }
 
+    /// Fits a simplified D-vine with pair-copula selection on each edge.
     pub fn fit_d_vine(
         data: &PseudoObs,
         options: &VineFitOptions,
@@ -119,6 +139,7 @@ impl VineCopula {
         Ok(FitResult { model, diagnostics })
     }
 
+    /// Fits a simplified R-vine using a Dissmann-style maximum spanning tree procedure.
     pub fn fit_r_vine(
         data: &PseudoObs,
         options: &VineFitOptions,
@@ -184,7 +205,8 @@ impl VineCopula {
             }
         }
 
-        let model = build_model_from_trees(VineStructureKind::R, public_trees, options.truncation_level)?;
+        let model =
+            build_model_from_trees(VineStructureKind::R, public_trees, options.truncation_level)?;
         let n_obs = data.n_obs() as f64;
         let parameter_count = model
             .trees
@@ -545,8 +567,18 @@ fn fit_first_tree(
     tree.edges
         .iter()
         .map(|edge| {
-            let left = data.as_view().column(edge.conditioned_set.0).iter().copied().collect::<Vec<_>>();
-            let right = data.as_view().column(edge.conditioned_set.1).iter().copied().collect::<Vec<_>>();
+            let left = data
+                .as_view()
+                .column(edge.conditioned_set.0)
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            let right = data
+                .as_view()
+                .column(edge.conditioned_set.1)
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
             let fit = if truncated {
                 PairFitResult {
                     spec: PairCopulaSpec::independence(),
