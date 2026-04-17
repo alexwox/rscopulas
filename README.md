@@ -5,8 +5,9 @@ from pseudo-observations.
 
 ## Workspace
 
-- `crates/rscopulas-core`: core data validation, copula models, fitting, math,
-  tests, and benchmarks
+- `crates/rscopulas-core`: core data validation, copula models, pair-copula
+  primitives, vine structure / fitting / evaluation / sampling, math, stats,
+  reference tests, and benchmarks
 - `crates/rscopulas-accel`: backend capability detection scaffolding for future
   CPU/GPU dispatch
 - `crates/rscopulas-python`: placeholder crate for future Python bindings
@@ -16,71 +17,88 @@ from pseudo-observations.
 ### Working now
 
 - pseudo-observation validation through `PseudoObs`
-- Gaussian copula:
-  - `new`
-  - `fit` via Kendall's tau inversion
-  - `log_pdf`
-  - `sample`
-- Student t copula:
-  - `new`
-  - `fit` via Kendall's tau inversion plus a degrees-of-freedom grid search
-  - `log_pdf`
-  - `sample`
-- Archimedean copulas:
-  - Clayton `new`, `fit`, `log_pdf`, `sample`
-  - Frank `new`, `fit`, `log_pdf`, `sample`
-  - Gumbel-Hougaard `new`, `fit`, `log_pdf`, `sample`
-- pair copulas for vines:
-  - Independence, Gaussian, Student t, Clayton, Frank, Gumbel
-  - rotated Clayton and Gumbel through `R90`, `R180`, and `R270`
-  - `log_pdf`
-  - h-functions and inverse h-functions
-- simplified vine copulas:
-  - `gaussian_c_vine`
-  - `gaussian_d_vine`
-  - `fit_c_vine`
-  - `fit_d_vine`
-  - `fit_r_vine`
-  - `from_trees`
-  - `log_pdf`
-  - `sample`
-  - truncation via `VineFitOptions::truncation_level`
-- reference tests against fixtures generated from R package `copula` `1.1-3`
-  for:
-  - Gaussian
-  - Student t
-  - Clayton
-  - Frank
-  - Gumbel
-- reference tests against R package `VineCopula` `2.6.1` for:
-  - pair-copula densities, h-functions, inverse h-functions, and rotations
-  - Gaussian C-vine and D-vine fixtures
-  - mixed-family R-vine fixtures
-  - truncated R-vine fixtures
-- Criterion benchmarks for Gaussian fit/log-density/sample and the additional
-  family log-density paths, including Gaussian vine log-density
-- `cargo test`
-- `cargo bench --no-run`
-- `cargo clippy --all-targets --all-features -- -D warnings`
+- single-family copulas (`new`, `fit`, `log_pdf`, `sample`):
+  - `GaussianCopula` (Kendall tau inversion for the correlation matrix)
+  - `StudentTCopula` (tau inversion plus a degrees-of-freedom grid search)
+  - `ClaytonCopula`, `FrankCopula`, `GumbelHougaardCopula` (mean Kendall tau
+    inversion, Gaussian-style AIC/BIC diagnostics)
+- pair-copula primitives in `rscopulas_core::paircopula` exposing
+  `log_pdf`, `cond_first_given_second`, `cond_second_given_first`,
+  `inv_first_given_second`, and `inv_second_given_first` for:
+  - Independence, Gaussian, Student t, Clayton, Frank, Gumbel-Hougaard
+  - rotations `R0`, `R90`, `R180`, `R270` (Gaussian and Student t only use `R0`
+    by construction; Clayton / Frank / Gumbel exercise all four rotations)
+- `fit_pair_copula` selects a family + rotation by AIC or BIC, with an optional
+  Kendall tau independence threshold
+- vine copulas (`CopulaModel::log_pdf`, `CopulaModel::sample`) over C, D, and
+  R structures:
+  - Gaussian-parameterised constructors: `VineCopula::gaussian_c_vine`,
+    `VineCopula::gaussian_d_vine`
+  - mixed-family fitters: `VineCopula::fit_c_vine`, `VineCopula::fit_d_vine`,
+    `VineCopula::fit_r_vine` with configurable `family_set`, rotations,
+    AIC/BIC selection, optional truncation level, and optional independence
+    threshold (`VineFitOptions`)
+  - `VineCopula::from_trees` for building a vine from pre-specified trees
+- reference tests against fixtures generated from R:
+  - `copula` 1.1-3 at `d = 2` for Gaussian, Student t, Clayton, Frank, Gumbel
+    (log pdf, fit, sample summary)
+  - `VineCopula` 2.6.1 pair-copula fixtures (log pdf, both h-functions, both
+    inverse h-functions) for Gaussian, Student t, Clayton, Frank, Gumbel, plus
+    Clayton and Gumbel at `R90`, `R180`, `R270`
+  - `VineCopula` 2.6.1 vine fixtures: Gaussian C-vine and D-vine at `d = 4`;
+    a mixed-family R-vine at `d = 5` for both the full and truncation-level-2
+    cases; and an R-vine fit non-triviality check against a Dissmann-style
+    reference matrix
+- Criterion benchmarks for Gaussian `fit`, `log_pdf`, and `sample`; Student t,
+  Clayton, Frank, and Gumbel `log_pdf`; and Gaussian C-vine and D-vine
+  `log_pdf`
+- quality gates (all currently passing on the working tree):
+  - `cargo test`
+  - `cargo bench --no-run`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
 
-### Not working yet
+### Not working yet / scaffolding
 
-- non-simplified vines are not implemented
-- there is no full external fit-parity suite against `VineCopula` for
-  `fit_r_vine`; the current reference coverage is strongest for pair kernels,
-  vine density evaluation, and sampling
-- `rscopulas-accel` only reports detected capabilities; it does not execute any
-  accelerated kernels yet
-- `rscopulas-python` does not expose a Python API yet
+- `rscopulas-accel` only reports detected capabilities (`cpu_simd`,
+  `rayon_threads`, empty `cuda` / `metal`); it does not execute any accelerated
+  kernels yet
+- `rscopulas-python` exposes no Python API yet; the crate is a `cdylib`
+  placeholder
+- the execution-policy surface in the public API is inert: `ExecPolicy`,
+  `Device`, and the `exec` fields on `FitOptions` / `EvalOptions` /
+  `SampleOptions` are accepted but ignored by every implementation
 - there is no top-level ergonomic facade yet for selecting a family and
-  returning a boxed or enum-backed fitted model from one entry point
-- broader dimensional regression coverage still needs to be added for larger
-  vine models and more fit scenarios
+  returning a boxed or enum-backed fitted model from one entry point; the
+  `Copula` enum is exported but unused by the library
+- `faer` is declared in `[workspace.dependencies]` for a future matrix backend
+  but is not referenced by any source file yet
+- reference coverage is strongest at `d = 2` for single families, `d = 4` for
+  Gaussian vines, and `d = 5` for mixed R-vines; broader dimensional
+  regression coverage still needs to be added
+
+### Known caveats
+
+- `GaussianCopula` and `StudentTCopula` mark their cached Cholesky factor as
+  `#[serde(skip)]` and do not rebuild it on deserialize. A deserialised model
+  must be reconstructed via `::new(correlation, …)` before calling `log_pdf`
+  or `sample`, otherwise the cached factor is zero and the output is wrong.
+- Frank and Gumbel generator / derivative helpers are currently duplicated
+  between `domain/archimedean.rs` (full-joint families) and
+  `paircopula/{frank,gumbel}.rs` (bivariate pair-copulas).
 
 ## Reference Fixtures
 
-Fixture generation scripts live in `scripts/reference/` and write JSON fixtures
-under `fixtures/reference/r-copula/v1_1_3/`.
+Fixture generation scripts live in `scripts/reference/` and write JSON
+fixtures under:
+
+- `fixtures/reference/r-copula/v1_1_3/` — single-family fixtures from R
+  package `copula` 1.1-3
+- `fixtures/reference/vinecopula/v2/` — pair-copula and vine fixtures from R
+  package `VineCopula` 2.6.1
+
+The R scripts (`generate_{gaussian,student_t,clayton,frank,gumbel}_fixtures.R`,
+`generate_paircopula_fixtures.R`, `generate_vine_fixtures.R`) are runnable from
+the workspace root with `Rscript` and regenerate the JSON fixtures in-place.
 
 ## Development
 
