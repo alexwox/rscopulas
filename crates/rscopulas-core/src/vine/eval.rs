@@ -1,26 +1,16 @@
-use ndarray::Array2;
-
 use crate::{
     backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
     data::PseudoObs,
-    domain::ExecPolicy,
+    domain::{Device, ExecPolicy},
     errors::{BackendError, CopulaError, FitError},
-    paircopula::{PairCopulaFamily, PairCopulaParams, Rotation},
+    paircopula::{PairCopulaFamily, PairCopulaParams, Rotation, evaluate_pair_batch_into},
 };
 
-use super::{
-    VineCopula,
-    structure::{revert_matrix, revert_pair_matrix},
-};
+use super::{CompiledVineRuntime, VineCopula};
 
 struct VineEvalContext<'a> {
-    variable_order: &'a [usize],
-    mat: &'a Array2<usize>,
-    maxmat: &'a Array2<usize>,
-    cindirect: &'a Array2<bool>,
-    specs: &'a Array2<Option<crate::paircopula::PairCopulaSpec>>,
+    runtime: &'a CompiledVineRuntime,
     view: ndarray::ArrayView2<'a, f64>,
-    d: usize,
     clip_eps: f64,
 }
 
@@ -38,21 +28,12 @@ impl VineCopula {
             .into());
         }
 
-        let d = self.dim;
-        let mat = revert_matrix(&self.normalized_matrix);
-        let maxmat = revert_matrix(&self.max_matrix);
-        let cindirect = revert_matrix(&self.cond_indirect);
-        let specs = revert_pair_matrix(&self.pair_matrix);
+        let runtime = self.compiled_runtime();
         let view = data.as_view();
         let strategy = resolve_strategy(exec, Operation::VineLogPdf, data.n_obs())?;
         let ctx = VineEvalContext {
-            variable_order: &self.variable_order,
-            mat: &mat,
-            maxmat: &maxmat,
-            cindirect: &cindirect,
-            specs: &specs,
+            runtime: &runtime,
             view,
-            d,
             clip_eps,
         };
 
@@ -76,40 +57,38 @@ fn evaluate_vine_cpu(
     ctx: &VineEvalContext<'_>,
     strategy: ExecutionStrategy,
 ) -> Result<Vec<f64>, CopulaError> {
-    parallel_try_map_range_collect(ctx.view.nrows(), strategy, |obs| {
-        let mut vdirect = Array2::zeros((ctx.d, ctx.d));
-        let mut vindirect = Array2::zeros((ctx.d, ctx.d));
-        let mut total = 0.0;
-
-        for (idx, var) in ctx.variable_order.iter().copied().enumerate() {
-            vdirect[(0, idx)] = ctx.view[(obs, var)].clamp(ctx.clip_eps, 1.0 - ctx.clip_eps);
-        }
-
-        vindirect[(0, 0)] = vdirect[(0, 0)];
-
-        for i in 1..ctx.d {
-            for k in 0..i {
-                let label = ctx.maxmat[(k, i)];
-                let source = if ctx.mat[(k, i)] == label {
-                    vdirect[(k, label)]
-                } else {
-                    vindirect[(k, label)]
-                };
-                let target = vdirect[(k, i)];
-                let spec = ctx.specs[(k, i)].as_ref().ok_or(FitError::Failed {
-                    reason: "missing pair-copula specification for vine evaluation",
-                })?;
-
-                total += spec.log_pdf(source, target, ctx.clip_eps)?;
-                vdirect[(k + 1, i)] = spec.cond_second_given_first(source, target, ctx.clip_eps)?;
-                if i + 1 < ctx.d && ctx.cindirect[(k + 1, i)] {
-                    vindirect[(k + 1, i)] =
-                        spec.cond_first_given_second(source, target, ctx.clip_eps)?;
-                }
+    match strategy {
+        ExecutionStrategy::CpuSerial => evaluate_vine_block(
+            ctx.runtime,
+            &ctx.view,
+            0,
+            ctx.view.nrows(),
+            ctx.clip_eps,
+        ),
+        ExecutionStrategy::CpuParallel => {
+            let chunk_size = eval_chunk_size(ctx.runtime.dim, ctx.view.nrows());
+            let chunk_count = ctx.view.nrows().div_ceil(chunk_size);
+            let blocks = parallel_try_map_range_collect(chunk_count, strategy, |chunk_idx| {
+                let start = chunk_idx * chunk_size;
+                let end = (start + chunk_size).min(ctx.view.nrows());
+                evaluate_vine_block(
+                    ctx.runtime,
+                    &ctx.view,
+                    start,
+                    end,
+                    ctx.clip_eps,
+                )
+            })?;
+            let mut totals = Vec::with_capacity(ctx.view.nrows());
+            for block in blocks {
+                totals.extend(block);
             }
+            Ok(totals)
         }
-        Ok(total)
-    })
+        ExecutionStrategy::Cuda(_) | ExecutionStrategy::Metal => {
+            unreachable!("CPU vine evaluation expects a CPU strategy")
+        }
+    }
 }
 
 fn evaluate_vine_with_gpu_pair_batches(
@@ -117,7 +96,7 @@ fn evaluate_vine_with_gpu_pair_batches(
     device: rscopulas_accel::Device,
     backend: &'static str,
 ) -> Result<Vec<f64>, CopulaError> {
-    if !all_gaussian_specs(ctx.specs) {
+    if !ctx.runtime.all_gaussian {
         let cpu_strategy = if ctx.view.nrows() >= 128 {
             ExecutionStrategy::CpuParallel
         } else {
@@ -127,76 +106,117 @@ fn evaluate_vine_with_gpu_pair_batches(
     }
 
     let n_obs = ctx.view.nrows();
+    let d = ctx.runtime.dim;
     let mut totals = vec![0.0; n_obs];
-    let mut vdirect = (0..n_obs)
-        .map(|obs| {
-            let mut direct = Array2::zeros((ctx.d, ctx.d));
-            for (idx, var) in ctx.variable_order.iter().copied().enumerate() {
-                direct[(0, idx)] = ctx.view[(obs, var)].clamp(ctx.clip_eps, 1.0 - ctx.clip_eps);
-            }
-            direct
-        })
-        .collect::<Vec<_>>();
-    let mut vindirect = (0..n_obs)
-        .map(|obs| {
-            let mut indirect = Array2::zeros((ctx.d, ctx.d));
-            indirect[(0, 0)] =
-                ctx.view[(obs, ctx.variable_order[0])].clamp(ctx.clip_eps, 1.0 - ctx.clip_eps);
-            indirect
-        })
-        .collect::<Vec<_>>();
+    let mut vdirect = vec![0.0; n_obs * d * d];
+    let mut vindirect = vec![0.0; n_obs * d * d];
 
-    for i in 1..ctx.d {
-        for k in 0..i {
-            let spec = ctx.specs[(k, i)].as_ref().ok_or(FitError::Failed {
-                reason: "missing pair-copula specification for vine evaluation",
-            })?;
-            let label = ctx.maxmat[(k, i)];
-            let mut sources = Vec::with_capacity(n_obs);
-            let mut targets = Vec::with_capacity(n_obs);
-            for obs in 0..n_obs {
-                let source = if ctx.mat[(k, i)] == label {
-                    vdirect[obs][(k, label)]
-                } else {
-                    vindirect[obs][(k, label)]
-                };
-                let target = vdirect[obs][(k, i)];
-                sources.push(source);
-                targets.push(target);
-            }
+    for obs in 0..n_obs {
+        for (idx, &var) in ctx.runtime.variable_order.iter().enumerate() {
+            vdirect[workspace_index(obs, 0, idx, d)] =
+                ctx.view[(obs, var)].clamp(ctx.clip_eps, 1.0 - ctx.clip_eps);
+        }
+        vindirect[workspace_index(obs, 0, 0, d)] = vdirect[workspace_index(obs, 0, 0, d)];
+    }
 
-            if let Some(rho) = gaussian_rho(spec) {
-                let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
-                    device,
-                    rscopulas_accel::GaussianPairBatchRequest {
-                        u1: &sources,
-                        u2: &targets,
-                        rho,
-                        clip_eps: ctx.clip_eps,
-                    },
-                )
-                .map_err(|err| BackendError::Failed {
-                    backend,
-                    reason: err.to_string(),
-                })?;
-
-                for obs in 0..n_obs {
-                    totals[obs] += batch.log_pdf[obs];
-                    vdirect[obs][(k + 1, i)] = batch.cond_on_second[obs];
-                    if i + 1 < ctx.d && ctx.cindirect[(k + 1, i)] {
-                        vindirect[obs][(k + 1, i)] = batch.cond_on_first[obs];
-                    }
-                }
+    for step in &ctx.runtime.eval_steps {
+        let rho = gaussian_rho(&step.spec).ok_or(FitError::Failed {
+            reason: "gaussian batch evaluation expected only gaussian vine steps",
+        })?;
+        let mut sources = vec![0.0; n_obs];
+        let mut targets = vec![0.0; n_obs];
+        for obs in 0..n_obs {
+            let source_idx = workspace_index(obs, step.row, step.label, d);
+            sources[obs] = if step.source_from_direct {
+                vdirect[source_idx]
             } else {
-                for obs in 0..n_obs {
-                    totals[obs] += spec.log_pdf(sources[obs], targets[obs], ctx.clip_eps)?;
-                    vdirect[obs][(k + 1, i)] =
-                        spec.cond_second_given_first(sources[obs], targets[obs], ctx.clip_eps)?;
-                    if i + 1 < ctx.d && ctx.cindirect[(k + 1, i)] {
-                        vindirect[obs][(k + 1, i)] =
-                            spec.cond_first_given_second(sources[obs], targets[obs], ctx.clip_eps)?;
-                    }
-                }
+                vindirect[source_idx]
+            };
+            targets[obs] = vdirect[workspace_index(obs, step.row, step.col, d)];
+        }
+
+        let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
+            device,
+            rscopulas_accel::GaussianPairBatchRequest {
+                u1: &sources,
+                u2: &targets,
+                rho,
+                clip_eps: ctx.clip_eps,
+            },
+        )
+        .map_err(|err| BackendError::Failed {
+            backend,
+            reason: err.to_string(),
+        })?;
+
+        for obs in 0..n_obs {
+            totals[obs] += batch.log_pdf[obs];
+            vdirect[workspace_index(obs, step.row + 1, step.col, d)] = batch.cond_on_second[obs];
+            if step.write_indirect {
+                vindirect[workspace_index(obs, step.row + 1, step.col, d)] =
+                    batch.cond_on_first[obs];
+            }
+        }
+    }
+
+    Ok(totals)
+}
+
+fn evaluate_vine_block(
+    runtime: &CompiledVineRuntime,
+    view: &ndarray::ArrayView2<'_, f64>,
+    start: usize,
+    end: usize,
+    clip_eps: f64,
+) -> Result<Vec<f64>, CopulaError> {
+    let n_rows = end.saturating_sub(start);
+    let d = runtime.dim;
+    let mut totals = vec![0.0; n_rows];
+    let mut vdirect = vec![0.0; n_rows * d * d];
+    let mut vindirect = vec![0.0; n_rows * d * d];
+    let mut sources = vec![0.0; n_rows];
+    let mut targets = vec![0.0; n_rows];
+    let mut log_pdf = vec![0.0; n_rows];
+    let mut cond_on_first = vec![0.0; n_rows];
+    let mut cond_on_second = vec![0.0; n_rows];
+
+    for local_obs in 0..n_rows {
+        let obs = start + local_obs;
+        for (idx, &var) in runtime.variable_order.iter().enumerate() {
+            vdirect[workspace_index(local_obs, 0, idx, d)] =
+                view[(obs, var)].clamp(clip_eps, 1.0 - clip_eps);
+        }
+        vindirect[workspace_index(local_obs, 0, 0, d)] =
+            vdirect[workspace_index(local_obs, 0, 0, d)];
+    }
+
+    for step in &runtime.eval_steps {
+        for local_obs in 0..n_rows {
+            let source_idx = workspace_index(local_obs, step.row, step.label, d);
+            sources[local_obs] = if step.source_from_direct {
+                vdirect[source_idx]
+            } else {
+                vindirect[source_idx]
+            };
+            targets[local_obs] = vdirect[workspace_index(local_obs, step.row, step.col, d)];
+        }
+        evaluate_pair_batch_into(
+            &step.spec,
+            &sources,
+            &targets,
+            clip_eps,
+            ExecPolicy::Force(Device::Cpu),
+            &mut log_pdf,
+            &mut cond_on_first,
+            &mut cond_on_second,
+        )?;
+        for local_obs in 0..n_rows {
+            totals[local_obs] += log_pdf[local_obs];
+            vdirect[workspace_index(local_obs, step.row + 1, step.col, d)] =
+                cond_on_second[local_obs];
+            if step.write_indirect {
+                vindirect[workspace_index(local_obs, step.row + 1, step.col, d)] =
+                    cond_on_first[local_obs];
             }
         }
     }
@@ -211,9 +231,12 @@ fn gaussian_rho(spec: &crate::paircopula::PairCopulaSpec) -> Option<f64> {
     }
 }
 
-fn all_gaussian_specs(specs: &Array2<Option<crate::paircopula::PairCopulaSpec>>) -> bool {
-    specs
-        .iter()
-        .flatten()
-        .all(|spec| gaussian_rho(spec).is_some())
+#[inline]
+fn workspace_index(obs: usize, row: usize, col: usize, dim: usize) -> usize {
+    (obs * dim * dim) + (row * dim) + col
+}
+
+fn eval_chunk_size(dim: usize, n_rows: usize) -> usize {
+    let target_rows = (8192 / dim.max(1)).max(128);
+    target_rows.min(n_rows.max(1))
 }

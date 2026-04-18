@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
+    domain::ExecPolicy,
     errors::{BackendError, CopulaError, FitError},
     math::maximize_scalar,
     vine::{SelectionCriterion, VineFitOptions},
@@ -520,7 +521,7 @@ pub fn fit_pair_copula(
 
     let mut candidates = Vec::new();
     for family in &options.family_set {
-        for rotation in candidate_rotations(*family, options.include_rotations) {
+        for rotation in candidate_rotations(*family, options.include_rotations, tau) {
             let spec = match fit_family_with_rotation(
                 *family,
                 *rotation,
@@ -563,13 +564,7 @@ fn finalize_pair_fit(
     u2: &[f64],
     options: &VineFitOptions,
 ) -> Result<PairFitResult, CopulaError> {
-    let batch = evaluate_pair_batch(
-        spec.clone(),
-        u1,
-        u2,
-        options.base.clip_eps,
-        options.base.exec,
-    )?;
+    let batch = evaluate_pair_batch(spec.clone(), u1, u2, options.base.clip_eps, options.base.exec)?;
     let loglik = batch.log_pdf.iter().sum::<f64>();
 
     let k = spec.parameter_count() as f64;
@@ -591,18 +586,23 @@ fn criterion_value(fit: &PairFitResult, criterion: SelectionCriterion) -> f64 {
     }
 }
 
-fn candidate_rotations(family: PairCopulaFamily, include_rotations: bool) -> &'static [Rotation] {
+fn candidate_rotations(
+    family: PairCopulaFamily,
+    include_rotations: bool,
+    tau: f64,
+) -> &'static [Rotation] {
     use PairCopulaFamily as Family;
     use Rotation as Rot;
 
     match family {
-        Family::Independence | Family::Gaussian | Family::StudentT => &[Rot::R0],
-        Family::Clayton | Family::Frank | Family::Gumbel | Family::Khoudraji
-            if include_rotations =>
-        {
-            &[Rot::R0, Rot::R90, Rot::R180, Rot::R270]
+        Family::Independence | Family::Gaussian | Family::StudentT | Family::Frank => &[Rot::R0],
+        Family::Clayton | Family::Gumbel | Family::Khoudraji if include_rotations && tau >= 0.0 => {
+            &[Rot::R0, Rot::R180]
         }
-        Family::Clayton | Family::Frank | Family::Gumbel | Family::Khoudraji => &[Rot::R0],
+        Family::Clayton | Family::Gumbel | Family::Khoudraji if include_rotations => {
+            &[Rot::R90, Rot::R270]
+        }
+        Family::Clayton | Family::Gumbel | Family::Khoudraji => &[Rot::R0],
     }
 }
 
@@ -615,13 +615,13 @@ fn fit_family_with_rotation(
     max_iter: usize,
 ) -> Result<PairCopulaSpec, CopulaError> {
     if family == PairCopulaFamily::Khoudraji {
-        return fit_khoudraji_with_rotation(rotation, u1, u2, max_iter);
+        return fit_khoudraji_with_rotation(rotation, u1, u2, _tau, max_iter);
     }
 
     let transformed = rotated::transform_sample(rotation, u1, u2);
     let x1 = &transformed.0;
     let x2 = &transformed.1;
-    let transformed_tau = crate::stats::kendall_tau_bivariate(x1, x2)?;
+    let transformed_tau = rotated_tau(rotation, _tau);
 
     fit_simple_family(family, transformed_tau, x1, x2, max_iter).map(|params| PairCopulaSpec {
         family,
@@ -637,6 +637,7 @@ fn fit_simple_family(
     x2: &[f64],
     max_iter: usize,
 ) -> Result<PairCopulaParams, CopulaError> {
+    let search_iterations = max_iter.clamp(16, 64);
     let params = match family {
         PairCopulaFamily::Independence => PairCopulaParams::None,
         PairCopulaFamily::Gaussian => {
@@ -648,7 +649,7 @@ fn fit_simple_family(
             let mut best_loglik = f64::NEG_INFINITY;
             let rho_seed = gaussian::tau_to_rho(tau).clamp(-0.95, 0.95);
             for nu in student_t::candidate_nus() {
-                let rho = maximize_scalar(-0.98, 0.98, max_iter.max(1), |rho| {
+                let rho = maximize_scalar(-0.98, 0.98, search_iterations, |rho| {
                     x1.iter()
                         .zip(x2.iter())
                         .map(|(&u, &v)| {
@@ -675,7 +676,7 @@ fn fit_simple_family(
         PairCopulaFamily::Clayton => {
             let init = clayton::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1e-6, upper, max_iter.max(1), |theta| {
+            let theta = maximize_scalar(1e-6, upper, search_iterations, |theta| {
                 x1.iter()
                     .zip(x2.iter())
                     .map(|(&u, &v)| clayton::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
@@ -686,7 +687,7 @@ fn fit_simple_family(
         PairCopulaFamily::Frank => {
             let init = frank::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1e-6, upper, max_iter.max(1), |theta| {
+            let theta = maximize_scalar(1e-6, upper, search_iterations, |theta| {
                 x1.iter()
                     .zip(x2.iter())
                     .map(|(&u, &v)| frank::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
@@ -697,7 +698,7 @@ fn fit_simple_family(
         PairCopulaFamily::Gumbel => {
             let init = gumbel::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1.0 + 1e-6, upper, max_iter.max(1), |theta| {
+            let theta = maximize_scalar(1.0 + 1e-6, upper, search_iterations, |theta| {
                 x1.iter()
                     .zip(x2.iter())
                     .map(|(&u, &v)| gumbel::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
@@ -719,6 +720,7 @@ fn fit_khoudraji_with_rotation(
     rotation: Rotation,
     u1: &[f64],
     u2: &[f64],
+    tau: f64,
     max_iter: usize,
 ) -> Result<PairCopulaSpec, CopulaError> {
     let base_fit_iterations = max_iter.clamp(8, 16);
@@ -726,7 +728,7 @@ fn fit_khoudraji_with_rotation(
     let transformed = rotated::transform_sample(rotation, u1, u2);
     let x1 = &transformed.0;
     let x2 = &transformed.1;
-    let tau = crate::stats::kendall_tau_bivariate(x1, x2)?;
+    let tau = rotated_tau(rotation, tau);
     let base_families = [
         PairCopulaFamily::Independence,
         PairCopulaFamily::Gaussian,
@@ -773,6 +775,13 @@ fn fit_khoudraji_with_rotation(
         }
         .into(),
     )
+}
+
+fn rotated_tau(rotation: Rotation, tau: f64) -> f64 {
+    match rotation {
+        Rotation::R0 | Rotation::R180 => tau,
+        Rotation::R90 | Rotation::R270 => -tau,
+    }
 }
 
 fn optimize_khoudraji_shapes(
@@ -856,12 +865,51 @@ fn evaluate_pair_batch(
     clip_eps: f64,
     exec: crate::domain::ExecPolicy,
 ) -> Result<PairBatchEvaluation, CopulaError> {
+    let mut log_pdf = vec![0.0; u1.len()];
+    let mut cond_on_first = vec![0.0; u1.len()];
+    let mut cond_on_second = vec![0.0; u1.len()];
+    evaluate_pair_batch_into(
+        &spec,
+        u1,
+        u2,
+        clip_eps,
+        exec,
+        &mut log_pdf,
+        &mut cond_on_first,
+        &mut cond_on_second,
+    )?;
+
+    Ok(PairBatchEvaluation {
+        log_pdf,
+        cond_on_first,
+        cond_on_second,
+    })
+}
+
+pub(crate) fn evaluate_pair_batch_into(
+    spec: &PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+    exec: ExecPolicy,
+    log_pdf: &mut [f64],
+    cond_on_first: &mut [f64],
+    cond_on_second: &mut [f64],
+) -> Result<(), CopulaError> {
+    validate_batch_buffers(u1, u2, &[log_pdf.len(), cond_on_first.len(), cond_on_second.len()])?;
     let strategy = resolve_strategy(exec, Operation::PairBatchEval, u1.len())?;
-    let rows = match strategy {
-        ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => {
-            evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, strategy)?
-        }
-        ExecutionStrategy::Cuda(ordinal) => match gaussian_pair_request(&spec, u1, u2, clip_eps) {
+    match strategy {
+        ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => fill_pair_batch_cpu(
+            spec,
+            u1,
+            u2,
+            clip_eps,
+            strategy,
+            log_pdf,
+            cond_on_first,
+            cond_on_second,
+        ),
+        ExecutionStrategy::Cuda(ordinal) => match gaussian_pair_request(spec, u1, u2, clip_eps) {
             Some(request) => {
                 let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
                     rscopulas_accel::Device::Cuda(ordinal),
@@ -871,13 +919,21 @@ fn evaluate_pair_batch(
                     backend: "cuda",
                     reason: err.to_string(),
                 })?;
-                to_pair_rows(batch)
+                copy_gaussian_batch(batch, log_pdf, cond_on_first, cond_on_second);
+                Ok(())
             }
-            None => {
-                evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?
-            }
+            None => fill_pair_batch_cpu(
+                spec,
+                u1,
+                u2,
+                clip_eps,
+                ExecutionStrategy::CpuParallel,
+                log_pdf,
+                cond_on_first,
+                cond_on_second,
+            ),
         },
-        ExecutionStrategy::Metal => match gaussian_pair_request(&spec, u1, u2, clip_eps) {
+        ExecutionStrategy::Metal => match gaussian_pair_request(spec, u1, u2, clip_eps) {
             Some(request) => {
                 let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
                     rscopulas_accel::Device::Metal,
@@ -887,48 +943,48 @@ fn evaluate_pair_batch(
                     backend: "metal",
                     reason: err.to_string(),
                 })?;
-                to_pair_rows(batch)
+                copy_gaussian_batch(batch, log_pdf, cond_on_first, cond_on_second);
+                Ok(())
             }
-            // Metal stays bounded to the mixed-precision Gaussian pair kernel; the
-            // remaining pair families continue on CPU until they get a validated
-            // tolerance budget of their own.
-            None => {
-                evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?
-            }
+            None => fill_pair_batch_cpu(
+                spec,
+                u1,
+                u2,
+                clip_eps,
+                ExecutionStrategy::CpuParallel,
+                log_pdf,
+                cond_on_first,
+                cond_on_second,
+            ),
         },
-    };
-
-    let mut log_pdf = Vec::with_capacity(rows.len());
-    let mut cond_on_first = Vec::with_capacity(rows.len());
-    let mut cond_on_second = Vec::with_capacity(rows.len());
-    for (log_value, cond_first, cond_second) in rows {
-        log_pdf.push(log_value);
-        cond_on_first.push(cond_first);
-        cond_on_second.push(cond_second);
     }
-
-    Ok(PairBatchEvaluation {
-        log_pdf,
-        cond_on_first,
-        cond_on_second,
-    })
 }
 
-fn evaluate_pair_batch_cpu(
-    spec: PairCopulaSpec,
+pub(crate) fn inverse_second_given_first_batch_into(
+    spec: &PairCopulaSpec,
     u1: &[f64],
     u2: &[f64],
     clip_eps: f64,
     strategy: ExecutionStrategy,
-) -> Result<Vec<(f64, f64, f64)>, CopulaError> {
-    parallel_try_map_range_collect(u1.len(), strategy, |idx| {
-        let left = u1[idx];
-        let right = u2[idx];
-        Ok((
-            spec.log_pdf(left, right, clip_eps)?,
-            spec.cond_first_given_second(left, right, clip_eps)?,
-            spec.cond_second_given_first(left, right, clip_eps)?,
-        ))
+    out: &mut [f64],
+) -> Result<(), CopulaError> {
+    validate_batch_buffers(u1, u2, &[out.len()])?;
+    fill_unary_pair_batch(spec, u1, u2, strategy, out, |spec, left, right| {
+        spec.inv_second_given_first(left, right, clip_eps)
+    })
+}
+
+pub(crate) fn cond_first_given_second_batch_into(
+    spec: &PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+    strategy: ExecutionStrategy,
+    out: &mut [f64],
+) -> Result<(), CopulaError> {
+    validate_batch_buffers(u1, u2, &[out.len()])?;
+    fill_unary_pair_batch(spec, u1, u2, strategy, out, |spec, left, right| {
+        spec.cond_first_given_second(left, right, clip_eps)
     })
 }
 
@@ -951,15 +1007,98 @@ fn gaussian_pair_request<'a>(
     }
 }
 
-fn to_pair_rows(batch: rscopulas_accel::GaussianPairBatchResult) -> Vec<(f64, f64, f64)> {
-    let len = batch.log_pdf.len();
-    let mut rows = Vec::with_capacity(len);
-    for idx in 0..len {
-        rows.push((
-            batch.log_pdf[idx],
-            batch.cond_on_first[idx],
-            batch.cond_on_second[idx],
-        ));
+fn fill_pair_batch_cpu(
+    spec: &PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+    strategy: ExecutionStrategy,
+    log_pdf: &mut [f64],
+    cond_on_first: &mut [f64],
+    cond_on_second: &mut [f64],
+) -> Result<(), CopulaError> {
+    match strategy {
+        ExecutionStrategy::CpuSerial => {
+            for idx in 0..u1.len() {
+                log_pdf[idx] = spec.log_pdf(u1[idx], u2[idx], clip_eps)?;
+                cond_on_first[idx] = spec.cond_first_given_second(u1[idx], u2[idx], clip_eps)?;
+                cond_on_second[idx] = spec.cond_second_given_first(u1[idx], u2[idx], clip_eps)?;
+            }
+            Ok(())
+        }
+        ExecutionStrategy::CpuParallel => {
+            let rows = parallel_try_map_range_collect(u1.len(), strategy, |idx| {
+                Ok((
+                    spec.log_pdf(u1[idx], u2[idx], clip_eps)?,
+                    spec.cond_first_given_second(u1[idx], u2[idx], clip_eps)?,
+                    spec.cond_second_given_first(u1[idx], u2[idx], clip_eps)?,
+                ))
+            })?;
+            for (idx, (log_value, cond_first, cond_second)) in rows.into_iter().enumerate() {
+                log_pdf[idx] = log_value;
+                cond_on_first[idx] = cond_first;
+                cond_on_second[idx] = cond_second;
+            }
+            Ok(())
+        }
+        ExecutionStrategy::Cuda(_) | ExecutionStrategy::Metal => {
+            unreachable!("GPU pair batches must be handled before CPU filling")
+        }
     }
-    rows
+}
+
+fn fill_unary_pair_batch<F>(
+    spec: &PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    strategy: ExecutionStrategy,
+    out: &mut [f64],
+    f: F,
+) -> Result<(), CopulaError>
+where
+    F: Fn(&PairCopulaSpec, f64, f64) -> Result<f64, CopulaError> + Sync + Send,
+{
+    match strategy {
+        ExecutionStrategy::CpuSerial => {
+            for idx in 0..u1.len() {
+                out[idx] = f(spec, u1[idx], u2[idx])?;
+            }
+            Ok(())
+        }
+        ExecutionStrategy::CpuParallel => {
+            let values = parallel_try_map_range_collect(u1.len(), strategy, |idx| {
+                f(spec, u1[idx], u2[idx])
+            })?;
+            out.copy_from_slice(&values);
+            Ok(())
+        }
+        ExecutionStrategy::Cuda(_) | ExecutionStrategy::Metal => {
+            unreachable!("sampling helpers currently support CPU strategies only")
+        }
+    }
+}
+
+fn validate_batch_buffers(
+    u1: &[f64],
+    u2: &[f64],
+    output_lens: &[usize],
+) -> Result<(), CopulaError> {
+    if u1.len() != u2.len() || output_lens.iter().any(|&len| len != u1.len()) {
+        return Err(FitError::Failed {
+            reason: "pair batch helpers require equally sized input and output buffers",
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn copy_gaussian_batch(
+    batch: rscopulas_accel::GaussianPairBatchResult,
+    log_pdf: &mut [f64],
+    cond_on_first: &mut [f64],
+    cond_on_second: &mut [f64],
+) {
+    log_pdf.copy_from_slice(&batch.log_pdf);
+    cond_on_first.copy_from_slice(&batch.cond_on_first);
+    cond_on_second.copy_from_slice(&batch.cond_on_second);
 }

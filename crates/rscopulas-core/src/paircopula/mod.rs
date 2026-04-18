@@ -11,3 +11,8 @@ pub use common::{
     KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult, Rotation,
     fit_pair_copula,
 };
+
+pub(crate) use common::{
+    cond_first_given_second_batch_into, evaluate_pair_batch_into,
+    inverse_second_given_first_batch_into,
+};

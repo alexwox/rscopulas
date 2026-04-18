@@ -27,7 +27,7 @@ pub(crate) fn resolve_strategy(
     batch_len: usize,
 ) -> Result<ExecutionStrategy, CopulaError> {
     match policy {
-        ExecPolicy::Force(Device::Cpu) => Ok(ExecutionStrategy::CpuSerial),
+        ExecPolicy::Force(Device::Cpu) => Ok(cpu_strategy(operation, batch_len)),
         // GPU force requests only become device strategies for operations that
         // have an actual GPU-aware bridge. Everything else remains explicit:
         // either a deliberate CPU fallback at the call site or an
@@ -101,6 +101,7 @@ fn cpu_parallel_supported(operation: Operation) -> bool {
             | Operation::PairBatchEval
             | Operation::PairFitScoring
             | Operation::KendallTauMatrix
+            | Operation::Sample
     )
 }
 
@@ -117,7 +118,7 @@ fn parallel_threshold(operation: Operation) -> usize {
         Operation::DensityEval | Operation::VineLogPdf | Operation::PairBatchEval => 128,
         Operation::PairFitScoring => 2,
         Operation::KendallTauMatrix => 4,
-        Operation::Sample => usize::MAX,
+        Operation::Sample => 128,
     }
 }
 

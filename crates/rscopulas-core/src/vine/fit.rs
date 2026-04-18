@@ -1,8 +1,11 @@
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::{
+    backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
     data::PseudoObs,
+    domain::{Device, ExecPolicy},
     errors::{CopulaError, FitError},
     fit::FitResult,
     math::{inverse, validate_correlation_matrix},
@@ -61,8 +64,8 @@ impl Default for VineFitOptions {
 struct InternalEdgeFit {
     conditioned: (usize, usize),
     conditioning: Vec<usize>,
-    cond_on_first: Vec<f64>,
-    cond_on_second: Vec<f64>,
+    cond_on_first: SharedSeries,
+    cond_on_second: SharedSeries,
 }
 
 #[derive(Clone)]
@@ -82,8 +85,8 @@ struct GraphEdge {
     weight: f64,
     conditioned_set: (usize, usize),
     conditioning_set: Vec<usize>,
-    left_data: Vec<f64>,
-    right_data: Vec<f64>,
+    left_data: SharedSeries,
+    right_data: SharedSeries,
 }
 
 #[derive(Clone)]
@@ -145,7 +148,8 @@ impl VineCopula {
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
         let truncation_level = options.truncation_level.unwrap_or(data.dim() - 1);
-        let mut graph = initialize_first_graph(data, options)?;
+        let columns = collect_column_data(data);
+        let mut graph = initialize_first_graph(data, &columns, options)?;
         let mut internal_trees = Vec::with_capacity(data.dim() - 1);
         let mut public_trees = Vec::with_capacity(data.dim() - 1);
         let mut total_loglik = 0.0;
@@ -170,7 +174,7 @@ impl VineCopula {
             };
 
             let fitted = if level == 1 {
-                fit_first_tree(&mst, data, options, truncated)?
+                fit_first_tree(&mst, options, truncated)?
             } else {
                 fit_tree_from_graph(&mst, options, truncated)?
             };
@@ -230,8 +234,8 @@ struct FittedGraphEdge {
     conditioned: (usize, usize),
     conditioning: Vec<usize>,
     spec: PairCopulaSpec,
-    cond_on_first: Vec<f64>,
-    cond_on_second: Vec<f64>,
+    cond_on_first: SharedSeries,
+    cond_on_second: SharedSeries,
     loglik: f64,
 }
 
@@ -240,6 +244,8 @@ impl FittedGraphEdge {
         self.loglik
     }
 }
+
+type SharedSeries = Arc<[f64]>;
 
 fn fit_canonical_vine(
     data: &PseudoObs,
@@ -269,11 +275,7 @@ fn fit_canonical_vine(
         let mut fitted_edges = Vec::with_capacity(tree.edges.len());
         for edge in tree.edges {
             let left_data = if edge.conditioning.is_empty() {
-                data.as_view()
-                    .column(edge.conditioned.0)
-                    .iter()
-                    .copied()
-                    .collect::<Vec<_>>()
+                shared_column(data, edge.conditioned.0)
             } else {
                 resolve_internal_conditional(
                     internal_trees.last(),
@@ -282,11 +284,7 @@ fn fit_canonical_vine(
                 )?
             };
             let right_data = if edge.conditioning.is_empty() {
-                data.as_view()
-                    .column(edge.conditioned.1)
-                    .iter()
-                    .copied()
-                    .collect::<Vec<_>>()
+                shared_column(data, edge.conditioned.1)
             } else {
                 resolve_internal_conditional(
                     internal_trees.last(),
@@ -295,15 +293,15 @@ fn fit_canonical_vine(
                 )?
             };
 
-            let fit = fit_pair_copula(&left_data, &right_data, options)?;
+            let fit = fit_pair_copula(left_data.as_ref(), right_data.as_ref(), options)?;
             total_loglik += fit.loglik;
             iterations += 1;
             fitted_edges.push(FittedGraphEdge {
                 conditioned: edge.conditioned,
                 conditioning: edge.conditioning.clone(),
                 spec: fit.spec,
-                cond_on_first: fit.cond_on_first.clone(),
-                cond_on_second: fit.cond_on_second.clone(),
+                cond_on_first: Arc::from(fit.cond_on_first),
+                cond_on_second: Arc::from(fit.cond_on_second),
                 loglik: fit.loglik,
             });
         }
@@ -353,7 +351,7 @@ fn resolve_internal_conditional(
     previous: Option<&InternalTree>,
     target: usize,
     conditioning: &[usize],
-) -> Result<Vec<f64>, CopulaError> {
+) -> Result<SharedSeries, CopulaError> {
     let tree = previous.ok_or(FitError::Failed {
         reason: "missing previous tree while resolving canonical vine conditionals",
     })?;
@@ -385,6 +383,7 @@ fn resolve_internal_conditional(
 
 fn initialize_first_graph(
     data: &PseudoObs,
+    columns: &[SharedSeries],
     options: &VineFitOptions,
 ) -> Result<Graph, CopulaError> {
     let tau = try_kendall_tau_matrix(data, options.base.exec)?;
@@ -396,8 +395,8 @@ fn initialize_first_graph(
                 weight: tau[(left, right)].abs(),
                 conditioned_set: (left, right),
                 conditioning_set: Vec::new(),
-                left_data: data.as_view().column(left).iter().copied().collect(),
-                right_data: data.as_view().column(right).iter().copied().collect(),
+                left_data: columns[left].clone(),
+                right_data: columns[right].clone(),
             });
         }
     }
@@ -554,47 +553,27 @@ fn spanning_tree_by_dfs(graph: &Graph) -> Result<Vec<GraphEdge>, CopulaError> {
 
 fn fit_first_tree(
     tree: &Graph,
-    data: &PseudoObs,
     options: &VineFitOptions,
     truncated: bool,
 ) -> Result<Vec<FittedGraphEdge>, CopulaError> {
-    tree.edges
-        .iter()
-        .map(|edge| {
-            let left = data
-                .as_view()
-                .column(edge.conditioned_set.0)
-                .iter()
-                .copied()
-                .collect::<Vec<_>>();
-            let right = data
-                .as_view()
-                .column(edge.conditioned_set.1)
-                .iter()
-                .copied()
-                .collect::<Vec<_>>();
-            let fit = if truncated {
-                PairFitResult {
-                    spec: PairCopulaSpec::independence(),
-                    loglik: 0.0,
-                    aic: 0.0,
-                    bic: 0.0,
-                    cond_on_first: left.clone(),
-                    cond_on_second: right.clone(),
-                }
-            } else {
-                fit_pair_copula(&left, &right, options)?
-            };
-            Ok(FittedGraphEdge {
-                conditioned: edge.conditioned_set,
-                conditioning: edge.conditioning_set.clone(),
-                spec: fit.spec,
-                cond_on_first: fit.cond_on_first,
-                cond_on_second: fit.cond_on_second,
-                loglik: fit.loglik,
-            })
+    let strategy = resolve_strategy(options.base.exec, Operation::PairFitScoring, tree.edges.len())?;
+    let inner_options = edge_fit_options(options, strategy);
+    parallel_try_map_range_collect(tree.edges.len(), strategy, |idx| {
+        let edge = &tree.edges[idx];
+        let fit = if truncated {
+            truncated_pair_fit(&edge.left_data, &edge.right_data)
+        } else {
+            fit_pair_copula(edge.left_data.as_ref(), edge.right_data.as_ref(), &inner_options)?
+        };
+        Ok(FittedGraphEdge {
+            conditioned: edge.conditioned_set,
+            conditioning: edge.conditioning_set.clone(),
+            spec: fit.spec,
+            cond_on_first: Arc::from(fit.cond_on_first),
+            cond_on_second: Arc::from(fit.cond_on_second),
+            loglik: fit.loglik,
         })
-        .collect()
+    })
 }
 
 fn fit_tree_from_graph(
@@ -602,31 +581,57 @@ fn fit_tree_from_graph(
     options: &VineFitOptions,
     truncated: bool,
 ) -> Result<Vec<FittedGraphEdge>, CopulaError> {
-    tree.edges
-        .iter()
-        .map(|edge| {
-            let fit = if truncated {
-                PairFitResult {
-                    spec: PairCopulaSpec::independence(),
-                    loglik: 0.0,
-                    aic: 0.0,
-                    bic: 0.0,
-                    cond_on_first: edge.left_data.clone(),
-                    cond_on_second: edge.right_data.clone(),
-                }
-            } else {
-                fit_pair_copula(&edge.left_data, &edge.right_data, options)?
-            };
-            Ok(FittedGraphEdge {
-                conditioned: edge.conditioned_set,
-                conditioning: edge.conditioning_set.clone(),
-                spec: fit.spec,
-                cond_on_first: fit.cond_on_first,
-                cond_on_second: fit.cond_on_second,
-                loglik: fit.loglik,
-            })
+    let strategy = resolve_strategy(options.base.exec, Operation::PairFitScoring, tree.edges.len())?;
+    let inner_options = edge_fit_options(options, strategy);
+    parallel_try_map_range_collect(tree.edges.len(), strategy, |idx| {
+        let edge = &tree.edges[idx];
+        let fit = if truncated {
+            truncated_pair_fit(&edge.left_data, &edge.right_data)
+        } else {
+            fit_pair_copula(edge.left_data.as_ref(), edge.right_data.as_ref(), &inner_options)?
+        };
+        Ok(FittedGraphEdge {
+            conditioned: edge.conditioned_set,
+            conditioning: edge.conditioning_set.clone(),
+            spec: fit.spec,
+            cond_on_first: Arc::from(fit.cond_on_first),
+            cond_on_second: Arc::from(fit.cond_on_second),
+            loglik: fit.loglik,
         })
-        .collect()
+    })
+}
+
+fn edge_fit_options(options: &VineFitOptions, strategy: ExecutionStrategy) -> VineFitOptions {
+    let mut adjusted = options.clone();
+    if matches!(strategy, ExecutionStrategy::CpuParallel) {
+        adjusted.base.exec = ExecPolicy::Force(Device::Cpu);
+    }
+    adjusted
+}
+
+fn collect_column_data(data: &PseudoObs) -> Vec<SharedSeries> {
+    (0..data.dim()).map(|column| shared_column(data, column)).collect()
+}
+
+fn shared_column(data: &PseudoObs, column: usize) -> SharedSeries {
+    Arc::from(
+        data.as_view()
+            .column(column)
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn truncated_pair_fit(left: &SharedSeries, right: &SharedSeries) -> PairFitResult {
+    PairFitResult {
+        spec: PairCopulaSpec::independence(),
+        loglik: 0.0,
+        aic: 0.0,
+        bic: 0.0,
+        cond_on_first: left.as_ref().to_vec(),
+        cond_on_second: right.as_ref().to_vec(),
+    }
 }
 
 fn build_next_graph(
@@ -720,7 +725,7 @@ fn edge_info(
     let weight = if truncated {
         1.0
     } else {
-        crate::stats::kendall_tau_bivariate(&left_data, &right_data)?.abs()
+        crate::stats::kendall_tau_bivariate(left_data.as_ref(), right_data.as_ref())?.abs()
     };
 
     Ok(Some(GraphEdge {
@@ -732,6 +737,7 @@ fn edge_info(
         right_data,
     }))
 }
+
 
 fn set_difference(left: &[usize], right: &[usize]) -> Vec<usize> {
     left.iter()

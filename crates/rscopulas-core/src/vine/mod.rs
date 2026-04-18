@@ -3,6 +3,8 @@ mod fit;
 mod sample;
 mod structure;
 
+use std::ops::Deref;
+
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +56,8 @@ pub struct VineCopula {
     pub(crate) max_matrix: Array2<usize>,
     pub(crate) cond_direct: Array2<bool>,
     pub(crate) cond_indirect: Array2<bool>,
+    #[serde(skip, default)]
+    pub(crate) runtime: CompiledVineRuntime,
 }
 
 impl VineCopula {
@@ -128,6 +132,71 @@ impl VineCopula {
     /// Returns the configured truncation level, if any.
     pub fn truncation_level(&self) -> Option<usize> {
         self.structure.truncation_level
+    }
+
+    pub(crate) fn compiled_runtime(&self) -> RuntimeView<'_> {
+        if self.runtime.is_empty() {
+            RuntimeView::Owned(structure::compile_runtime(
+                &self.normalized_matrix,
+                &self.max_matrix,
+                &self.cond_indirect,
+                &self.pair_matrix,
+                &self.variable_order,
+            ))
+        } else {
+            RuntimeView::Borrowed(&self.runtime)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CompiledVineRuntime {
+    pub(crate) dim: usize,
+    pub(crate) variable_order: Vec<usize>,
+    pub(crate) sample_steps: Vec<CompiledSampleStep>,
+    pub(crate) eval_steps: Vec<CompiledEvalStep>,
+    pub(crate) all_gaussian: bool,
+}
+
+impl CompiledVineRuntime {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.sample_steps.is_empty() || self.eval_steps.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledSampleStep {
+    pub(crate) row: usize,
+    pub(crate) col: usize,
+    pub(crate) label: usize,
+    pub(crate) source_from_direct: bool,
+    pub(crate) write_indirect: bool,
+    pub(crate) spec: PairCopulaSpec,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledEvalStep {
+    pub(crate) row: usize,
+    pub(crate) col: usize,
+    pub(crate) label: usize,
+    pub(crate) source_from_direct: bool,
+    pub(crate) write_indirect: bool,
+    pub(crate) spec: PairCopulaSpec,
+}
+
+pub(crate) enum RuntimeView<'a> {
+    Borrowed(&'a CompiledVineRuntime),
+    Owned(CompiledVineRuntime),
+}
+
+impl Deref for RuntimeView<'_> {
+    type Target = CompiledVineRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(runtime) => runtime,
+            Self::Owned(runtime) => runtime,
+        }
     }
 }
 

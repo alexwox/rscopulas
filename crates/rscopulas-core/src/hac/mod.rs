@@ -1,3 +1,8 @@
+//! Hierarchical Archimedean copulas: tree validation, `log_pdf`, sampling, and fitting.
+//!
+//! **User guide** (density paths, which `sample()` scenarios are reliable, mixed-family
+//! caveats): see `docs/hac.md` in the repository root.
+
 use ndarray::Array2;
 use rand::Rng;
 use rand_distr::{Distribution, Exp1, Gamma};

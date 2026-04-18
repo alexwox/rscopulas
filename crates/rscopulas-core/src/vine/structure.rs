@@ -5,7 +5,10 @@ use crate::{
     paircopula::PairCopulaSpec,
 };
 
-use super::{VineCopula, VineEdge, VineStructure, VineStructureKind, VineTree};
+use super::{
+    CompiledEvalStep, CompiledSampleStep, CompiledVineRuntime, VineCopula, VineEdge, VineStructure,
+    VineStructureKind, VineTree,
+};
 
 pub(crate) fn validate_order(order: &[usize], dim: usize) -> Result<(), CopulaError> {
     if order.len() != dim {
@@ -41,6 +44,13 @@ pub(crate) fn build_model_from_trees(
     let max_matrix = create_max_matrix(&normalized_matrix);
     let (cond_direct, cond_indirect) =
         needed_conditional_distributions(&normalized_matrix, &max_matrix);
+    let runtime = compile_runtime(
+        &normalized_matrix,
+        &max_matrix,
+        &cond_indirect,
+        &pair_matrix,
+        &variable_order,
+    );
     Ok(VineCopula {
         dim,
         structure: VineStructure {
@@ -55,7 +65,77 @@ pub(crate) fn build_model_from_trees(
         max_matrix,
         cond_direct,
         cond_indirect,
+        runtime,
     })
+}
+
+pub(crate) fn compile_runtime(
+    normalized_matrix: &Array2<usize>,
+    max_matrix: &Array2<usize>,
+    cond_indirect: &Array2<bool>,
+    pair_matrix: &Array2<Option<PairCopulaSpec>>,
+    variable_order: &[usize],
+) -> CompiledVineRuntime {
+    let mat = revert_matrix(normalized_matrix);
+    let maxmat = revert_matrix(max_matrix);
+    let cindirect = revert_matrix(cond_indirect);
+    let specs = revert_pair_matrix(pair_matrix);
+    let d = normalized_matrix.nrows();
+    let mut sample_steps = Vec::with_capacity(d.saturating_mul(d.saturating_sub(1)) / 2);
+    let mut eval_steps = Vec::with_capacity(sample_steps.capacity());
+    let mut all_gaussian = true;
+
+    for i in 1..d {
+        for k in (0..i).rev() {
+            let spec = specs[(k, i)]
+                .clone()
+                .expect("compiled vine runtime requires all pair-copula specs to be present");
+            all_gaussian &= matches!(
+                (
+                    spec.family,
+                    spec.rotation,
+                    &spec.params
+                ),
+                (
+                    crate::paircopula::PairCopulaFamily::Gaussian,
+                    crate::paircopula::Rotation::R0,
+                    crate::paircopula::PairCopulaParams::One(_)
+                )
+            );
+            sample_steps.push(CompiledSampleStep {
+                row: k,
+                col: i,
+                label: maxmat[(k, i)],
+                source_from_direct: mat[(k, i)] == maxmat[(k, i)],
+                write_indirect: i + 1 < d && cindirect[(k + 1, i)],
+                spec,
+            });
+        }
+    }
+
+    for i in 1..d {
+        for k in 0..i {
+            let spec = specs[(k, i)]
+                .clone()
+                .expect("compiled vine runtime requires all pair-copula specs to be present");
+            eval_steps.push(CompiledEvalStep {
+                row: k,
+                col: i,
+                label: maxmat[(k, i)],
+                source_from_direct: mat[(k, i)] == maxmat[(k, i)],
+                write_indirect: i + 1 < d && cindirect[(k + 1, i)],
+                spec,
+            });
+        }
+    }
+
+    CompiledVineRuntime {
+        dim: d,
+        variable_order: variable_order.to_vec(),
+        sample_steps,
+        eval_steps,
+        all_gaussian,
+    }
 }
 
 fn to_structure_matrices(
