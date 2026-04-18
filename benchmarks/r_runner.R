@@ -189,11 +189,16 @@ swap_family_code <- function(code) {
 
 normalize_edge <- function(edge) {
   params <- unlist(edge$params)
+  family <- family_code(edge$family, edge$rotation)
+  par <- if (length(params) >= 1L) as.numeric(params[[1L]]) else 0.0
+  if (family %in% c(23L, 33L, 24L, 34L)) {
+    par <- -abs(par)
+  }
   list(
     conditioned = as.integer(unlist(edge$conditioned)) + 1L,
     conditioning = as.integer(unlist(edge$conditioning)) + 1L,
-    family = family_code(edge$family, edge$rotation),
-    par = if (length(params) >= 1L) as.numeric(params[[1L]]) else 0.0,
+    family = family,
+    par = par,
     par2 = if (length(params) >= 2L) as.numeric(params[[2L]]) else 0.0
   )
 }
@@ -353,6 +358,9 @@ run_pair_kernels <- function(case, fixture) {
   }
   family <- as.integer(fixture$family_code)
   par <- as.numeric(fixture$par)
+  if (family %in% c(23L, 33L, 24L, 34L)) {
+    par <- -abs(par)
+  }
   par2 <- as.numeric(fixture$par2)
   u1 <- as.numeric(unlist(fixture$u1))
   u2 <- as.numeric(unlist(fixture$u2))

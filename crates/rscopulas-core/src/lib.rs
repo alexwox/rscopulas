@@ -6,6 +6,7 @@
 //! - single-family copulas such as Gaussian, Student t, Clayton, Frank, and
 //!   Gumbel-Hougaard,
 //! - low-level pair-copula kernels with h-functions and inverse h-functions,
+//!   including **Khoudraji** asymmetric pair copulas,
 //! - C-vine, D-vine, and R-vine copulas.
 //!
 //! The crate assumes your data is already in pseudo-observation form: finite
@@ -71,6 +72,7 @@
 //!         PairCopulaFamily::Clayton,
 //!         PairCopulaFamily::Frank,
 //!         PairCopulaFamily::Gumbel,
+//!         PairCopulaFamily::Khoudraji,
 //!     ],
 //!     include_rotations: true,
 //!     criterion: SelectionCriterion::Aic,

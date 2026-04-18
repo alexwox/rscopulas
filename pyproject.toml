@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "rscopulas"
 version = "0.1.0"
-description = "Python bindings for the rscopulas Rust workspace"
+description = "Copula modeling for Python (NumPy) and Rust: vines, pair copulas, and reference-tested pseudo-observation workflows"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.26"]

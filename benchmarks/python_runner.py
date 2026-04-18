@@ -90,6 +90,35 @@ def _pair_parameters(fixture: dict[str, Any]) -> list[float]:
     return parameters
 
 
+def _pair_family_and_rotation(fixture: dict[str, Any]) -> tuple[str, str]:
+    family_code = fixture.get("family_code")
+    if family_code is not None:
+        mapping = {
+            0: ("independence", "R0"),
+            1: ("gaussian", "R0"),
+            2: ("student_t", "R0"),
+            3: ("clayton", "R0"),
+            13: ("clayton", "R180"),
+            23: ("clayton", "R90"),
+            33: ("clayton", "R270"),
+            4: ("gumbel", "R0"),
+            14: ("gumbel", "R180"),
+            24: ("gumbel", "R90"),
+            34: ("gumbel", "R270"),
+            5: ("frank", "R0"),
+        }
+        try:
+            return mapping[int(family_code)]
+        except KeyError as exc:
+            raise ValueError(f"unsupported pair family_code {family_code}") from exc
+
+    family = str(fixture["family"]).lower()
+    if "_rot" in family:
+        base_family, rotation_suffix = family.split("_rot", maxsplit=1)
+        return base_family, f"R{rotation_suffix}"
+    return family, str(fixture.get("rotation", "R0"))
+
+
 def _pair_model_from_fixture(fixture: dict[str, Any]) -> PairCopula:
     if fixture.get("family") == "khoudraji":
         return PairCopula.from_khoudraji(
@@ -103,10 +132,11 @@ def _pair_model_from_fixture(fixture: dict[str, Any]) -> PairCopula:
             first_rotation=str(fixture["base_copula_1"].get("rotation", "R0")),
             second_rotation=str(fixture["base_copula_2"].get("rotation", "R0")),
         )
+    family, rotation = _pair_family_and_rotation(fixture)
     return PairCopula.from_spec(
-        fixture["family"],
+        family,
         _pair_parameters(fixture),
-        rotation=str(fixture.get("rotation", "R0")),
+        rotation=rotation,
     )
 
 

@@ -8,7 +8,7 @@ This folder contains the cross-language benchmark harness for comparing R and
 The default manifest in `cases.json` measures:
 
 - single-family `log_pdf`, `fit`, and `sample`
-- pair-copula density plus h/hinv kernels
+- pair-copula density plus h/hinv kernels (including **Khoudraji** via `pair_khoudraji_kernels`)
 - mixed R-vine `log_pdf`, `sample`, and `fit`
 
 Each case runs against the same JSON fixtures already used elsewhere in the
