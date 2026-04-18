@@ -91,11 +91,7 @@ pub(crate) fn compile_runtime(
                 .clone()
                 .expect("compiled vine runtime requires all pair-copula specs to be present");
             all_gaussian &= matches!(
-                (
-                    spec.family,
-                    spec.rotation,
-                    &spec.params
-                ),
+                (spec.family, spec.rotation, &spec.params),
                 (
                     crate::paircopula::PairCopulaFamily::Gaussian,
                     crate::paircopula::Rotation::R0,

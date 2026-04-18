@@ -83,9 +83,9 @@ fn sample_serial<R: Rng + ?Sized>(
             } else {
                 vindirect[source_idx]
             };
-            let value =
-                step.spec
-                    .inv_second_given_first(source, vdirect[target_idx], clip_eps)?;
+            let value = step
+                .spec
+                .inv_second_given_first(source, vdirect[target_idx], clip_eps)?;
             vdirect[out_idx] = value;
             if step.write_indirect {
                 vindirect[single_workspace_index(step.row + 1, step.col, d)] =

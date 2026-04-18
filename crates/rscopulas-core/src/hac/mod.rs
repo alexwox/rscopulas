@@ -11,9 +11,8 @@ use crate::{
     archimedean_math::frank,
     data::PseudoObs,
     domain::{
-        ClaytonCopula, CopulaModel, EvalOptions, FitDiagnostics, FrankCopula,
-        GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions, HacNode,
-        HacStructureMethod, HacTree,
+        ClaytonCopula, CopulaModel, EvalOptions, FitDiagnostics, FrankCopula, GumbelHougaardCopula,
+        HacFamily, HacFitMethod, HacFitOptions, HacNode, HacStructureMethod, HacTree,
         HierarchicalArchimedeanCopula, SampleOptions,
     },
     errors::{CopulaError, FitError},
@@ -176,15 +175,22 @@ pub fn sample<R: Rng + ?Sized>(
     let mut samples = Array2::zeros((n, model.dim()));
     let weights = stehfest_weights(12);
     for row in 0..n {
-        let root_frailty = sample_root_frailty(node_of(model.tree())?.family, node_of(model.tree())?.theta, rng)?;
+        let root_frailty = sample_root_frailty(
+            node_of(model.tree())?.family,
+            node_of(model.tree())?.theta,
+            rng,
+        )?;
         sample_subtree(
             model.tree(),
             root_frailty,
             rng,
             &weights,
-            samples.row_mut(row).as_slice_mut().ok_or(FitError::Failed {
-                reason: "row storage should be contiguous",
-            })?,
+            samples
+                .row_mut(row)
+                .as_slice_mut()
+                .ok_or(FitError::Failed {
+                    reason: "row storage should be contiguous",
+                })?,
         )?;
     }
     Ok(samples)
@@ -326,8 +332,7 @@ fn fit_tree_node(
                 .collect::<Result<Vec<_>, _>>()?;
             let child_groups = children.iter().map(leaves_of).collect::<Vec<_>>();
             let direct_pairs = direct_pairs_from_groups(&child_groups);
-            let (family, theta) =
-                fit_best_family_for_pairs(&direct_pairs, data, tau, options)?;
+            let (family, theta) = fit_best_family_for_pairs(&direct_pairs, data, tau, options)?;
             Ok(HacTree::Node(HacNode::new(family, theta, children)))
         }
     }
@@ -344,11 +349,7 @@ fn fit_best_family_for_pairs(
     let mean_tau = if direct_pairs.is_empty() {
         0.2
     } else {
-        direct_pairs
-            .iter()
-            .map(|&(i, j)| tau[(i, j)])
-            .sum::<f64>()
-            / direct_pairs.len() as f64
+        direct_pairs.iter().map(|&(i, j)| tau[(i, j)]).sum::<f64>() / direct_pairs.len() as f64
     }
     .clamp(1e-4, 1.0 - 1e-4);
 
@@ -363,20 +364,18 @@ fn fit_best_family_for_pairs(
                     let spec = pair_spec(*family, theta);
                     (0..data.n_obs())
                         .map(|row| {
-                            spec.log_pdf(view[(row, left)], view[(row, right)], options.base.clip_eps)
-                                .unwrap_or(-1e12)
+                            spec.log_pdf(
+                                view[(row, left)],
+                                view[(row, right)],
+                                options.base.clip_eps,
+                            )
+                            .unwrap_or(-1e12)
                         })
                         .sum::<f64>()
                 })
                 .sum::<f64>()
         });
-        let score = pair_loglik_sum(
-            *family,
-            theta,
-            direct_pairs,
-            data,
-            options.base.clip_eps,
-        )?;
+        let score = pair_loglik_sum(*family, theta, direct_pairs, data, options.base.clip_eps)?;
         match best {
             Some((_, _, best_score)) if score <= best_score => {}
             _ => best = Some((*family, theta, score)),
@@ -384,10 +383,12 @@ fn fit_best_family_for_pairs(
     }
 
     best.map(|(family, theta, _)| (family, theta))
-        .ok_or_else(|| FitError::Failed {
-            reason: "HAC family selection requires at least one candidate family",
-        }
-        .into())
+        .ok_or_else(|| {
+            FitError::Failed {
+                reason: "HAC family selection requires at least one candidate family",
+            }
+            .into()
+        })
 }
 
 fn pair_loglik_sum(
@@ -483,7 +484,9 @@ fn composite_loglik(
     data: &PseudoObs,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    Ok(composite_log_pdf_rows(model, data, clip_eps)?.into_iter().sum())
+    Ok(composite_log_pdf_rows(model, data, clip_eps)?
+        .into_iter()
+        .sum())
 }
 
 fn collect_node_work(tree: &HacTree) -> Vec<NodeWork> {
@@ -531,13 +534,24 @@ fn exact_exchangeable_log_pdf(
     options: &EvalOptions,
 ) -> Result<Option<Vec<f64>>, CopulaError> {
     let node = match model.tree() {
-        HacTree::Node(node) if node.children.iter().all(|child| matches!(child, HacTree::Leaf(_))) => node,
+        HacTree::Node(node)
+            if node
+                .children
+                .iter()
+                .all(|child| matches!(child, HacTree::Leaf(_))) =>
+        {
+            node
+        }
         _ => return Ok(None),
     };
     let values = match node.family {
-        HacFamily::Clayton => ClaytonCopula::new(model.dim(), node.theta)?.log_pdf(data, options)?,
+        HacFamily::Clayton => {
+            ClaytonCopula::new(model.dim(), node.theta)?.log_pdf(data, options)?
+        }
         HacFamily::Frank => FrankCopula::new(model.dim(), node.theta)?.log_pdf(data, options)?,
-        HacFamily::Gumbel => GumbelHougaardCopula::new(model.dim(), node.theta)?.log_pdf(data, options)?,
+        HacFamily::Gumbel => {
+            GumbelHougaardCopula::new(model.dim(), node.theta)?.log_pdf(data, options)?
+        }
     };
     Ok(Some(values))
 }
@@ -549,13 +563,24 @@ fn exact_exchangeable_sample<R: Rng + ?Sized>(
     options: &SampleOptions,
 ) -> Result<Option<Array2<f64>>, CopulaError> {
     let node = match model.tree() {
-        HacTree::Node(node) if node.children.iter().all(|child| matches!(child, HacTree::Leaf(_))) => node,
+        HacTree::Node(node)
+            if node
+                .children
+                .iter()
+                .all(|child| matches!(child, HacTree::Leaf(_))) =>
+        {
+            node
+        }
         _ => return Ok(None),
     };
     let values = match node.family {
-        HacFamily::Clayton => ClaytonCopula::new(model.dim(), node.theta)?.sample(n, rng, options)?,
+        HacFamily::Clayton => {
+            ClaytonCopula::new(model.dim(), node.theta)?.sample(n, rng, options)?
+        }
         HacFamily::Frank => FrankCopula::new(model.dim(), node.theta)?.sample(n, rng, options)?,
-        HacFamily::Gumbel => GumbelHougaardCopula::new(model.dim(), node.theta)?.sample(n, rng, options)?,
+        HacFamily::Gumbel => {
+            GumbelHougaardCopula::new(model.dim(), node.theta)?.sample(n, rng, options)?
+        }
     };
     Ok(Some(values))
 }
@@ -579,8 +604,15 @@ fn sample_subtree<R: Rng + ?Sized>(
                         row[*index] = sample_leaf(node.family, node.theta, frailty, rng);
                     }
                     HacTree::Node(child_node) => {
-                        let child_frailty =
-                            sample_child_frailty(node.family, node.theta, child_node.family, child_node.theta, frailty, rng, weights)?;
+                        let child_frailty = sample_child_frailty(
+                            node.family,
+                            node.theta,
+                            child_node.family,
+                            child_node.theta,
+                            frailty,
+                            rng,
+                            weights,
+                        )?;
                         sample_subtree(child, child_frailty, rng, weights, row)?;
                     }
                 }
@@ -628,15 +660,17 @@ fn sample_child_frailty<R: Rng + ?Sized>(
     let u: f64 = rng.random();
     let mut low = 0.0;
     let mut high = (parent_frailty + 1.0).max(1.0);
-    let cdf = |x: f64| conditional_frailty_cdf(
-        parent_family,
-        parent_theta,
-        child_family,
-        child_theta,
-        parent_frailty,
-        x,
-        weights,
-    );
+    let cdf = |x: f64| {
+        conditional_frailty_cdf(
+            parent_family,
+            parent_theta,
+            child_family,
+            child_theta,
+            parent_frailty,
+            x,
+            weights,
+        )
+    };
     while cdf(high) < u && high < 1e6 {
         high *= 2.0;
     }
@@ -694,8 +728,7 @@ fn stehfest_weights(n: usize) -> Vec<f64> {
             let lower = (k + 1).div_ceil(2);
             let upper = k.min(m);
             for j in lower..=upper {
-                total += (j as f64).powi(m as i32)
-                    * factorial(2 * j)
+                total += (j as f64).powi(m as i32) * factorial(2 * j)
                     / (factorial(m - j)
                         * factorial(j)
                         * factorial(j - 1)
@@ -743,8 +776,7 @@ fn sample_positive_stable<R: Rng + ?Sized>(rng: &mut R, alpha: f64) -> f64 {
     let uniform: f64 = rng.random::<f64>() * std::f64::consts::PI;
     let exponential: f64 = Exp1.sample(rng);
     let left = (alpha * uniform).sin() / uniform.sin().powf(1.0 / alpha);
-    let right =
-        (((1.0 - alpha) * uniform).sin() / exponential).powf((1.0 - alpha) / alpha);
+    let right = (((1.0 - alpha) * uniform).sin() / exponential).powf((1.0 - alpha) / alpha);
     left * right
 }
 

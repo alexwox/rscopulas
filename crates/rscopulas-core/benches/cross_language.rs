@@ -12,7 +12,9 @@ use benchmark_support::{
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::{SeedableRng, rngs::StdRng};
-use rscopulas_core::{CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, SampleOptions, VineCopula};
+use rscopulas_core::{
+    CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, SampleOptions, VineCopula,
+};
 
 fn serial_eval_options() -> EvalOptions {
     EvalOptions {
@@ -41,15 +43,11 @@ fn benchmark_manifest() -> benchmark_support::BenchmarkManifest {
 
 fn single_family_log_pdf_benchmarks(criterion: &mut Criterion) {
     let options = serial_eval_options();
-    for case in benchmark_manifest()
-        .cases
-        .into_iter()
-        .filter(|case| {
-            implementation_requested(case, "rust")
-                && case.category == "single_family"
-                && case.operation == "log_pdf"
-        })
-    {
+    for case in benchmark_manifest().cases.into_iter().filter(|case| {
+        implementation_requested(case, "rust")
+            && case.category == "single_family"
+            && case.operation == "log_pdf"
+    }) {
         let family = case
             .family
             .clone()
@@ -70,15 +68,11 @@ fn single_family_log_pdf_benchmarks(criterion: &mut Criterion) {
 
 fn single_family_fit_benchmarks(criterion: &mut Criterion) {
     let options = serial_fit_options();
-    for case in benchmark_manifest()
-        .cases
-        .into_iter()
-        .filter(|case| {
-            implementation_requested(case, "rust")
-                && case.category == "single_family"
-                && case.operation == "fit"
-        })
-    {
+    for case in benchmark_manifest().cases.into_iter().filter(|case| {
+        implementation_requested(case, "rust")
+            && case.category == "single_family"
+            && case.operation == "fit"
+    }) {
         let family = case
             .family
             .clone()
@@ -97,15 +91,11 @@ fn single_family_fit_benchmarks(criterion: &mut Criterion) {
 
 fn single_family_sample_benchmarks(criterion: &mut Criterion) {
     let options = serial_sample_options();
-    for case in benchmark_manifest()
-        .cases
-        .into_iter()
-        .filter(|case| {
-            implementation_requested(case, "rust")
-                && case.category == "single_family"
-                && case.operation == "sample"
-        })
-    {
+    for case in benchmark_manifest().cases.into_iter().filter(|case| {
+        implementation_requested(case, "rust")
+            && case.category == "single_family"
+            && case.operation == "sample"
+    }) {
         let family = case
             .family
             .clone()
@@ -119,7 +109,11 @@ fn single_family_sample_benchmarks(criterion: &mut Criterion) {
             bench.iter(|| {
                 let mut rng = StdRng::seed_from_u64(seed);
                 model
-                    .sample(black_box(sample_n), black_box(&mut rng), black_box(&options))
+                    .sample(
+                        black_box(sample_n),
+                        black_box(&mut rng),
+                        black_box(&options),
+                    )
                     .expect("single-family sample should succeed")
             });
         });
@@ -146,15 +140,11 @@ fn pair_kernel_benchmarks(criterion: &mut Criterion) {
 
 fn vine_log_pdf_benchmarks(criterion: &mut Criterion) {
     let options = serial_eval_options();
-    for case in benchmark_manifest()
-        .cases
-        .into_iter()
-        .filter(|case| {
-            implementation_requested(case, "rust")
-                && case.category == "vine"
-                && case.operation == "log_pdf"
-        })
-    {
+    for case in benchmark_manifest().cases.into_iter().filter(|case| {
+        implementation_requested(case, "rust")
+            && case.category == "vine"
+            && case.operation == "log_pdf"
+    }) {
         let fixture: VineFixture = load_json_fixture(&case.fixture);
         let model = vine_model_from_fixture(&fixture).expect("vine fixture should build");
         let input = vine_input(&fixture);
@@ -171,15 +161,11 @@ fn vine_log_pdf_benchmarks(criterion: &mut Criterion) {
 
 fn vine_sample_benchmarks(criterion: &mut Criterion) {
     let options = serial_sample_options();
-    for case in benchmark_manifest()
-        .cases
-        .into_iter()
-        .filter(|case| {
-            implementation_requested(case, "rust")
-                && case.category == "vine"
-                && case.operation == "sample"
-        })
-    {
+    for case in benchmark_manifest().cases.into_iter().filter(|case| {
+        implementation_requested(case, "rust")
+            && case.category == "vine"
+            && case.operation == "sample"
+    }) {
         let fixture: VineFixture = load_json_fixture(&case.fixture);
         let model = vine_model_from_fixture(&fixture).expect("vine fixture should build");
         let sample_n = vine_sample_size(&fixture);
@@ -189,7 +175,11 @@ fn vine_sample_benchmarks(criterion: &mut Criterion) {
             bench.iter(|| {
                 let mut rng = StdRng::seed_from_u64(seed);
                 model
-                    .sample(black_box(sample_n), black_box(&mut rng), black_box(&options))
+                    .sample(
+                        black_box(sample_n),
+                        black_box(&mut rng),
+                        black_box(&options),
+                    )
                     .expect("vine sampling should succeed")
             });
         });
@@ -198,15 +188,9 @@ fn vine_sample_benchmarks(criterion: &mut Criterion) {
 
 fn vine_fit_benchmarks(criterion: &mut Criterion) {
     let options = default_vine_fit_options();
-    for case in benchmark_manifest()
-        .cases
-        .into_iter()
-        .filter(|case| {
-            implementation_requested(case, "rust")
-                && case.category == "vine"
-                && case.operation == "fit"
-        })
-    {
+    for case in benchmark_manifest().cases.into_iter().filter(|case| {
+        implementation_requested(case, "rust") && case.category == "vine" && case.operation == "fit"
+    }) {
         let fixture: VineFixture = load_json_fixture(&case.fixture);
         let input = vine_fit_input(&fixture);
         let name = format!("cross_language_{}", case.id);

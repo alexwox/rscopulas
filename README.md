@@ -1,16 +1,16 @@
-<div align="center">
-  <img alt="rscopulas" src="https://pub-ca706ca75c8a4972b721945607f0ff01.r2.dev/rscopulas-logo.png" width="64" height="64" />
-</div>
+
 
 # rscopulas
 
 **Copula modeling for Python and Rust** on the same core: fit, score, and sample dependence structures from **pseudo-observations** in the open unit hypercube
 `(0, 1)^d`, with explicit validation, diagnostics, and reference-backed tests.
 
-| Surface | Role |
-|--------|------|
-| **Python** (`rscopulas`) | NumPy-first API built with PyO3/maturin; optional plotting via `rscopulas.plotting` (`viz` extra). |
+
+| Surface                     | Role                                                                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Python** (`rscopulas`)    | NumPy-first API built with PyO3/maturin; optional plotting via `rscopulas.plotting` (`viz` extra).                               |
 | **Rust** (`rscopulas-core`) | Primary library crate: traits, `PseudoObs`, execution policy (`ExecPolicy` / `Device`), and accelerated paths where implemented. |
+
 
 **Documentation:** start with [docs/README.md](docs/README.md) (guides, specs, benchmarks). This README stays the install-and-quickstart landing page.
 
@@ -304,3 +304,4 @@ cargo test
 cargo bench --no-run
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+

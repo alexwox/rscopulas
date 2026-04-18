@@ -564,7 +564,13 @@ fn finalize_pair_fit(
     u2: &[f64],
     options: &VineFitOptions,
 ) -> Result<PairFitResult, CopulaError> {
-    let batch = evaluate_pair_batch(spec.clone(), u1, u2, options.base.clip_eps, options.base.exec)?;
+    let batch = evaluate_pair_batch(
+        spec.clone(),
+        u1,
+        u2,
+        options.base.clip_eps,
+        options.base.exec,
+    )?;
     let loglik = batch.log_pdf.iter().sum::<f64>();
 
     let k = spec.parameter_count() as f64;
@@ -896,7 +902,11 @@ pub(crate) fn evaluate_pair_batch_into(
     cond_on_first: &mut [f64],
     cond_on_second: &mut [f64],
 ) -> Result<(), CopulaError> {
-    validate_batch_buffers(u1, u2, &[log_pdf.len(), cond_on_first.len(), cond_on_second.len()])?;
+    validate_batch_buffers(
+        u1,
+        u2,
+        &[log_pdf.len(), cond_on_first.len(), cond_on_second.len()],
+    )?;
     let strategy = resolve_strategy(exec, Operation::PairBatchEval, u1.len())?;
     match strategy {
         ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => fill_pair_batch_cpu(

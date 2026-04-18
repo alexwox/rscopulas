@@ -68,7 +68,10 @@ fn hac_fit_with_fixed_tree_recovers_gumbel_parameters() {
         .expect("fit should succeed");
     let params = fit.model.parameters();
 
-    assert_eq!(fit.model.families(), vec![HacFamily::Gumbel, HacFamily::Gumbel]);
+    assert_eq!(
+        fit.model.families(),
+        vec![HacFamily::Gumbel, HacFamily::Gumbel]
+    );
     assert_eq!(fit.model.leaf_order(), vec![0, 1, 2, 3]);
     assert!((params[0] - 1.2).abs() < 0.35);
     assert!((params[1] - 2.0).abs() < 0.5);

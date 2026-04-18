@@ -113,8 +113,8 @@ pub fn kendall_tau_bivariate(x: &[f64], y: &[f64]) -> Result<f64, CopulaError> {
 
     let n = x.len() as f64;
     let pairs_total = n * (n - 1.0) / 2.0;
-    let score = pairs_total - (2.0 * inversions as f64 + tied_x as f64 + tied_y as f64
-        - tied_xy as f64);
+    let score =
+        pairs_total - (2.0 * inversions as f64 + tied_x as f64 + tied_y as f64 - tied_xy as f64);
     let denom = ((pairs_total - tied_x as f64) * (pairs_total - tied_y as f64)).sqrt();
     if denom == 0.0 {
         Ok(0.0)

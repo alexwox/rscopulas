@@ -556,14 +556,22 @@ fn fit_first_tree(
     options: &VineFitOptions,
     truncated: bool,
 ) -> Result<Vec<FittedGraphEdge>, CopulaError> {
-    let strategy = resolve_strategy(options.base.exec, Operation::PairFitScoring, tree.edges.len())?;
+    let strategy = resolve_strategy(
+        options.base.exec,
+        Operation::PairFitScoring,
+        tree.edges.len(),
+    )?;
     let inner_options = edge_fit_options(options, strategy);
     parallel_try_map_range_collect(tree.edges.len(), strategy, |idx| {
         let edge = &tree.edges[idx];
         let fit = if truncated {
             truncated_pair_fit(&edge.left_data, &edge.right_data)
         } else {
-            fit_pair_copula(edge.left_data.as_ref(), edge.right_data.as_ref(), &inner_options)?
+            fit_pair_copula(
+                edge.left_data.as_ref(),
+                edge.right_data.as_ref(),
+                &inner_options,
+            )?
         };
         Ok(FittedGraphEdge {
             conditioned: edge.conditioned_set,
@@ -581,14 +589,22 @@ fn fit_tree_from_graph(
     options: &VineFitOptions,
     truncated: bool,
 ) -> Result<Vec<FittedGraphEdge>, CopulaError> {
-    let strategy = resolve_strategy(options.base.exec, Operation::PairFitScoring, tree.edges.len())?;
+    let strategy = resolve_strategy(
+        options.base.exec,
+        Operation::PairFitScoring,
+        tree.edges.len(),
+    )?;
     let inner_options = edge_fit_options(options, strategy);
     parallel_try_map_range_collect(tree.edges.len(), strategy, |idx| {
         let edge = &tree.edges[idx];
         let fit = if truncated {
             truncated_pair_fit(&edge.left_data, &edge.right_data)
         } else {
-            fit_pair_copula(edge.left_data.as_ref(), edge.right_data.as_ref(), &inner_options)?
+            fit_pair_copula(
+                edge.left_data.as_ref(),
+                edge.right_data.as_ref(),
+                &inner_options,
+            )?
         };
         Ok(FittedGraphEdge {
             conditioned: edge.conditioned_set,
@@ -610,7 +626,9 @@ fn edge_fit_options(options: &VineFitOptions, strategy: ExecutionStrategy) -> Vi
 }
 
 fn collect_column_data(data: &PseudoObs) -> Vec<SharedSeries> {
-    (0..data.dim()).map(|column| shared_column(data, column)).collect()
+    (0..data.dim())
+        .map(|column| shared_column(data, column))
+        .collect()
 }
 
 fn shared_column(data: &PseudoObs, column: usize) -> SharedSeries {
@@ -737,7 +755,6 @@ fn edge_info(
         right_data,
     }))
 }
-
 
 fn set_difference(left: &[usize], right: &[usize]) -> Vec<usize> {
     left.iter()

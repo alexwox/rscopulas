@@ -58,26 +58,16 @@ fn evaluate_vine_cpu(
     strategy: ExecutionStrategy,
 ) -> Result<Vec<f64>, CopulaError> {
     match strategy {
-        ExecutionStrategy::CpuSerial => evaluate_vine_block(
-            ctx.runtime,
-            &ctx.view,
-            0,
-            ctx.view.nrows(),
-            ctx.clip_eps,
-        ),
+        ExecutionStrategy::CpuSerial => {
+            evaluate_vine_block(ctx.runtime, &ctx.view, 0, ctx.view.nrows(), ctx.clip_eps)
+        }
         ExecutionStrategy::CpuParallel => {
             let chunk_size = eval_chunk_size(ctx.runtime.dim, ctx.view.nrows());
             let chunk_count = ctx.view.nrows().div_ceil(chunk_size);
             let blocks = parallel_try_map_range_collect(chunk_count, strategy, |chunk_idx| {
                 let start = chunk_idx * chunk_size;
                 let end = (start + chunk_size).min(ctx.view.nrows());
-                evaluate_vine_block(
-                    ctx.runtime,
-                    &ctx.view,
-                    start,
-                    end,
-                    ctx.clip_eps,
-                )
+                evaluate_vine_block(ctx.runtime, &ctx.view, start, end, ctx.clip_eps)
             })?;
             let mut totals = Vec::with_capacity(ctx.view.nrows());
             for block in blocks {

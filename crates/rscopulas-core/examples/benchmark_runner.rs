@@ -4,13 +4,15 @@ use std::{env, fs, path::PathBuf, time::Instant};
 
 use benchmark_support::{
     BenchmarkCase, PairFixture, SingleFamilyFixture, VineFixture, default_vine_fit_options,
-    fit_single_family, implementation_requested, load_json_fixture, load_manifest, pair_spec_from_fixture,
-    repeat_pair_kernels, sample_seed, sample_size, single_family_fit_input, single_family_input,
-    single_family_model, vine_fit_input, vine_input, vine_model_from_fixture, vine_sample_seed,
-    vine_sample_size,
+    fit_single_family, implementation_requested, load_json_fixture, load_manifest,
+    pair_spec_from_fixture, repeat_pair_kernels, sample_seed, sample_size, single_family_fit_input,
+    single_family_input, single_family_model, vine_fit_input, vine_input, vine_model_from_fixture,
+    vine_sample_seed, vine_sample_size,
 };
 use rand::{SeedableRng, rngs::StdRng};
-use rscopulas_core::{CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, SampleOptions, VineCopula};
+use rscopulas_core::{
+    CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, SampleOptions, VineCopula,
+};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -115,7 +117,8 @@ fn run_single_family(case: &BenchmarkCase) -> ResultRow {
             let observations = input.n_obs();
             let dim = input.dim();
             let (total_ns, mean_ns) = measure_iterations(case.iterations, || {
-                fit_single_family(family, &input, &serial_fit_options()).expect("fit should succeed");
+                fit_single_family(family, &input, &serial_fit_options())
+                    .expect("fit should succeed");
             });
             ResultRow {
                 case_id: case.id.clone(),
@@ -298,7 +301,10 @@ fn parse_args() -> (String, String) {
 fn main() {
     let (cases_path, output_path) = parse_args();
     let manifest = load_manifest(&cases_path);
-    assert_eq!(manifest.schema_version, 1, "unsupported benchmark schema version");
+    assert_eq!(
+        manifest.schema_version, 1,
+        "unsupported benchmark schema version"
+    );
     let results = manifest
         .cases
         .iter()
