@@ -19,6 +19,8 @@ This page summarizes **what the codebase is designed to enforce** and **how it i
 | HAC | Yes | Yes |
 | Explicit `ExecPolicy` / device | Yes | Auto only (today) |
 
+**HAC:** density and sampling are not validated to the same standard for every tree shape; see [hac.md](hac.md) (exchangeable vs composite `log_pdf`, **mixed-family sampling** limitations).
+
 ## Fit / diagnostics contract
 
 Fitting returns:

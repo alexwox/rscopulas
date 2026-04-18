@@ -12,6 +12,7 @@ Start here for guides beyond the root [README.md](../README.md).
 | [vines.md](vines.md) | C-vine, D-vine, R-vine usage |
 | [pair-copulas.md](pair-copulas.md) | Pair kernels, rotations, selection |
 | [khoudraji.md](khoudraji.md) | Asymmetric Khoudraji pair copulas |
+| [hac.md](hac.md) | Hierarchical Archimedean copulas: density paths, sampling caveats |
 | [benchmarks.md](benchmarks.md) | Cross-language harness vs Criterion |
 | [specs.md](specs.md) | What is validated, reference sources, scope |
 | [examples.md](examples.md) | Index of runnable example scripts |
