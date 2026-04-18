@@ -280,8 +280,7 @@ PYTHONPATH=python python python/examples/copula_gallery.py
 - `python/examples/copula_visualisation.py` writes a single multi-panel overview
   (`python/examples/output/copula_visualisation.png`).
 - `python/examples/copula_gallery.py` writes one PNG per model kind (Gaussian,
-  Student t, Clayton, Frank, Gumbel, vine, hierarchical Archimedean, and
-  pair-copula kernel) under `python/examples/output/gallery_*.png`.
+  Student t, Clayton, Frank, Gumbel, vine, nested Gumbel hierarchical Archimedean, and pair-copula kernel) under `python/examples/output/gallery_*.png`.
 
 ### Fit a Gaussian copula
 

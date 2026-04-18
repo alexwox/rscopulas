@@ -87,13 +87,18 @@ def save_vine_example() -> Path:
 
 
 def save_hac_example() -> Path:
+    # Nested Archimedean (same-family Gumbel nesting). This matches the validated
+    # sampler path in rscopulas-core (see `nested_gumbel_sampling_recovers_*`).
+    # Cross-family nesting currently uses a Laplace/Stehfest child-frailty path
+    # that can mis-sample nested margins (values stuck near 1); avoid that here
+    # so the figure reflects a correct dependence structure.
     tree: dict = {
         "family": "gumbel",
-        "theta": 1.35,
+        "theta": 1.2,
         "children": [
             0,
             1,
-            {"family": "clayton", "theta": 1.8, "children": [2, 3]},
+            {"family": "gumbel", "theta": 2.0, "children": [2, 3]},
         ],
     }
     model = HierarchicalArchimedeanCopula.from_tree(tree)
@@ -101,7 +106,7 @@ def save_hac_example() -> Path:
 
     fig = plt.figure(figsize=(11.0, 5.2), constrained_layout=True)
     gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 0.45])
-    fig.suptitle("Hierarchical Archimedean copula", fontsize=14, fontweight="semibold")
+    fig.suptitle("Hierarchical Archimedean copula (nested Gumbel)", fontsize=14, fontweight="semibold")
 
     ax01 = fig.add_subplot(gs[0, 0])
     plot_scatter(sample=sample, ax=ax01, alpha=0.4, s=12)

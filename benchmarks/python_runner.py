@@ -51,6 +51,18 @@ def _family_model_class(family: str):
     }[family]
 
 
+def _fixture_dim(fixture: dict[str, Any]) -> int:
+    rows = fixture.get("inputs") or fixture.get("input_pobs")
+    if rows:
+        return int(np.asarray(rows, dtype=np.float64).shape[1])
+    correlation = fixture.get("correlation")
+    if correlation is not None:
+        return int(np.asarray(correlation, dtype=np.float64).shape[0])
+    if fixture.get("theta") is not None:
+        return 2
+    raise ValueError("fixture does not provide enough information to infer model dimension")
+
+
 def _single_family_model(case: dict[str, Any], fixture: dict[str, Any]):
     family = case["family"]
     if family == "gaussian":
@@ -60,7 +72,7 @@ def _single_family_model(case: dict[str, Any], fixture: dict[str, Any]):
             np.asarray(fixture["correlation"], dtype=np.float64),
             float(fixture["degrees_of_freedom"]),
         )
-    dim = len(np.asarray(fixture.get("inputs", fixture.get("input_pobs")), dtype=np.float64)[0])
+    dim = _fixture_dim(fixture)
     theta = float(fixture["theta"])
     if family == "clayton":
         return ClaytonCopula.from_params(dim, theta)
