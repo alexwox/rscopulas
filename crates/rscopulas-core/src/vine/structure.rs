@@ -80,7 +80,7 @@ fn to_structure_matrices(
         let w = first.conditioned.0;
         matrix[(k, k)] = w;
         matrix[(k + 1, k)] = first.conditioned.1;
-        pair_matrix[(k + 1, k)] = Some(first.copula);
+        pair_matrix[(k + 1, k)] = Some(first.copula.clone());
 
         if k == n - 2 {
             matrix[(k + 1, k + 1)] = first.conditioned.1;
@@ -92,11 +92,11 @@ fn to_structure_matrices(
             let mut found = None;
             for (idx, edge) in remaining[tree_idx].iter().enumerate() {
                 if edge.conditioned.0 == w {
-                    found = Some((idx, edge.conditioned.1, edge.copula));
+                    found = Some((idx, edge.conditioned.1, edge.copula.clone()));
                     break;
                 }
                 if edge.conditioned.1 == w {
-                    found = Some((idx, edge.conditioned.0, edge.copula.swap_axes()));
+                    found = Some((idx, edge.conditioned.0, edge.copula.clone().swap_axes()));
                     break;
                 }
             }
@@ -192,7 +192,7 @@ pub(crate) fn revert_pair_matrix(
     let mut reverted = Array2::from_elem((nrows, ncols), None);
     for row in 0..nrows {
         for col in 0..ncols {
-            reverted[(row, col)] = matrix[(nrows - row - 1, ncols - col - 1)];
+            reverted[(row, col)] = matrix[(nrows - row - 1, ncols - col - 1)].clone();
         }
     }
     reverted
@@ -211,7 +211,7 @@ pub(crate) fn canonical_c_vine_trees(order: &[usize], specs: &[PairCopulaSpec]) 
                 tree: level + 1,
                 conditioned: (root, order[idx]),
                 conditioning: conditioning.clone(),
-                copula: specs[offset],
+                copula: specs[offset].clone(),
             });
             offset += 1;
         }
@@ -234,7 +234,7 @@ pub(crate) fn canonical_d_vine_trees(order: &[usize], specs: &[PairCopulaSpec]) 
                 tree: gap,
                 conditioned: (order[start], order[start + gap]),
                 conditioning: order[(start + 1)..(start + gap)].to_vec(),
-                copula: specs[offset],
+                copula: specs[offset].clone(),
             });
             offset += 1;
         }

@@ -11,8 +11,9 @@ use rscopulas_core::{
     ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FitDiagnostics,
     FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod,
     HacFitOptions, HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula,
-    PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions, SelectionCriterion,
-    StudentTCopula, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
+    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions,
+    SelectionCriterion, StudentTCopula, VineCopula, VineEdge, VineFitOptions, VineStructureKind,
+    VineTree,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -72,8 +73,9 @@ fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
         "clayton" => Ok(PairCopulaFamily::Clayton),
         "frank" => Ok(PairCopulaFamily::Frank),
         "gumbel" => Ok(PairCopulaFamily::Gumbel),
+        "khoudraji" => Ok(PairCopulaFamily::Khoudraji),
         other => Err(PyValueError::new_err(format!(
-            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel"
+            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, khoudraji"
         ))),
     }
 }
@@ -101,6 +103,9 @@ fn pair_params_from_values(
         | (PairCopulaFamily::Frank, [value])
         | (PairCopulaFamily::Gumbel, [value]) => Ok(PairCopulaParams::One(*value)),
         (PairCopulaFamily::StudentT, [rho, nu]) => Ok(PairCopulaParams::Two(*rho, *nu)),
+        (PairCopulaFamily::Khoudraji, _) => Err(PyValueError::new_err(
+            "khoudraji pair copulas require structured base_copula_1/base_copula_2 and shape_1/shape_2 inputs",
+        )),
         (PairCopulaFamily::Independence, values) => Err(PyValueError::new_err(format!(
             "independence pair copulas do not take parameters (got {})",
             values.len()
@@ -127,6 +132,59 @@ fn pair_spec_from_values(
         rotation: rotation_from_name(rotation)?,
         params: pair_params_from_values(family, parameters)?,
     })
+}
+
+fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas_core::PairCopulaSpec> {
+    let family = dict
+        .get_item("family")?
+        .ok_or_else(|| PyValueError::new_err("pair spec dictionaries require 'family'"))?
+        .extract::<String>()?;
+    let rotation = dict
+        .get_item("rotation")?
+        .map(|value| value.extract::<String>())
+        .transpose()?
+        .unwrap_or_else(|| "R0".to_string());
+    let parsed_family = pair_family_from_name(&family)?;
+    if parsed_family == PairCopulaFamily::Khoudraji {
+        let base_first_value = dict
+            .get_item("base_copula_1")?
+            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'base_copula_1'"))?;
+        let base_first = base_first_value.cast::<PyDict>()?;
+        let base_second_value = dict
+            .get_item("base_copula_2")?
+            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'base_copula_2'"))?;
+        let base_second = base_second_value.cast::<PyDict>()?;
+        let shape_first = dict
+            .get_item("shape_1")?
+            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'shape_1'"))?
+            .extract::<f64>()?;
+        let shape_second = dict
+            .get_item("shape_2")?
+            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'shape_2'"))?
+            .extract::<f64>()?;
+        return Ok(rscopulas_core::PairCopulaSpec {
+            family: PairCopulaFamily::Khoudraji,
+            rotation: rotation_from_name(&rotation)?,
+            params: PairCopulaParams::Khoudraji(
+                KhoudrajiParams::new(
+                    pair_spec_from_py_dict(&base_first)?,
+                    pair_spec_from_py_dict(&base_second)?,
+                    shape_first,
+                    shape_second,
+                )
+                .map_err(to_pyerr)?,
+            ),
+        });
+    }
+
+    let parameters = if let Some(value) = dict.get_item("parameters")? {
+        value.extract::<Vec<f64>>()?
+    } else if let Some(value) = dict.get_item("params")? {
+        value.extract::<Vec<f64>>()?
+    } else {
+        Vec::new()
+    };
+    pair_spec_from_values(&family, &rotation, parameters)
 }
 
 fn vine_kind_from_name(name: &str) -> PyResult<VineStructureKind> {
@@ -360,6 +418,7 @@ fn pair_family_name(family: PairCopulaFamily) -> &'static str {
         PairCopulaFamily::Clayton => "clayton",
         PairCopulaFamily::Frank => "frank",
         PairCopulaFamily::Gumbel => "gumbel",
+        PairCopulaFamily::Khoudraji => "khoudraji",
     }
 }
 
@@ -372,12 +431,39 @@ fn rotation_name(rotation: Rotation) -> &'static str {
     }
 }
 
-fn params_to_vec(params: PairCopulaParams) -> Vec<f64> {
+fn params_to_vec(params: &PairCopulaParams) -> Vec<f64> {
     match params {
         PairCopulaParams::None => Vec::new(),
-        PairCopulaParams::One(value) => vec![value],
-        PairCopulaParams::Two(first, second) => vec![first, second],
+        PairCopulaParams::One(value) => vec![*value],
+        PairCopulaParams::Two(first, second) => vec![*first, *second],
+        PairCopulaParams::Khoudraji(params) => params.flat_values(),
     }
+}
+
+fn attach_pair_components<'py>(
+    py: Python<'py>,
+    dict: &Bound<'py, PyDict>,
+    spec: &rscopulas_core::PairCopulaSpec,
+) -> PyResult<()> {
+    if let PairCopulaParams::Khoudraji(params) = &spec.params {
+        dict.set_item("shape_1", params.shape_first)?;
+        dict.set_item("shape_2", params.shape_second)?;
+        dict.set_item("base_copula_1", pair_spec_to_py(py, &params.first)?)?;
+        dict.set_item("base_copula_2", pair_spec_to_py(py, &params.second)?)?;
+    }
+    Ok(())
+}
+
+fn pair_spec_to_py<'py>(
+    py: Python<'py>,
+    spec: &rscopulas_core::PairCopulaSpec,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("family", pair_family_name(spec.family))?;
+    dict.set_item("rotation", rotation_name(spec.rotation))?;
+    dict.set_item("parameters", params_to_vec(&spec.params))?;
+    attach_pair_components(py, &dict, spec)?;
+    Ok(dict)
 }
 
 fn vine_edge_from_py(value: &Bound<'_, PyAny>, level: usize) -> PyResult<VineEdge> {
@@ -390,28 +476,11 @@ fn vine_edge_from_py(value: &Bound<'_, PyAny>, level: usize) -> PyResult<VineEdg
         Some(value) => value.extract::<Vec<usize>>()?,
         None => Vec::new(),
     };
-    let family = dict
-        .get_item("family")?
-        .ok_or_else(|| PyValueError::new_err("vine edge dictionaries require 'family'"))?
-        .extract::<String>()?;
-    let rotation = dict
-        .get_item("rotation")?
-        .ok_or_else(|| PyValueError::new_err("vine edge dictionaries require 'rotation'"))?
-        .extract::<String>()?;
-    let parameters = if let Some(value) = dict.get_item("parameters")? {
-        value.extract::<Vec<f64>>()?
-    } else if let Some(value) = dict.get_item("params")? {
-        value.extract::<Vec<f64>>()?
-    } else {
-        return Err(PyValueError::new_err(
-            "vine edge dictionaries require 'parameters' or 'params'",
-        ));
-    };
     Ok(VineEdge {
         tree: level,
         conditioned,
         conditioning,
-        copula: pair_spec_from_values(&family, &rotation, parameters)?,
+        copula: pair_spec_from_py_dict(dict)?,
     })
 }
 
@@ -932,7 +1001,8 @@ impl PyPairCopula {
     where
         F: FnMut(&rscopulas_core::PairCopulaSpec, f64, f64, f64) -> Result<f64, CopulaError>,
     {
-        let (left_values, right_values) = paired_vectors_from_py(left, right, left_name, right_name)?;
+        let (left_values, right_values) =
+            paired_vectors_from_py(left, right, left_name, right_name)?;
         let values = left_values
             .into_iter()
             .zip(right_values)
@@ -947,8 +1017,61 @@ impl PyPairCopula {
     #[staticmethod]
     #[pyo3(signature = (family, parameters=None, rotation="R0"))]
     fn from_spec(family: &str, parameters: Option<Vec<f64>>, rotation: &str) -> PyResult<Self> {
+        if pair_family_from_name(family)? == PairCopulaFamily::Khoudraji {
+            return Err(PyValueError::new_err(
+                "use PairCopula.from_khoudraji(...) for khoudraji specifications",
+            ));
+        }
         Ok(Self {
             inner: pair_spec_from_values(family, rotation, parameters.unwrap_or_default())?,
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (
+        first_family,
+        second_family,
+        shape_1,
+        shape_2,
+        first_parameters=None,
+        second_parameters=None,
+        rotation="R0",
+        first_rotation="R0",
+        second_rotation="R0"
+    ))]
+    fn from_khoudraji(
+        first_family: &str,
+        second_family: &str,
+        shape_1: f64,
+        shape_2: f64,
+        first_parameters: Option<Vec<f64>>,
+        second_parameters: Option<Vec<f64>>,
+        rotation: &str,
+        first_rotation: &str,
+        second_rotation: &str,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: rscopulas_core::PairCopulaSpec {
+                family: PairCopulaFamily::Khoudraji,
+                rotation: rotation_from_name(rotation)?,
+                params: PairCopulaParams::Khoudraji(
+                    KhoudrajiParams::new(
+                        pair_spec_from_values(
+                            first_family,
+                            first_rotation,
+                            first_parameters.unwrap_or_default(),
+                        )?,
+                        pair_spec_from_values(
+                            second_family,
+                            second_rotation,
+                            second_parameters.unwrap_or_default(),
+                        )?,
+                        shape_1,
+                        shape_2,
+                    )
+                    .map_err(to_pyerr)?,
+                ),
+            },
         })
     }
 
@@ -964,7 +1087,12 @@ impl PyPairCopula {
 
     #[getter]
     fn parameters(&self) -> Vec<f64> {
-        params_to_vec(self.inner.params)
+        params_to_vec(&self.inner.params)
+    }
+
+    #[getter]
+    fn spec<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        pair_spec_to_py(py, &self.inner)
     }
 
     #[getter]
@@ -980,9 +1108,15 @@ impl PyPairCopula {
         u2: PyReadonlyArray1<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.eval_pair_batch(py, u1, u2, clip_eps, "u1", "u2", |spec, left, right, eps| {
-            spec.log_pdf(left, right, eps)
-        })
+        self.eval_pair_batch(
+            py,
+            u1,
+            u2,
+            clip_eps,
+            "u1",
+            "u2",
+            |spec, left, right, eps| spec.log_pdf(left, right, eps),
+        )
     }
 
     #[pyo3(signature = (u1, u2, clip_eps=1e-12))]
@@ -993,9 +1127,15 @@ impl PyPairCopula {
         u2: PyReadonlyArray1<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.eval_pair_batch(py, u1, u2, clip_eps, "u1", "u2", |spec, left, right, eps| {
-            spec.cond_first_given_second(left, right, eps)
-        })
+        self.eval_pair_batch(
+            py,
+            u1,
+            u2,
+            clip_eps,
+            "u1",
+            "u2",
+            |spec, left, right, eps| spec.cond_first_given_second(left, right, eps),
+        )
     }
 
     #[pyo3(signature = (u1, u2, clip_eps=1e-12))]
@@ -1006,9 +1146,15 @@ impl PyPairCopula {
         u2: PyReadonlyArray1<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.eval_pair_batch(py, u1, u2, clip_eps, "u1", "u2", |spec, left, right, eps| {
-            spec.cond_second_given_first(left, right, eps)
-        })
+        self.eval_pair_batch(
+            py,
+            u1,
+            u2,
+            clip_eps,
+            "u1",
+            "u2",
+            |spec, left, right, eps| spec.cond_second_given_first(left, right, eps),
+        )
     }
 
     #[pyo3(signature = (p, u2, clip_eps=1e-12))]
@@ -1226,13 +1372,10 @@ impl PyVineCopula {
             tree_dict.set_item("level", tree.level)?;
             let edges = PyList::empty(py);
             for edge in &tree.edges {
-                let edge_dict = PyDict::new(py);
+                let edge_dict = pair_spec_to_py(py, &edge.copula)?;
                 edge_dict.set_item("tree", edge.tree)?;
                 edge_dict.set_item("conditioned", (edge.conditioned.0, edge.conditioned.1))?;
                 edge_dict.set_item("conditioning", edge.conditioning.clone())?;
-                edge_dict.set_item("family", pair_family_name(edge.copula.family))?;
-                edge_dict.set_item("rotation", rotation_name(edge.copula.rotation))?;
-                edge_dict.set_item("parameters", params_to_vec(edge.copula.params))?;
                 edges.append(edge_dict)?;
             }
             tree_dict.set_item("edges", edges)?;

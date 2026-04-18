@@ -7,7 +7,7 @@ use crate::{
     vine::{SelectionCriterion, VineFitOptions},
 };
 
-use super::{clayton, frank, gaussian, gumbel, rotated, student_t};
+use super::{clayton, frank, gaussian, gumbel, khoudraji, rotated, student_t};
 
 /// Supported bivariate pair-copula families for vine edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +18,7 @@ pub enum PairCopulaFamily {
     Clayton,
     Frank,
     Gumbel,
+    Khoudraji,
 }
 
 /// Rotation applied to a bivariate pair-copula kernel.
@@ -29,16 +30,79 @@ pub enum Rotation {
     R270,
 }
 
-/// Parameter storage for pair-copula families with zero, one, or two parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Structured parameterization for a Khoudraji pair-copula.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KhoudrajiParams {
+    pub first: Box<PairCopulaSpec>,
+    pub second: Box<PairCopulaSpec>,
+    pub shape_first: f64,
+    pub shape_second: f64,
+}
+
+impl KhoudrajiParams {
+    pub fn new(
+        first: PairCopulaSpec,
+        second: PairCopulaSpec,
+        shape_first: f64,
+        shape_second: f64,
+    ) -> Result<Self, CopulaError> {
+        if !(0.0..=1.0).contains(&shape_first) || !(0.0..=1.0).contains(&shape_second) {
+            return Err(FitError::Failed {
+                reason: "khoudraji shape parameters must lie in [0, 1]",
+            }
+            .into());
+        }
+        if first.family == PairCopulaFamily::Khoudraji
+            || second.family == PairCopulaFamily::Khoudraji
+        {
+            return Err(FitError::Failed {
+                reason: "nested khoudraji pair copulas are not supported",
+            }
+            .into());
+        }
+        Ok(Self {
+            first: Box::new(first),
+            second: Box::new(second),
+            shape_first,
+            shape_second,
+        })
+    }
+
+    pub fn parameter_count(&self) -> usize {
+        self.first.parameter_count() + self.second.parameter_count() + 2
+    }
+
+    pub fn flat_values(&self) -> Vec<f64> {
+        let mut values = self.first.params.flat_values();
+        values.extend(self.second.params.flat_values());
+        values.push(self.shape_first);
+        values.push(self.shape_second);
+        values
+    }
+}
+
+/// Parameter storage for pair-copula families.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PairCopulaParams {
     None,
     One(f64),
     Two(f64, f64),
+    Khoudraji(KhoudrajiParams),
+}
+
+impl PairCopulaParams {
+    pub fn flat_values(&self) -> Vec<f64> {
+        match self {
+            Self::None => Vec::new(),
+            Self::One(value) => vec![*value],
+            Self::Two(first, second) => vec![*first, *second],
+            Self::Khoudraji(params) => params.flat_values(),
+        }
+    }
 }
 
 /// Fully specified pair-copula family, rotation, and parameter tuple.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PairCopulaSpec {
     pub family: PairCopulaFamily,
     pub rotation: Rotation,
@@ -73,6 +137,25 @@ impl PairCopulaSpec {
         }
     }
 
+    /// Returns a Khoudraji pair-copula specification with no outer rotation.
+    pub fn khoudraji(
+        first: PairCopulaSpec,
+        second: PairCopulaSpec,
+        shape_first: f64,
+        shape_second: f64,
+    ) -> Result<Self, CopulaError> {
+        Ok(Self {
+            family: PairCopulaFamily::Khoudraji,
+            rotation: Rotation::R0,
+            params: PairCopulaParams::Khoudraji(KhoudrajiParams::new(
+                first,
+                second,
+                shape_first,
+                shape_second,
+            )?),
+        })
+    }
+
     /// Swaps the conditioning axis while preserving the represented copula.
     pub fn swap_axes(self) -> Self {
         let rotation = match self.rotation {
@@ -85,32 +168,55 @@ impl PairCopulaSpec {
 
     /// Returns the number of free parameters implied by `params`.
     pub fn parameter_count(&self) -> usize {
-        match self.params {
+        match &self.params {
             PairCopulaParams::None => 0,
             PairCopulaParams::One(_) => 1,
             PairCopulaParams::Two(_, _) => 2,
+            PairCopulaParams::Khoudraji(params) => params.parameter_count(),
+        }
+    }
+
+    /// Returns a flattened numeric representation of the free parameters.
+    pub fn flat_parameters(&self) -> Vec<f64> {
+        self.params.flat_values()
+    }
+
+    /// Evaluates the pair-copula CDF at `(u1, u2)`.
+    pub(crate) fn cdf(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
+        let u1 = u1.clamp(clip_eps, 1.0 - clip_eps);
+        let u2 = u2.clamp(clip_eps, 1.0 - clip_eps);
+        match self.rotation {
+            Rotation::R0 => self.base_cdf(u1, u2, clip_eps),
+            Rotation::R180 => {
+                Ok((u1 + u2 - 1.0 + self.base_cdf(1.0 - u1, 1.0 - u2, clip_eps)?).clamp(0.0, 1.0))
+            }
+            Rotation::R90 => Ok((u2 - self.base_cdf(1.0 - u1, u2, clip_eps)?).clamp(0.0, 1.0)),
+            Rotation::R270 => Ok((u1 - self.base_cdf(u1, 1.0 - u2, clip_eps)?).clamp(0.0, 1.0)),
         }
     }
 
     /// Evaluates the pair-copula log-density at `(u1, u2)`.
     pub fn log_pdf(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
         let ((x1, x2), rotation) = rotated::to_base_inputs(self.rotation, u1, u2, clip_eps);
-        let base = match (self.family, self.params) {
+        let base = match (self.family, &self.params) {
             (PairCopulaFamily::Independence, PairCopulaParams::None) => 0.0,
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => {
-                gaussian::log_pdf(x1, x2, rho)?
+                gaussian::log_pdf(x1, x2, *rho)?
             }
             (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
-                student_t::log_pdf(x1, x2, rho, nu)?
+                student_t::log_pdf(x1, x2, *rho, *nu)?
             }
             (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
-                clayton::log_pdf(x1, x2, theta)?
+                clayton::log_pdf(x1, x2, *theta)?
             }
             (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
-                frank::log_pdf(x1, x2, theta)?
+                frank::log_pdf(x1, x2, *theta)?
             }
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
-                gumbel::log_pdf(x1, x2, theta)?
+                gumbel::log_pdf(x1, x2, *theta)?
+            }
+            (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
+                khoudraji::log_pdf(x1, x2, params, clip_eps)?
             }
             _ => {
                 return Err(FitError::Failed {
@@ -206,22 +312,25 @@ impl PairCopulaSpec {
     ) -> Result<f64, CopulaError> {
         let u1 = u1.clamp(clip_eps, 1.0 - clip_eps);
         let u2 = u2.clamp(clip_eps, 1.0 - clip_eps);
-        match (self.family, self.params) {
+        match (self.family, &self.params) {
             (PairCopulaFamily::Independence, PairCopulaParams::None) => Ok(u1),
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => {
-                gaussian::cond_first_given_second(u1, u2, rho)
+                gaussian::cond_first_given_second(u1, u2, *rho)
             }
             (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
-                student_t::cond_first_given_second(u1, u2, rho, nu)
+                student_t::cond_first_given_second(u1, u2, *rho, *nu)
             }
             (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
-                clayton::cond_first_given_second(u1, u2, theta)
+                clayton::cond_first_given_second(u1, u2, *theta)
             }
             (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
-                frank::cond_first_given_second(u1, u2, theta)
+                frank::cond_first_given_second(u1, u2, *theta)
             }
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
-                gumbel::cond_first_given_second(u1, u2, theta, clip_eps)
+                gumbel::cond_first_given_second(u1, u2, *theta, clip_eps)
+            }
+            (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
+                khoudraji::cond_first_given_second(u1, u2, params, clip_eps)
             }
             _ => Err(FitError::Failed {
                 reason: "pair-copula family/parameter combination is invalid",
@@ -238,22 +347,25 @@ impl PairCopulaSpec {
     ) -> Result<f64, CopulaError> {
         let u1 = u1.clamp(clip_eps, 1.0 - clip_eps);
         let u2 = u2.clamp(clip_eps, 1.0 - clip_eps);
-        match (self.family, self.params) {
+        match (self.family, &self.params) {
             (PairCopulaFamily::Independence, PairCopulaParams::None) => Ok(u2),
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => {
-                gaussian::cond_second_given_first(u1, u2, rho)
+                gaussian::cond_second_given_first(u1, u2, *rho)
             }
             (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
-                student_t::cond_second_given_first(u1, u2, rho, nu)
+                student_t::cond_second_given_first(u1, u2, *rho, *nu)
             }
             (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
-                clayton::cond_second_given_first(u1, u2, theta)
+                clayton::cond_second_given_first(u1, u2, *theta)
             }
             (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
-                frank::cond_second_given_first(u1, u2, theta)
+                frank::cond_second_given_first(u1, u2, *theta)
             }
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
-                gumbel::cond_second_given_first(u1, u2, theta, clip_eps)
+                gumbel::cond_second_given_first(u1, u2, *theta, clip_eps)
+            }
+            (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
+                khoudraji::cond_second_given_first(u1, u2, params, clip_eps)
             }
             _ => Err(FitError::Failed {
                 reason: "pair-copula family/parameter combination is invalid",
@@ -268,22 +380,25 @@ impl PairCopulaSpec {
         u2: f64,
         clip_eps: f64,
     ) -> Result<f64, CopulaError> {
-        match (self.family, self.params) {
+        match (self.family, &self.params) {
             (PairCopulaFamily::Independence, PairCopulaParams::None) => Ok(p),
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => {
-                gaussian::inv_first_given_second(p, u2, rho)
+                gaussian::inv_first_given_second(p, u2, *rho)
             }
             (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
-                student_t::inv_first_given_second(p, u2, rho, nu)
+                student_t::inv_first_given_second(p, u2, *rho, *nu)
             }
             (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
-                clayton::inv_first_given_second(p, u2, theta)
+                clayton::inv_first_given_second(p, u2, *theta)
             }
             (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
-                frank::inv_first_given_second(p, u2, theta)
+                frank::inv_first_given_second(p, u2, *theta)
             }
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
-                gumbel::inv_first_given_second(p, u2, theta, clip_eps)
+                gumbel::inv_first_given_second(p, u2, *theta, clip_eps)
+            }
+            (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
+                khoudraji::inv_first_given_second(p, u2, params, clip_eps)
             }
             _ => Err(FitError::Failed {
                 reason: "pair-copula family/parameter combination is invalid",
@@ -298,22 +413,25 @@ impl PairCopulaSpec {
         p: f64,
         clip_eps: f64,
     ) -> Result<f64, CopulaError> {
-        match (self.family, self.params) {
+        match (self.family, &self.params) {
             (PairCopulaFamily::Independence, PairCopulaParams::None) => Ok(p),
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => {
-                gaussian::inv_second_given_first(u1, p, rho)
+                gaussian::inv_second_given_first(u1, p, *rho)
             }
             (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
-                student_t::inv_second_given_first(u1, p, rho, nu)
+                student_t::inv_second_given_first(u1, p, *rho, *nu)
             }
             (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
-                clayton::inv_second_given_first(u1, p, theta)
+                clayton::inv_second_given_first(u1, p, *theta)
             }
             (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
-                frank::inv_second_given_first(u1, p, theta)
+                frank::inv_second_given_first(u1, p, *theta)
             }
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
-                gumbel::inv_second_given_first(u1, p, theta, clip_eps)
+                gumbel::inv_second_given_first(u1, p, *theta, clip_eps)
+            }
+            (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
+                khoudraji::inv_second_given_first(u1, p, params, clip_eps)
             }
             _ => Err(FitError::Failed {
                 reason: "pair-copula family/parameter combination is invalid",
@@ -321,6 +439,62 @@ impl PairCopulaSpec {
             .into()),
         }
     }
+
+    fn base_cdf(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
+        match (self.family, &self.params) {
+            (PairCopulaFamily::Independence, PairCopulaParams::None) => {
+                Ok((u1 * u2).clamp(0.0, 1.0))
+            }
+            (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
+                let sum = u1.powf(-*theta) + u2.powf(-*theta) - 1.0;
+                Ok(sum.max(0.0).powf(-1.0 / *theta).clamp(0.0, 1.0))
+            }
+            (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
+                let numerator = ((-*theta * u1).exp() - 1.0) * ((-*theta * u2).exp() - 1.0);
+                let denominator = (-*theta).exp() - 1.0;
+                let inner = 1.0 + numerator / denominator;
+                Ok((-(inner.ln()) / *theta).clamp(0.0, 1.0))
+            }
+            (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
+                let term = ((-u1.ln()).powf(*theta) + (-u2.ln()).powf(*theta)).powf(1.0 / *theta);
+                Ok(f64::exp(-term).clamp(0.0, 1.0))
+            }
+            (PairCopulaFamily::Gaussian, PairCopulaParams::One(_))
+            | (PairCopulaFamily::StudentT, PairCopulaParams::Two(_, _))
+            | (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(_)) => {
+                integrate_cdf_from_h(self, u1, u2, clip_eps)
+            }
+            _ => Err(FitError::Failed {
+                reason: "pair-copula family/parameter combination is invalid",
+            }
+            .into()),
+        }
+    }
+}
+
+fn integrate_cdf_from_h(
+    spec: &PairCopulaSpec,
+    u1: f64,
+    u2: f64,
+    clip_eps: f64,
+) -> Result<f64, CopulaError> {
+    let upper = u2.clamp(clip_eps, 1.0 - clip_eps);
+    let lower = clip_eps;
+    let baseline = lower * spec.cond_first_given_second(u1, lower, clip_eps)?;
+    if upper <= lower {
+        return Ok(baseline.clamp(0.0, 1.0));
+    }
+
+    let steps = 32usize;
+    let step = (upper - lower) / steps as f64;
+    let mut total = spec.cond_first_given_second(u1, lower, clip_eps)?
+        + spec.cond_first_given_second(u1, upper, clip_eps)?;
+    for idx in 1..steps {
+        let value = lower + idx as f64 * step;
+        let weight = if idx % 2 == 0 { 2.0 } else { 4.0 };
+        total += weight * spec.cond_first_given_second(u1, value, clip_eps)?;
+    }
+    Ok((baseline + total * step / 3.0).clamp(0.0, 1.0))
 }
 
 /// Fits the best pair-copula specification for one bivariate edge.
@@ -368,7 +542,7 @@ pub fn fit_pair_copula(
         candidates.len(),
     )?;
     let fits = parallel_try_map_range_collect(candidates.len(), strategy, |idx| {
-        finalize_pair_fit(candidates[idx], u1, u2, options)
+        finalize_pair_fit(candidates[idx].clone(), u1, u2, options)
     })?;
     let best = fits.into_iter().min_by(|left, right| {
         criterion_value(left, options.criterion)
@@ -389,7 +563,13 @@ fn finalize_pair_fit(
     u2: &[f64],
     options: &VineFitOptions,
 ) -> Result<PairFitResult, CopulaError> {
-    let batch = evaluate_pair_batch(spec, u1, u2, options.base.clip_eps, options.base.exec)?;
+    let batch = evaluate_pair_batch(
+        spec.clone(),
+        u1,
+        u2,
+        options.base.clip_eps,
+        options.base.exec,
+    )?;
     let loglik = batch.log_pdf.iter().sum::<f64>();
 
     let k = spec.parameter_count() as f64;
@@ -417,10 +597,12 @@ fn candidate_rotations(family: PairCopulaFamily, include_rotations: bool) -> &'s
 
     match family {
         Family::Independence | Family::Gaussian | Family::StudentT => &[Rot::R0],
-        Family::Clayton | Family::Frank | Family::Gumbel if include_rotations => {
+        Family::Clayton | Family::Frank | Family::Gumbel | Family::Khoudraji
+            if include_rotations =>
+        {
             &[Rot::R0, Rot::R90, Rot::R180, Rot::R270]
         }
-        Family::Clayton | Family::Frank | Family::Gumbel => &[Rot::R0],
+        Family::Clayton | Family::Frank | Family::Gumbel | Family::Khoudraji => &[Rot::R0],
     }
 }
 
@@ -429,14 +611,32 @@ fn fit_family_with_rotation(
     rotation: Rotation,
     u1: &[f64],
     u2: &[f64],
-    tau: f64,
+    _tau: f64,
     max_iter: usize,
 ) -> Result<PairCopulaSpec, CopulaError> {
+    if family == PairCopulaFamily::Khoudraji {
+        return fit_khoudraji_with_rotation(rotation, u1, u2, max_iter);
+    }
+
     let transformed = rotated::transform_sample(rotation, u1, u2);
     let x1 = &transformed.0;
     let x2 = &transformed.1;
     let transformed_tau = crate::stats::kendall_tau_bivariate(x1, x2)?;
 
+    fit_simple_family(family, transformed_tau, x1, x2, max_iter).map(|params| PairCopulaSpec {
+        family,
+        rotation,
+        params,
+    })
+}
+
+fn fit_simple_family(
+    family: PairCopulaFamily,
+    tau: f64,
+    x1: &[f64],
+    x2: &[f64],
+    max_iter: usize,
+) -> Result<PairCopulaParams, CopulaError> {
     let params = match family {
         PairCopulaFamily::Independence => PairCopulaParams::None,
         PairCopulaFamily::Gaussian => {
@@ -473,7 +673,7 @@ fn fit_family_with_rotation(
             PairCopulaParams::Two(rho, nu)
         }
         PairCopulaFamily::Clayton => {
-            let init = clayton::theta_from_tau(transformed_tau)?;
+            let init = clayton::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
             let theta = maximize_scalar(1e-6, upper, max_iter.max(1), |theta| {
                 x1.iter()
@@ -484,7 +684,7 @@ fn fit_family_with_rotation(
             PairCopulaParams::One(theta)
         }
         PairCopulaFamily::Frank => {
-            let init = frank::theta_from_tau(transformed_tau)?;
+            let init = frank::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
             let theta = maximize_scalar(1e-6, upper, max_iter.max(1), |theta| {
                 x1.iter()
@@ -495,7 +695,7 @@ fn fit_family_with_rotation(
             PairCopulaParams::One(theta)
         }
         PairCopulaFamily::Gumbel => {
-            let init = gumbel::theta_from_tau(transformed_tau)?;
+            let init = gumbel::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
             let theta = maximize_scalar(1.0 + 1e-6, upper, max_iter.max(1), |theta| {
                 x1.iter()
@@ -505,13 +705,148 @@ fn fit_family_with_rotation(
             });
             PairCopulaParams::One(theta)
         }
+        PairCopulaFamily::Khoudraji => {
+            return Err(FitError::Failed {
+                reason: "khoudraji must be fitted via fit_khoudraji_with_rotation",
+            }
+            .into());
+        }
     };
+    Ok(params)
+}
 
-    Ok(PairCopulaSpec {
-        family,
+fn fit_khoudraji_with_rotation(
+    rotation: Rotation,
+    u1: &[f64],
+    u2: &[f64],
+    max_iter: usize,
+) -> Result<PairCopulaSpec, CopulaError> {
+    let base_fit_iterations = max_iter.clamp(8, 16);
+    let shape_iterations = max_iter.clamp(8, 12);
+    let transformed = rotated::transform_sample(rotation, u1, u2);
+    let x1 = &transformed.0;
+    let x2 = &transformed.1;
+    let tau = crate::stats::kendall_tau_bivariate(x1, x2)?;
+    let base_families = [
+        PairCopulaFamily::Independence,
+        PairCopulaFamily::Gaussian,
+        PairCopulaFamily::Clayton,
+        PairCopulaFamily::Frank,
+        PairCopulaFamily::Gumbel,
+    ];
+    let mut base_specs = Vec::new();
+    for family in base_families {
+        let params = fit_simple_family(family, tau, x1, x2, base_fit_iterations)?;
+        base_specs.push(PairCopulaSpec {
+            family,
+            rotation: Rotation::R0,
+            params,
+        });
+    }
+
+    let mut best_spec = None;
+    let mut best_loglik = f64::NEG_INFINITY;
+    for first in &base_specs {
+        for second in &base_specs {
+            let (shape_first, shape_second, loglik) =
+                optimize_khoudraji_shapes(first, second, u1, u2, rotation, shape_iterations)?;
+            let spec = PairCopulaSpec {
+                family: PairCopulaFamily::Khoudraji,
+                rotation,
+                params: PairCopulaParams::Khoudraji(KhoudrajiParams::new(
+                    first.clone(),
+                    second.clone(),
+                    shape_first,
+                    shape_second,
+                )?),
+            };
+            if loglik > best_loglik {
+                best_loglik = loglik;
+                best_spec = Some(spec);
+            }
+        }
+    }
+
+    best_spec.ok_or(
+        FitError::Failed {
+            reason: "khoudraji pair fit failed",
+        }
+        .into(),
+    )
+}
+
+fn optimize_khoudraji_shapes(
+    first: &PairCopulaSpec,
+    second: &PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    rotation: Rotation,
+    max_iter: usize,
+) -> Result<(f64, f64, f64), CopulaError> {
+    let seeds = [(0.2, 0.8), (0.5, 0.5)];
+    let mut best = None;
+    let mut best_loglik = f64::NEG_INFINITY;
+
+    for (mut shape_first, mut shape_second) in seeds {
+        for _ in 0..4 {
+            shape_first = maximize_scalar(0.0, 1.0, max_iter.max(8), |candidate| {
+                khoudraji_loglik(first, second, candidate, shape_second, u1, u2, rotation)
+                    .unwrap_or(f64::NEG_INFINITY)
+            });
+            shape_second = maximize_scalar(0.0, 1.0, max_iter.max(8), |candidate| {
+                khoudraji_loglik(first, second, shape_first, candidate, u1, u2, rotation)
+                    .unwrap_or(f64::NEG_INFINITY)
+            });
+        }
+
+        let loglik = khoudraji_loglik(first, second, shape_first, shape_second, u1, u2, rotation)?;
+        if loglik > best_loglik {
+            best_loglik = loglik;
+            best = Some((shape_first, shape_second, loglik));
+        }
+    }
+
+    best.ok_or(
+        FitError::Failed {
+            reason: "khoudraji shape optimization failed",
+        }
+        .into(),
+    )
+}
+
+fn khoudraji_loglik(
+    first: &PairCopulaSpec,
+    second: &PairCopulaSpec,
+    shape_first: f64,
+    shape_second: f64,
+    u1: &[f64],
+    u2: &[f64],
+    rotation: Rotation,
+) -> Result<f64, CopulaError> {
+    let spec = PairCopulaSpec {
+        family: PairCopulaFamily::Khoudraji,
         rotation,
-        params,
-    })
+        params: PairCopulaParams::Khoudraji(KhoudrajiParams::new(
+            first.clone(),
+            second.clone(),
+            shape_first,
+            shape_second,
+        )?),
+    };
+    pair_loglik(&spec, u1, u2, 1e-12)
+}
+
+fn pair_loglik(
+    spec: &PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+) -> Result<f64, CopulaError> {
+    u1.iter()
+        .zip(u2.iter())
+        .try_fold(0.0, |acc, (&left, &right)| {
+            Ok(acc + spec.log_pdf(left, right, clip_eps)?)
+        })
 }
 
 fn evaluate_pair_batch(
@@ -526,7 +861,7 @@ fn evaluate_pair_batch(
         ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => {
             evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, strategy)?
         }
-        ExecutionStrategy::Cuda(ordinal) => match gaussian_pair_request(spec, u1, u2, clip_eps) {
+        ExecutionStrategy::Cuda(ordinal) => match gaussian_pair_request(&spec, u1, u2, clip_eps) {
             Some(request) => {
                 let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
                     rscopulas_accel::Device::Cuda(ordinal),
@@ -542,7 +877,7 @@ fn evaluate_pair_batch(
                 evaluate_pair_batch_cpu(spec, u1, u2, clip_eps, ExecutionStrategy::CpuParallel)?
             }
         },
-        ExecutionStrategy::Metal => match gaussian_pair_request(spec, u1, u2, clip_eps) {
+        ExecutionStrategy::Metal => match gaussian_pair_request(&spec, u1, u2, clip_eps) {
             Some(request) => {
                 let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
                     rscopulas_accel::Device::Metal,
@@ -598,17 +933,17 @@ fn evaluate_pair_batch_cpu(
 }
 
 fn gaussian_pair_request<'a>(
-    spec: PairCopulaSpec,
+    spec: &PairCopulaSpec,
     u1: &'a [f64],
     u2: &'a [f64],
     clip_eps: f64,
 ) -> Option<rscopulas_accel::GaussianPairBatchRequest<'a>> {
-    match (spec.family, spec.rotation, spec.params) {
+    match (spec.family, spec.rotation, &spec.params) {
         (PairCopulaFamily::Gaussian, Rotation::R0, PairCopulaParams::One(rho)) => {
             Some(rscopulas_accel::GaussianPairBatchRequest {
                 u1,
                 u2,
-                rho,
+                rho: *rho,
                 clip_eps,
             })
         }

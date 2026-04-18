@@ -114,4 +114,6 @@ pub use domain::{
     VineEdge, VineFitOptions, VineStructure, VineStructureKind, VineTree,
 };
 pub use errors::{BackendError, CopulaError, FitError, InputError, NumericalError};
-pub use paircopula::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+pub use paircopula::{
+    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation,
+};

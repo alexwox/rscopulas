@@ -1,1 +1,49 @@
+# Rust
 /target
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+pip-wheel-metadata/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Coverage / profiling
+.coverage
+.coverage.*
+htmlcov/
+*.prof
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+*.swp
+*.swo
+*~
+
+# R (reference scripts / local state)
+.Rhistory
+.RData
+.Ruserdata

@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "source_package": "copula",
+    "source_version": "1.1.3"
+  },
+  "family": "khoudraji",
+  "rotation": "R0",
+  "base_copula_1": {
+    "family": "gaussian",
+    "rotation": "R0",
+    "parameters": 0.45000000000000001
+  },
+  "base_copula_2": {
+    "family": "clayton",
+    "rotation": "R0",
+    "parameters": 2
+  },
+  "shape_1": 0.34999999999999998,
+  "shape_2": 0.80000000000000004,
+  "seed": 717171,
+  "sample_size": 10000,
+  "expected_mean": [0.4965924747159326, 0.49720286921084633],
+  "expected_kendall_tau": [
+    [1, 0.23776381638163813],
+    [0.23776381638163813, 1]
+  ]
+}

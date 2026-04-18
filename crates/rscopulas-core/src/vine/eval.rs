@@ -96,7 +96,7 @@ fn evaluate_vine_cpu(
                     vindirect[(k, label)]
                 };
                 let target = vdirect[(k, i)];
-                let spec = ctx.specs[(k, i)].ok_or(FitError::Failed {
+                let spec = ctx.specs[(k, i)].as_ref().ok_or(FitError::Failed {
                     reason: "missing pair-copula specification for vine evaluation",
                 })?;
 
@@ -148,7 +148,7 @@ fn evaluate_vine_with_gpu_pair_batches(
 
     for i in 1..ctx.d {
         for k in 0..i {
-            let spec = ctx.specs[(k, i)].ok_or(FitError::Failed {
+            let spec = ctx.specs[(k, i)].as_ref().ok_or(FitError::Failed {
                 reason: "missing pair-copula specification for vine evaluation",
             })?;
             let label = ctx.maxmat[(k, i)];
@@ -204,9 +204,9 @@ fn evaluate_vine_with_gpu_pair_batches(
     Ok(totals)
 }
 
-fn gaussian_rho(spec: crate::paircopula::PairCopulaSpec) -> Option<f64> {
-    match (spec.family, spec.rotation, spec.params) {
-        (PairCopulaFamily::Gaussian, Rotation::R0, PairCopulaParams::One(rho)) => Some(rho),
+fn gaussian_rho(spec: &crate::paircopula::PairCopulaSpec) -> Option<f64> {
+    match (spec.family, spec.rotation, &spec.params) {
+        (PairCopulaFamily::Gaussian, Rotation::R0, PairCopulaParams::One(rho)) => Some(*rho),
         _ => None,
     }
 }
@@ -215,5 +215,5 @@ fn all_gaussian_specs(specs: &Array2<Option<crate::paircopula::PairCopulaSpec>>)
     specs
         .iter()
         .flatten()
-        .all(|spec| gaussian_rho(*spec).is_some())
+        .all(|spec| gaussian_rho(spec).is_some())
 }

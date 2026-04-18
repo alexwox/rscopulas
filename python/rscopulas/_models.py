@@ -35,18 +35,40 @@ def _family_set(family_set: Sequence[str] | None) -> list[str] | None:
     return [str(family) for family in family_set]
 
 
+def _parameter_values(values: Any) -> list[float]:
+    if values is None:
+        return []
+    if isinstance(values, (int, float)):
+        return [float(values)]
+    return [float(value) for value in values]
+
+
 def _edge_parameters(edge: Any) -> list[float]:
     if isinstance(edge, VineEdgeInfo):
         return [float(value) for value in edge.parameters]
     if isinstance(edge, dict):
         raw = edge.get("parameters", edge.get("params", []))
-        return [float(value) for value in raw]
+        return _parameter_values(raw)
     raise TypeError("vine edges must be VineEdgeInfo instances or dictionaries")
+
+
+def _serialize_pair_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "family": str(spec["family"]),
+        "rotation": str(spec.get("rotation", "R0")),
+        "parameters": [float(value) for value in spec.get("parameters", spec.get("params", []))],
+    }
+    if payload["family"] == "khoudraji":
+        payload["shape_1"] = float(spec["shape_1"])
+        payload["shape_2"] = float(spec["shape_2"])
+        payload["base_copula_1"] = _serialize_pair_spec(spec["base_copula_1"])
+        payload["base_copula_2"] = _serialize_pair_spec(spec["base_copula_2"])
+    return payload
 
 
 def _serialize_vine_edge(edge: VineEdgeInfo | dict[str, Any]) -> dict[str, Any]:
     if isinstance(edge, VineEdgeInfo):
-        return {
+        payload = {
             "tree": edge.tree,
             "conditioned": (edge.conditioned[0], edge.conditioned[1]),
             "conditioning": list(edge.conditioning),
@@ -54,9 +76,15 @@ def _serialize_vine_edge(edge: VineEdgeInfo | dict[str, Any]) -> dict[str, Any]:
             "rotation": edge.rotation,
             "parameters": list(edge.parameters),
         }
+        if edge.family == "khoudraji":
+            payload["shape_1"] = edge.shape_1
+            payload["shape_2"] = edge.shape_2
+            payload["base_copula_1"] = dict(edge.base_copula_1 or {})
+            payload["base_copula_2"] = dict(edge.base_copula_2 or {})
+        return payload
     if isinstance(edge, dict):
         conditioned = edge["conditioned"]
-        return {
+        payload = {
             "tree": int(edge.get("tree", 0)),
             "conditioned": (int(conditioned[0]), int(conditioned[1])),
             "conditioning": [int(value) for value in edge.get("conditioning", [])],
@@ -64,6 +92,12 @@ def _serialize_vine_edge(edge: VineEdgeInfo | dict[str, Any]) -> dict[str, Any]:
             "rotation": str(edge.get("rotation", "R0")),
             "parameters": _edge_parameters(edge),
         }
+        if payload["family"] == "khoudraji":
+            payload["shape_1"] = float(edge["shape_1"])
+            payload["shape_2"] = float(edge["shape_2"])
+            payload["base_copula_1"] = _serialize_pair_spec(edge["base_copula_1"])
+            payload["base_copula_2"] = _serialize_pair_spec(edge["base_copula_2"])
+        return payload
     raise TypeError("vine edges must be VineEdgeInfo instances or dictionaries")
 
 
@@ -131,6 +165,10 @@ class VineEdgeInfo:
     family: str
     rotation: str
     parameters: tuple[float, ...]
+    shape_1: float | None = None
+    shape_2: float | None = None
+    base_copula_1: dict[str, Any] | None = None
+    base_copula_2: dict[str, Any] | None = None
 
     @classmethod
     def _from_core(cls, payload: dict[str, Any]) -> "VineEdgeInfo":
@@ -141,6 +179,10 @@ class VineEdgeInfo:
             family=str(payload["family"]),
             rotation=str(payload["rotation"]),
             parameters=tuple(float(value) for value in payload["parameters"]),
+            shape_1=None if payload.get("shape_1") is None else float(payload["shape_1"]),
+            shape_2=None if payload.get("shape_2") is None else float(payload["shape_2"]),
+            base_copula_1=None if payload.get("base_copula_1") is None else dict(payload["base_copula_1"]),
+            base_copula_2=None if payload.get("base_copula_2") is None else dict(payload["base_copula_2"]),
         )
 
 
@@ -198,8 +240,36 @@ class PairCopula:
         return cls(
             _rscopulas._PairCopula.from_spec(
                 str(family),
-                parameters=[float(value) for value in parameters],
+                parameters=_parameter_values(parameters),
                 rotation=str(rotation),
+            )
+        )
+
+    @classmethod
+    def from_khoudraji(
+        cls,
+        first_family: str,
+        second_family: str,
+        *,
+        shape_1: float,
+        shape_2: float,
+        first_parameters: Sequence[float] = (),
+        second_parameters: Sequence[float] = (),
+        rotation: str = "R0",
+        first_rotation: str = "R0",
+        second_rotation: str = "R0",
+    ) -> "PairCopula":
+        return cls(
+            _rscopulas._PairCopula.from_khoudraji(
+                str(first_family),
+                str(second_family),
+                float(shape_1),
+                float(shape_2),
+                first_parameters=_parameter_values(first_parameters),
+                second_parameters=_parameter_values(second_parameters),
+                rotation=str(rotation),
+                first_rotation=str(first_rotation),
+                second_rotation=str(second_rotation),
             )
         )
 
@@ -218,6 +288,10 @@ class PairCopula:
     @property
     def parameters(self) -> tuple[float, ...]:
         return tuple(float(value) for value in self._core.parameters)
+
+    @property
+    def spec(self) -> dict[str, Any]:
+        return dict(self._core.spec)
 
     def log_pdf(
         self, u1: npt.ArrayLike, u2: npt.ArrayLike, *, clip_eps: float = 1e-12

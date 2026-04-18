@@ -184,7 +184,7 @@ impl VineCopula {
                         tree: level,
                         conditioned: edge.conditioned,
                         conditioning: edge.conditioning.clone(),
-                        copula: edge.spec,
+                        copula: edge.spec.clone(),
                     })
                     .collect(),
             });
@@ -212,12 +212,7 @@ impl VineCopula {
             .trees
             .iter()
             .flat_map(|tree| tree.edges.iter())
-            .map(|edge| edge.copula.params)
-            .map(|params| match params {
-                PairCopulaParams::None => 0.0,
-                PairCopulaParams::One(_) => 1.0,
-                PairCopulaParams::Two(_, _) => 2.0,
-            })
+            .map(|edge| edge.copula.parameter_count() as f64)
             .sum::<f64>();
         let diagnostics = crate::domain::FitDiagnostics {
             loglik: total_loglik,
@@ -321,7 +316,7 @@ fn fit_canonical_vine(
                     tree: tree.level,
                     conditioned: edge.conditioned,
                     conditioning: edge.conditioning.clone(),
-                    copula: edge.spec,
+                    copula: edge.spec.clone(),
                 })
                 .collect(),
         });
@@ -342,11 +337,7 @@ fn fit_canonical_vine(
     let parameter_count = public_trees
         .iter()
         .flat_map(|tree| tree.edges.iter())
-        .map(|edge| match edge.copula.params {
-            PairCopulaParams::None => 0.0,
-            PairCopulaParams::One(_) => 1.0,
-            PairCopulaParams::Two(_, _) => 2.0,
-        })
+        .map(|edge| edge.copula.parameter_count() as f64)
         .sum::<f64>();
     let diagnostics = crate::domain::FitDiagnostics {
         loglik: total_loglik,

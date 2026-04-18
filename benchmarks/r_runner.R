@@ -1,5 +1,7 @@
 #!/usr/bin/env Rscript
 
+userlib <- file.path(Sys.getenv("HOME"), "R", "library")
+.libPaths(c(userlib, .libPaths()))
 suppressPackageStartupMessages(library(copula))
 suppressPackageStartupMessages(library(jsonlite))
 suppressPackageStartupMessages(library(VineCopula))
@@ -32,6 +34,97 @@ to_matrix <- function(rows) {
   } else {
     matrix(unlist(rows), ncol = length(rows[[1L]]), byrow = TRUE)
   }
+}
+
+numeric_parameter_vector <- function(value) {
+  if (is.null(value)) {
+    numeric()
+  } else if (is.list(value)) {
+    as.numeric(unlist(value))
+  } else {
+    as.numeric(value)
+  }
+}
+
+pair_spec_model <- function(spec) {
+  family <- spec$family
+  rotation <- if (is.null(spec$rotation)) "R0" else spec$rotation
+  parameters <- numeric_parameter_vector(spec$parameters)
+  if (family == "independence") {
+    model <- indepCopula(dim = 2L)
+  } else if (family == "gaussian") {
+    model <- normalCopula(parameters[[1L]], dim = 2L, dispstr = "un")
+  } else if (family == "student_t") {
+    model <- tCopula(parameters[[1L]], dim = 2L, df = parameters[[2L]], dispstr = "un")
+  } else if (family == "clayton") {
+    model <- claytonCopula(parameters[[1L]], dim = 2L)
+  } else if (family == "frank") {
+    model <- frankCopula(parameters[[1L]], dim = 2L)
+  } else if (family == "gumbel") {
+    model <- gumbelCopula(parameters[[1L]], dim = 2L)
+  } else if (family == "khoudraji") {
+    model <- khoudrajiCopula(
+      copula1 = pair_spec_model(spec$base_copula_1),
+      copula2 = pair_spec_model(spec$base_copula_2),
+      shapes = c(as.numeric(spec$shape_1), as.numeric(spec$shape_2))
+    )
+  } else {
+    stop(sprintf("unsupported pair family %s", family), call. = FALSE)
+  }
+
+  if (rotation == "R0") {
+    return(model)
+  }
+  if (rotation == "R90") {
+    return(rotCopula(model, flip = c(TRUE, FALSE)))
+  }
+  if (rotation == "R180") {
+    return(rotCopula(model, flip = c(TRUE, TRUE)))
+  }
+  if (rotation == "R270") {
+    return(rotCopula(model, flip = c(FALSE, TRUE)))
+  }
+  stop(sprintf("unsupported pair rotation %s", rotation), call. = FALSE)
+}
+
+h12_numeric <- function(cop, u, v, eps = 1e-6) {
+  v_lo <- pmax(v - eps, 1e-10)
+  v_hi <- pmin(v + eps, 1 - 1e-10)
+  (pCopula(cbind(u, v_hi), copula = cop) - pCopula(cbind(u, v_lo), copula = cop)) / (v_hi - v_lo)
+}
+
+h21_numeric <- function(cop, u, v, eps = 1e-6) {
+  u_lo <- pmax(u - eps, 1e-10)
+  u_hi <- pmin(u + eps, 1 - 1e-10)
+  (pCopula(cbind(u_hi, v), copula = cop) - pCopula(cbind(u_lo, v), copula = cop)) / (u_hi - u_lo)
+}
+
+hinv12_numeric <- function(cop, p, v) {
+  vapply(
+    seq_along(p),
+    function(idx) {
+      uniroot(
+        function(u) h12_numeric(cop, u, v[[idx]]) - p[[idx]],
+        interval = c(1e-10, 1 - 1e-10),
+        tol = 1e-8
+      )$root
+    },
+    numeric(1)
+  )
+}
+
+hinv21_numeric <- function(cop, u, p) {
+  vapply(
+    seq_along(p),
+    function(idx) {
+      uniroot(
+        function(v) h21_numeric(cop, u[[idx]], v) - p[[idx]],
+        interval = c(1e-10, 1 - 1e-10),
+        tol = 1e-8
+      )$root
+    },
+    numeric(1)
+  )
 }
 
 measure_iterations <- function(iterations, callback) {
@@ -244,6 +337,20 @@ run_single_family <- function(case, fixture) {
 }
 
 run_pair_kernels <- function(case, fixture) {
+  if (!is.null(fixture$family) && identical(fixture$family, "khoudraji")) {
+    model <- pair_spec_model(fixture)
+    u1 <- as.numeric(unlist(fixture$u1))
+    u2 <- as.numeric(unlist(fixture$u2))
+    p <- as.numeric(unlist(fixture$p))
+    measurement <- measure_iterations(case$iterations, function() {
+      dCopula(cbind(u1, u2), model, log = TRUE)
+      h12_numeric(model, u1, u2)
+      h21_numeric(model, u1, u2)
+      hinv12_numeric(model, p, u2)
+      hinv21_numeric(model, u1, p)
+    })
+    return(make_result(case, measurement, list(observations = length(u1))))
+  }
   family <- as.integer(fixture$family_code)
   par <- as.numeric(fixture$par)
   par2 <- as.numeric(fixture$par2)

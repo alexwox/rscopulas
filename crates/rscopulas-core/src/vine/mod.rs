@@ -6,7 +6,7 @@ mod structure;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 
-use crate::paircopula::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec};
+use crate::paircopula::{PairCopulaFamily, PairCopulaSpec};
 
 pub use fit::{SelectionCriterion, VineFitOptions};
 
@@ -115,10 +115,12 @@ impl VineCopula {
         self.trees
             .iter()
             .flat_map(|tree| tree.edges.iter())
-            .map(|edge| match edge.copula.params {
-                PairCopulaParams::None => 0.0,
-                PairCopulaParams::One(value) => value,
-                PairCopulaParams::Two(value, _) => value,
+            .map(|edge| {
+                edge.copula
+                    .flat_parameters()
+                    .into_iter()
+                    .next()
+                    .unwrap_or(0.0)
             })
             .collect()
     }
@@ -137,5 +139,6 @@ fn default_family_set() -> Vec<PairCopulaFamily> {
         PairCopulaFamily::Clayton,
         PairCopulaFamily::Frank,
         PairCopulaFamily::Gumbel,
+        PairCopulaFamily::Khoudraji,
     ]
 }

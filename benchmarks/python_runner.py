@@ -78,6 +78,26 @@ def _pair_parameters(fixture: dict[str, Any]) -> list[float]:
     return parameters
 
 
+def _pair_model_from_fixture(fixture: dict[str, Any]) -> PairCopula:
+    if fixture.get("family") == "khoudraji":
+        return PairCopula.from_khoudraji(
+            fixture["base_copula_1"]["family"],
+            fixture["base_copula_2"]["family"],
+            shape_1=float(fixture["shape_1"]),
+            shape_2=float(fixture["shape_2"]),
+            first_parameters=fixture["base_copula_1"].get("parameters", []),
+            second_parameters=fixture["base_copula_2"].get("parameters", []),
+            rotation=str(fixture.get("rotation", "R0")),
+            first_rotation=str(fixture["base_copula_1"].get("rotation", "R0")),
+            second_rotation=str(fixture["base_copula_2"].get("rotation", "R0")),
+        )
+    return PairCopula.from_spec(
+        fixture["family"],
+        _pair_parameters(fixture),
+        rotation=str(fixture.get("rotation", "R0")),
+    )
+
+
 def _run_single_family(case: dict[str, Any], fixture: dict[str, Any]) -> dict[str, Any]:
     family = case["family"]
     operation = case["operation"]
@@ -114,11 +134,7 @@ def _run_single_family(case: dict[str, Any], fixture: dict[str, Any]) -> dict[st
 
 
 def _run_pair_kernels(case: dict[str, Any], fixture: dict[str, Any]) -> dict[str, Any]:
-    model = PairCopula.from_spec(
-        fixture["family"],
-        _pair_parameters(fixture),
-        rotation=str(fixture.get("rotation", "R0")),
-    )
+    model = _pair_model_from_fixture(fixture)
     u1 = np.asarray(fixture["u1"], dtype=np.float64)
     u2 = np.asarray(fixture["u2"], dtype=np.float64)
     p = np.asarray(fixture["p"], dtype=np.float64)

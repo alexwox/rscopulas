@@ -46,7 +46,7 @@ impl VineCopula {
                     } else {
                         vindirect[(k, label)]
                     };
-                    let spec = specs[(k, i)].ok_or(FitError::Failed {
+                    let spec = specs[(k, i)].as_ref().ok_or(FitError::Failed {
                         reason: "missing pair-copula specification for vine simulation",
                     })?;
                     vdirect[(k, i)] =

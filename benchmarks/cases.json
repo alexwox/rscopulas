@@ -191,6 +191,15 @@
       "implementations": ["rust", "python", "r"]
     },
     {
+      "id": "pair_khoudraji_kernels",
+      "category": "pair_copula",
+      "family": "khoudraji",
+      "operation": "kernels",
+      "fixture": "fixtures/reference/r-copula/v1_1_3/khoudraji_pair_case01.json",
+      "iterations": 300,
+      "implementations": ["rust", "python", "r"]
+    },
+    {
       "id": "mixed_r_vine_log_pdf",
       "category": "vine",
       "structure": "r",

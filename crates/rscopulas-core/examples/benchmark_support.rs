@@ -4,13 +4,14 @@ use std::{fs, path::PathBuf};
 
 use ndarray::Array2;
 use rand::rngs::StdRng;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
 
 use rscopulas_core::{
     ClaytonCopula, CopulaError, CopulaModel, EvalOptions, FitOptions, FrankCopula, GaussianCopula,
-    GumbelHougaardCopula, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PseudoObs, Rotation,
-    SampleOptions, SelectionCriterion, StudentTCopula, VineCopula, VineEdge, VineFitOptions,
-    VineStructureKind, VineTree,
+    GumbelHougaardCopula, KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec,
+    PseudoObs, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, VineCopula, VineEdge,
+    VineFitOptions, VineStructureKind, VineTree,
 };
 
 #[derive(Debug, Deserialize)]
@@ -44,12 +45,39 @@ pub struct SingleFamilyFixture {
 
 #[derive(Debug, Deserialize)]
 pub struct PairFixture {
-    pub family_code: usize,
-    pub par: f64,
-    pub par2: f64,
+    pub family: Option<String>,
+    pub family_code: Option<usize>,
+    pub rotation: Option<String>,
+    pub par: Option<f64>,
+    pub par2: Option<f64>,
+    #[serde(default)]
+    pub base_copula_1: Option<PairSpecFixture>,
+    #[serde(default)]
+    pub base_copula_2: Option<PairSpecFixture>,
+    #[serde(default)]
+    pub shape_1: Option<f64>,
+    #[serde(default)]
+    pub shape_2: Option<f64>,
     pub u1: Vec<f64>,
     pub u2: Vec<f64>,
     pub p: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PairSpecFixture {
+    pub family: String,
+    #[serde(default)]
+    pub rotation: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_parameter_vec")]
+    pub parameters: Vec<f64>,
+    #[serde(default)]
+    pub base_copula_1: Option<Box<PairSpecFixture>>,
+    #[serde(default)]
+    pub base_copula_2: Option<Box<PairSpecFixture>>,
+    #[serde(default)]
+    pub shape_1: Option<f64>,
+    #[serde(default)]
+    pub shape_2: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -245,25 +273,67 @@ pub fn fit_single_family(
 }
 
 pub fn pair_spec_from_fixture(fixture: &PairFixture) -> PairCopulaSpec {
+    if fixture.family.as_deref() == Some("khoudraji") {
+        return PairCopulaSpec {
+            family: PairCopulaFamily::Khoudraji,
+            rotation: parse_rotation(
+                fixture
+                    .rotation
+                    .as_deref()
+                    .expect("khoudraji benchmark fixture should contain a rotation"),
+            ),
+            params: PairCopulaParams::Khoudraji(
+                KhoudrajiParams::new(
+                    pair_spec_from_component(
+                        fixture
+                            .base_copula_1
+                            .as_ref()
+                            .expect("khoudraji benchmark fixture should contain base_copula_1"),
+                    ),
+                    pair_spec_from_component(
+                        fixture
+                            .base_copula_2
+                            .as_ref()
+                            .expect("khoudraji benchmark fixture should contain base_copula_2"),
+                    ),
+                    fixture
+                        .shape_1
+                        .expect("khoudraji benchmark fixture should contain shape_1"),
+                    fixture
+                        .shape_2
+                        .expect("khoudraji benchmark fixture should contain shape_2"),
+                )
+                .expect("khoudraji benchmark fixture should be valid"),
+            ),
+        };
+    }
+
     let (family, rotation) = match fixture.family_code {
-        0 => (PairCopulaFamily::Independence, Rotation::R0),
-        1 => (PairCopulaFamily::Gaussian, Rotation::R0),
-        2 => (PairCopulaFamily::StudentT, Rotation::R0),
-        3 => (PairCopulaFamily::Clayton, Rotation::R0),
-        13 => (PairCopulaFamily::Clayton, Rotation::R180),
-        23 => (PairCopulaFamily::Clayton, Rotation::R90),
-        33 => (PairCopulaFamily::Clayton, Rotation::R270),
-        4 => (PairCopulaFamily::Gumbel, Rotation::R0),
-        14 => (PairCopulaFamily::Gumbel, Rotation::R180),
-        24 => (PairCopulaFamily::Gumbel, Rotation::R90),
-        34 => (PairCopulaFamily::Gumbel, Rotation::R270),
-        5 => (PairCopulaFamily::Frank, Rotation::R0),
-        other => panic!("unsupported pair fixture family code: {other}"),
+        Some(0) => (PairCopulaFamily::Independence, Rotation::R0),
+        Some(1) => (PairCopulaFamily::Gaussian, Rotation::R0),
+        Some(2) => (PairCopulaFamily::StudentT, Rotation::R0),
+        Some(3) => (PairCopulaFamily::Clayton, Rotation::R0),
+        Some(13) => (PairCopulaFamily::Clayton, Rotation::R180),
+        Some(23) => (PairCopulaFamily::Clayton, Rotation::R90),
+        Some(33) => (PairCopulaFamily::Clayton, Rotation::R270),
+        Some(4) => (PairCopulaFamily::Gumbel, Rotation::R0),
+        Some(14) => (PairCopulaFamily::Gumbel, Rotation::R180),
+        Some(24) => (PairCopulaFamily::Gumbel, Rotation::R90),
+        Some(34) => (PairCopulaFamily::Gumbel, Rotation::R270),
+        Some(5) => (PairCopulaFamily::Frank, Rotation::R0),
+        other => panic!("unsupported pair fixture family code: {other:?}"),
     };
     let params = match family {
         PairCopulaFamily::Independence => PairCopulaParams::None,
-        PairCopulaFamily::StudentT => PairCopulaParams::Two(fixture.par, fixture.par2),
-        _ => PairCopulaParams::One(fixture.par),
+        PairCopulaFamily::StudentT => PairCopulaParams::Two(
+            fixture
+                .par
+                .expect("student t pair fixture should contain par"),
+            fixture
+                .par2
+                .expect("student t pair fixture should contain par2"),
+        ),
+        _ => PairCopulaParams::One(fixture.par.expect("pair fixture should contain par")),
     };
     PairCopulaSpec {
         family,
@@ -321,7 +391,9 @@ pub fn vine_model_from_fixture(fixture: &VineFixture) -> Result<VineCopula, Copu
                             [] => PairCopulaParams::None,
                             [value] => PairCopulaParams::One(*value),
                             [first, second] => PairCopulaParams::Two(*first, *second),
-                            values => panic!("unsupported vine edge parameter count: {}", values.len()),
+                            values => {
+                                panic!("unsupported vine edge parameter count: {}", values.len())
+                            }
                         },
                     },
                 })
@@ -348,7 +420,9 @@ pub fn default_vine_fit_options() -> VineFitOptions {
 }
 
 pub fn implementation_requested(case: &BenchmarkCase, implementation: &str) -> bool {
-    case.implementations.iter().any(|value| value == implementation)
+    case.implementations
+        .iter()
+        .any(|value| value == implementation)
 }
 
 pub fn repeat_pair_kernels(
@@ -411,7 +485,9 @@ pub fn sample_size(fixture: &SingleFamilyFixture) -> usize {
 }
 
 pub fn sample_seed(fixture: &SingleFamilyFixture) -> u64 {
-    fixture.seed.expect("sample benchmark fixture should contain seed")
+    fixture
+        .seed
+        .expect("sample benchmark fixture should contain seed")
 }
 
 pub fn vine_sample_size(fixture: &VineFixture) -> usize {
@@ -421,7 +497,102 @@ pub fn vine_sample_size(fixture: &VineFixture) -> usize {
 }
 
 pub fn vine_sample_seed(fixture: &VineFixture) -> u64 {
-    fixture.seed.expect("vine sample fixture should contain seed")
+    fixture
+        .seed
+        .expect("vine sample fixture should contain seed")
 }
 
 fn main() {}
+
+fn pair_spec_from_component(fixture: &PairSpecFixture) -> PairCopulaSpec {
+    if fixture.family == "khoudraji" {
+        return PairCopulaSpec {
+            family: PairCopulaFamily::Khoudraji,
+            rotation: parse_rotation(
+                fixture
+                    .rotation
+                    .as_deref()
+                    .expect("nested khoudraji benchmark fixture should contain a rotation"),
+            ),
+            params: PairCopulaParams::Khoudraji(
+                KhoudrajiParams::new(
+                    pair_spec_from_component(
+                        fixture.base_copula_1.as_deref().expect(
+                            "nested khoudraji benchmark fixture should contain base_copula_1",
+                        ),
+                    ),
+                    pair_spec_from_component(
+                        fixture.base_copula_2.as_deref().expect(
+                            "nested khoudraji benchmark fixture should contain base_copula_2",
+                        ),
+                    ),
+                    fixture
+                        .shape_1
+                        .expect("nested khoudraji benchmark fixture should contain shape_1"),
+                    fixture
+                        .shape_2
+                        .expect("nested khoudraji benchmark fixture should contain shape_2"),
+                )
+                .expect("nested khoudraji benchmark fixture should be valid"),
+            ),
+        };
+    }
+
+    PairCopulaSpec {
+        family: match fixture.family.as_str() {
+            "independence" => PairCopulaFamily::Independence,
+            "gaussian" => PairCopulaFamily::Gaussian,
+            "student_t" => PairCopulaFamily::StudentT,
+            "clayton" => PairCopulaFamily::Clayton,
+            "frank" => PairCopulaFamily::Frank,
+            "gumbel" => PairCopulaFamily::Gumbel,
+            other => panic!("unsupported pair component family: {other}"),
+        },
+        rotation: parse_rotation(fixture.rotation.as_deref().unwrap_or("R0")),
+        params: match fixture.parameters.as_slice() {
+            [] => PairCopulaParams::None,
+            [value] => PairCopulaParams::One(*value),
+            [first, second] => PairCopulaParams::Two(*first, *second),
+            values => panic!(
+                "unsupported pair component parameter count: {}",
+                values.len()
+            ),
+        },
+    }
+}
+
+fn parse_rotation(value: &str) -> Rotation {
+    match value {
+        "R0" => Rotation::R0,
+        "R90" => Rotation::R90,
+        "R180" => Rotation::R180,
+        "R270" => Rotation::R270,
+        other => panic!("unsupported pair rotation: {other}"),
+    }
+}
+
+fn deserialize_parameter_vec<'de, D>(deserializer: D) -> Result<Vec<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Number(number)) => {
+            Ok(vec![number.as_f64().ok_or_else(|| {
+                serde::de::Error::custom("parameter scalar must be numeric")
+            })?])
+        }
+        Some(Value::Array(values)) => values
+            .into_iter()
+            .map(|value| {
+                value
+                    .as_f64()
+                    .ok_or_else(|| serde::de::Error::custom("parameter entries must be numeric"))
+            })
+            .collect(),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "unexpected parameter payload {other}"
+        ))),
+    }
+}

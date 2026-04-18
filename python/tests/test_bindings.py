@@ -154,6 +154,67 @@ def test_pair_wrapper_exposes_density_and_h_kernels() -> None:
     np.testing.assert_allclose(inv_second[-1], 0.96246049482916851)
 
 
+def test_khoudraji_pair_wrapper_round_trips_structured_spec() -> None:
+    model = PairCopula.from_khoudraji(
+        "gaussian",
+        "clayton",
+        shape_1=0.35,
+        shape_2=0.8,
+        first_parameters=[0.45],
+        second_parameters=[2.0],
+    )
+    u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+    u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+
+    log_pdf = model.log_pdf(u1, u2)
+    spec = model.spec
+
+    assert model.family == "khoudraji"
+    assert model.rotation == "R0"
+    assert len(model.parameters) >= 4
+    assert spec["base_copula_1"]["family"] == "gaussian"
+    assert spec["base_copula_2"]["family"] == "clayton"
+    assert spec["shape_1"] == pytest.approx(0.35)
+    assert spec["shape_2"] == pytest.approx(0.8)
+    assert log_pdf.shape == (4,)
+
+
+def test_vine_from_trees_accepts_khoudraji_edge_payload() -> None:
+    model = VineCopula.from_trees(
+        "r",
+        [
+            {
+                "level": 1,
+                "edges": [
+                    {
+                        "conditioned": (0, 1),
+                        "conditioning": [],
+                        "family": "khoudraji",
+                        "rotation": "R0",
+                        "shape_1": 0.35,
+                        "shape_2": 0.8,
+                        "base_copula_1": {
+                            "family": "gaussian",
+                            "rotation": "R0",
+                            "parameters": [0.45],
+                        },
+                        "base_copula_2": {
+                            "family": "clayton",
+                            "rotation": "R0",
+                            "parameters": [2.0],
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    trees = model.trees
+    assert trees[0].edges[0].family == "khoudraji"
+    assert trees[0].edges[0].rotation == "R0"
+    assert len(trees[0].edges[0].parameters) >= 4
+
+
 def test_invalid_input_error_surfaces_from_core_validation() -> None:
     with pytest.raises(InvalidInputError):
         GaussianCopula.fit(np.array([[0.0, 0.5], [0.4, 0.6]], dtype=np.float64))

@@ -13,6 +13,7 @@ The current source of truth in this repository is the Rust crate
 - Single-family copulas for Gaussian, Student t, Clayton, Frank, and
   Gumbel-Hougaard.
 - Bivariate pair-copula kernels with h-functions and inverse h-functions.
+- Asymmetric Khoudraji pair-copulas that can participate in vine edge fitting.
 - C-vine, D-vine, and R-vine construction, fitting, scoring, and sampling.
 - Explicit data validation through `PseudoObs`, so the library only accepts
   inputs in the open unit hypercube `(0, 1)^d`.
@@ -120,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PairCopulaFamily::Clayton,
             PairCopulaFamily::Frank,
             PairCopulaFamily::Gumbel,
+        PairCopulaFamily::Khoudraji,
         ],
         include_rotations: true,
         criterion: SelectionCriterion::Aic,
@@ -182,6 +184,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+You can also build an asymmetric Khoudraji edge from two existing pair kernels:
+
+```rust
+use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let first = PairCopulaSpec {
+        family: PairCopulaFamily::Gaussian,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(0.45),
+    };
+    let second = PairCopulaSpec {
+        family: PairCopulaFamily::Clayton,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(2.0),
+    };
+    let khoudraji = PairCopulaSpec::khoudraji(first, second, 0.35, 0.80)?;
+    println!("log_pdf = {}", khoudraji.log_pdf(0.32, 0.77, 1e-12)?);
+    Ok(())
+}
+```
+
 ### Important API notes
 
 - Import the `CopulaModel` trait when calling trait methods like `log_pdf(...)`
@@ -193,8 +217,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   over degrees of freedom.
 - `ClaytonCopula`, `FrankCopula`, and `GumbelHougaardCopula` fit a single
   dependence parameter from the data.
+- `PairCopulaSpec::khoudraji(...)` builds a generic asymmetric pair copula from
+  two existing pair kernels and two shape parameters.
 - `VineFitOptions` controls candidate pair families, rotations, criterion,
-  truncation, and optional independence selection thresholds.
+  truncation, and optional independence selection thresholds. Khoudraji
+  candidates currently run on CPU only and use a bounded internal search over
+  supported base families.
 
 ### Execution backends
 
@@ -239,6 +267,22 @@ If you only need the numeric API, `python -m pip install -e ".[dev]"` is still
 enough. The optional plotting helpers live in `rscopulas.plotting` and require
 the `viz` extra.
 
+### Example scripts (visuals)
+
+After installing with the `viz` extra and running `maturin develop`, you can
+generate figures from the repository root:
+
+```bash
+PYTHONPATH=python python python/examples/copula_visualisation.py
+PYTHONPATH=python python python/examples/copula_gallery.py
+```
+
+- `python/examples/copula_visualisation.py` writes a single multi-panel overview
+  (`python/examples/output/copula_visualisation.png`).
+- `python/examples/copula_gallery.py` writes one PNG per model kind (Gaussian,
+  Student t, Clayton, Frank, Gumbel, vine, hierarchical Archimedean, and
+  pair-copula kernel) under `python/examples/output/gallery_*.png`.
+
 ### Fit a Gaussian copula
 
 ```python
@@ -266,6 +310,28 @@ print("dim:", fit.model.dim)
 print("AIC:", fit.diagnostics.aic)
 print("correlation:\n", fit.model.correlation)
 print("sample:\n", fit.model.sample(4, seed=7))
+```
+
+### Build a Khoudraji pair kernel in Python
+
+```python
+import numpy as np
+
+from rscopulas import PairCopula
+
+model = PairCopula.from_khoudraji(
+    "gaussian",
+    "clayton",
+    shape_1=0.35,
+    shape_2=0.8,
+    first_parameters=[0.45],
+    second_parameters=[2.0],
+)
+u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+print("family:", model.family)
+print("spec:", model.spec)
+print("log_pdf:", model.log_pdf(u1, u2))
 ```
 
 ### Quick visualization
@@ -300,7 +366,7 @@ plot_density(gaussian_fit.model)
 
 vine_fit = VineCopula.fit_r(
     data,
-    family_set=["independence", "gaussian", "clayton", "frank", "gumbel"],
+    family_set=["independence", "gaussian", "clayton", "frank", "gumbel", "khoudraji"],
     truncation_level=1,
 )
 plot_vine_structure(vine_fit.model)
@@ -331,7 +397,7 @@ data = np.array(
 
 fit = VineCopula.fit_r(
     data,
-    family_set=["independence", "gaussian", "clayton", "frank", "gumbel"],
+    family_set=["independence", "gaussian", "clayton", "frank", "gumbel", "khoudraji"],
     include_rotations=True,
     criterion="aic",
     truncation_level=1,
