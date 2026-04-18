@@ -167,8 +167,8 @@ fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas_core::
             rotation: rotation_from_name(&rotation)?,
             params: PairCopulaParams::Khoudraji(
                 KhoudrajiParams::new(
-                    pair_spec_from_py_dict(&base_first)?,
-                    pair_spec_from_py_dict(&base_second)?,
+                    pair_spec_from_py_dict(base_first)?,
+                    pair_spec_from_py_dict(base_second)?,
                     shape_first,
                     shape_second,
                 )
@@ -374,6 +374,7 @@ fn hac_tree_to_py<'py>(py: Python<'py>, tree: &HacTree) -> PyResult<Py<PyAny>> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hac_fit_options(
     family_set: Option<Vec<String>>,
     structure_method: &str,
@@ -988,6 +989,7 @@ struct PyPairCopula {
 }
 
 impl PyPairCopula {
+    #[allow(clippy::too_many_arguments)]
     fn eval_pair_batch<'py, F>(
         &self,
         py: Python<'py>,
@@ -1028,6 +1030,7 @@ impl PyPairCopula {
     }
 
     #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         first_family,
         second_family,

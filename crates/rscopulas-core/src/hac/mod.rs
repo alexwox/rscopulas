@@ -219,13 +219,14 @@ fn validate_tree_inner(
                 }
                 .into());
             }
-            if let Some((parent_family, parent_theta)) = parent {
-                if parent_family == node.family && parent_theta > node.theta + 1e-12 {
-                    return Err(FitError::Failed {
-                        reason: "same-family HAC nodes must satisfy theta_parent <= theta_child",
-                    }
-                    .into());
+            if let Some((parent_family, parent_theta)) = parent
+                && parent_family == node.family
+                && parent_theta > node.theta + 1e-12
+            {
+                return Err(FitError::Failed {
+                    reason: "same-family HAC nodes must satisfy theta_parent <= theta_child",
                 }
+                .into());
             }
             for child in &node.children {
                 validate_tree_inner(child, Some((node.family, node.theta)), leaves)?;
@@ -449,10 +450,11 @@ fn project_same_family_nesting(tree: &mut HacTree) -> f64 {
                 .map(project_same_family_nesting)
                 .collect::<Vec<_>>();
             for (child, limit) in node.children.iter().zip(child_limits.iter()) {
-                if let HacTree::Node(child_node) = child {
-                    if child_node.family == node.family && node.theta > *limit {
-                        node.theta = *limit;
-                    }
+                if let HacTree::Node(child_node) = child
+                    && child_node.family == node.family
+                    && node.theta > *limit
+                {
+                    node.theta = *limit;
                 }
             }
             node.theta
@@ -719,11 +721,11 @@ where
 }
 
 fn stehfest_weights(n: usize) -> Vec<f64> {
-    assert!(n % 2 == 0);
+    assert!(n.is_multiple_of(2));
     let m = n / 2;
     (1..=n)
         .map(|k| {
-            let sign = if (k + m) % 2 == 0 { 1.0 } else { -1.0 };
+            let sign = if (k + m).is_multiple_of(2) { 1.0 } else { -1.0 };
             let mut total = 0.0;
             let lower = (k + 1).div_ceil(2);
             let upper = k.min(m);

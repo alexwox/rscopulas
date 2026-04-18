@@ -3,7 +3,9 @@ use crate::{
     data::PseudoObs,
     domain::{Device, ExecPolicy},
     errors::{BackendError, CopulaError, FitError},
-    paircopula::{PairCopulaFamily, PairCopulaParams, Rotation, evaluate_pair_batch_into},
+    paircopula::{
+        PairBatchBuffers, PairCopulaFamily, PairCopulaParams, Rotation, evaluate_pair_batch_into,
+    },
 };
 
 use super::{CompiledVineRuntime, VineCopula};
@@ -190,15 +192,18 @@ fn evaluate_vine_block(
             };
             targets[local_obs] = vdirect[workspace_index(local_obs, step.row, step.col, d)];
         }
+        let mut outputs = PairBatchBuffers {
+            log_pdf: &mut log_pdf,
+            cond_on_first: &mut cond_on_first,
+            cond_on_second: &mut cond_on_second,
+        };
         evaluate_pair_batch_into(
             &step.spec,
             &sources,
             &targets,
             clip_eps,
             ExecPolicy::Force(Device::Cpu),
-            &mut log_pdf,
-            &mut cond_on_first,
-            &mut cond_on_second,
+            &mut outputs,
         )?;
         for local_obs in 0..n_rows {
             totals[local_obs] += log_pdf[local_obs];

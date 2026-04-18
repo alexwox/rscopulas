@@ -128,6 +128,12 @@ struct PairBatchEvaluation {
     cond_on_second: Vec<f64>,
 }
 
+pub(crate) struct PairBatchBuffers<'a> {
+    pub(crate) log_pdf: &'a mut [f64],
+    pub(crate) cond_on_first: &'a mut [f64],
+    pub(crate) cond_on_second: &'a mut [f64],
+}
+
 impl PairCopulaSpec {
     /// Returns the independence pair-copula specification.
     pub fn independence() -> Self {
@@ -874,16 +880,12 @@ fn evaluate_pair_batch(
     let mut log_pdf = vec![0.0; u1.len()];
     let mut cond_on_first = vec![0.0; u1.len()];
     let mut cond_on_second = vec![0.0; u1.len()];
-    evaluate_pair_batch_into(
-        &spec,
-        u1,
-        u2,
-        clip_eps,
-        exec,
-        &mut log_pdf,
-        &mut cond_on_first,
-        &mut cond_on_second,
-    )?;
+    let mut outputs = PairBatchBuffers {
+        log_pdf: &mut log_pdf,
+        cond_on_first: &mut cond_on_first,
+        cond_on_second: &mut cond_on_second,
+    };
+    evaluate_pair_batch_into(&spec, u1, u2, clip_eps, exec, &mut outputs)?;
 
     Ok(PairBatchEvaluation {
         log_pdf,
@@ -898,27 +900,19 @@ pub(crate) fn evaluate_pair_batch_into(
     u2: &[f64],
     clip_eps: f64,
     exec: ExecPolicy,
-    log_pdf: &mut [f64],
-    cond_on_first: &mut [f64],
-    cond_on_second: &mut [f64],
+    outputs: &mut PairBatchBuffers<'_>,
 ) -> Result<(), CopulaError> {
-    validate_batch_buffers(
-        u1,
-        u2,
-        &[log_pdf.len(), cond_on_first.len(), cond_on_second.len()],
-    )?;
+    let output_lengths = [
+        outputs.log_pdf.len(),
+        outputs.cond_on_first.len(),
+        outputs.cond_on_second.len(),
+    ];
+    validate_batch_buffers(u1, u2, &output_lengths)?;
     let strategy = resolve_strategy(exec, Operation::PairBatchEval, u1.len())?;
     match strategy {
-        ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => fill_pair_batch_cpu(
-            spec,
-            u1,
-            u2,
-            clip_eps,
-            strategy,
-            log_pdf,
-            cond_on_first,
-            cond_on_second,
-        ),
+        ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => {
+            fill_pair_batch_cpu(spec, u1, u2, clip_eps, strategy, outputs)
+        }
         ExecutionStrategy::Cuda(ordinal) => match gaussian_pair_request(spec, u1, u2, clip_eps) {
             Some(request) => {
                 let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
@@ -929,7 +923,7 @@ pub(crate) fn evaluate_pair_batch_into(
                     backend: "cuda",
                     reason: err.to_string(),
                 })?;
-                copy_gaussian_batch(batch, log_pdf, cond_on_first, cond_on_second);
+                copy_gaussian_batch(batch, outputs);
                 Ok(())
             }
             None => fill_pair_batch_cpu(
@@ -938,9 +932,7 @@ pub(crate) fn evaluate_pair_batch_into(
                 u2,
                 clip_eps,
                 ExecutionStrategy::CpuParallel,
-                log_pdf,
-                cond_on_first,
-                cond_on_second,
+                outputs,
             ),
         },
         ExecutionStrategy::Metal => match gaussian_pair_request(spec, u1, u2, clip_eps) {
@@ -953,7 +945,7 @@ pub(crate) fn evaluate_pair_batch_into(
                     backend: "metal",
                     reason: err.to_string(),
                 })?;
-                copy_gaussian_batch(batch, log_pdf, cond_on_first, cond_on_second);
+                copy_gaussian_batch(batch, outputs);
                 Ok(())
             }
             None => fill_pair_batch_cpu(
@@ -962,9 +954,7 @@ pub(crate) fn evaluate_pair_batch_into(
                 u2,
                 clip_eps,
                 ExecutionStrategy::CpuParallel,
-                log_pdf,
-                cond_on_first,
-                cond_on_second,
+                outputs,
             ),
         },
     }
@@ -1023,16 +1013,16 @@ fn fill_pair_batch_cpu(
     u2: &[f64],
     clip_eps: f64,
     strategy: ExecutionStrategy,
-    log_pdf: &mut [f64],
-    cond_on_first: &mut [f64],
-    cond_on_second: &mut [f64],
+    outputs: &mut PairBatchBuffers<'_>,
 ) -> Result<(), CopulaError> {
     match strategy {
         ExecutionStrategy::CpuSerial => {
             for idx in 0..u1.len() {
-                log_pdf[idx] = spec.log_pdf(u1[idx], u2[idx], clip_eps)?;
-                cond_on_first[idx] = spec.cond_first_given_second(u1[idx], u2[idx], clip_eps)?;
-                cond_on_second[idx] = spec.cond_second_given_first(u1[idx], u2[idx], clip_eps)?;
+                outputs.log_pdf[idx] = spec.log_pdf(u1[idx], u2[idx], clip_eps)?;
+                outputs.cond_on_first[idx] =
+                    spec.cond_first_given_second(u1[idx], u2[idx], clip_eps)?;
+                outputs.cond_on_second[idx] =
+                    spec.cond_second_given_first(u1[idx], u2[idx], clip_eps)?;
             }
             Ok(())
         }
@@ -1045,9 +1035,9 @@ fn fill_pair_batch_cpu(
                 ))
             })?;
             for (idx, (log_value, cond_first, cond_second)) in rows.into_iter().enumerate() {
-                log_pdf[idx] = log_value;
-                cond_on_first[idx] = cond_first;
-                cond_on_second[idx] = cond_second;
+                outputs.log_pdf[idx] = log_value;
+                outputs.cond_on_first[idx] = cond_first;
+                outputs.cond_on_second[idx] = cond_second;
             }
             Ok(())
         }
@@ -1104,11 +1094,11 @@ fn validate_batch_buffers(
 
 fn copy_gaussian_batch(
     batch: rscopulas_accel::GaussianPairBatchResult,
-    log_pdf: &mut [f64],
-    cond_on_first: &mut [f64],
-    cond_on_second: &mut [f64],
+    outputs: &mut PairBatchBuffers<'_>,
 ) {
-    log_pdf.copy_from_slice(&batch.log_pdf);
-    cond_on_first.copy_from_slice(&batch.cond_on_first);
-    cond_on_second.copy_from_slice(&batch.cond_on_second);
+    outputs.log_pdf.copy_from_slice(&batch.log_pdf);
+    outputs.cond_on_first.copy_from_slice(&batch.cond_on_first);
+    outputs
+        .cond_on_second
+        .copy_from_slice(&batch.cond_on_second);
 }
