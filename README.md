@@ -1,3 +1,7 @@
+<div align="center">
+  <img alt="rscopulas" src="https://pub-ca706ca75c8a4972b721945607f0ff01.r2.dev/rscopulas-logo.png" width="64" height="64" />
+</div>
+
 # rscopulas
 
 **Copula modeling for Python and Rust** on the same core: fit, score, and sample dependence structures from **pseudo-observations** in the open unit hypercube
