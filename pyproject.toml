@@ -38,6 +38,10 @@ viz = ["matplotlib>=3.8"]
 manifest-path = "crates/rscopulas-python/Cargo.toml"
 module-name = "rscopulas._rscopulas"
 python-source = "python"
+include = [
+    { path = "PYPI.md", format = "sdist" },
+    { path = "LICENSE", format = "sdist" },
+]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
