@@ -14,7 +14,7 @@ def _import_pyplot():
     except ImportError as exc:  # pragma: no cover - exercised in environments without matplotlib
         raise ImportError(
             "matplotlib is required for rscopulas plotting support. "
-            "Install it with `pip install rscopulas[viz]` or `pip install matplotlib`."
+            "Install it with `uv add 'rscopulas[viz]'` (in a uv project), or `uv pip install 'rscopulas[viz]'` / `matplotlib`."
         ) from exc
     return plt
 

@@ -8,12 +8,12 @@
 | [copula_visualisation.py](../python/examples/copula_visualisation.py) | Multi-panel figure → `python/examples/output/copula_visualisation.png` |
 | [copula_gallery.py](../python/examples/copula_gallery.py) | One PNG per model kind → `python/examples/output/gallery_*.png` |
 
-Run from repo root after installing `rscopulas` (for example `pip install -U "rscopulas[viz]"`) or after local `maturin develop` while working in this repo:
+Run from repo root after installing `rscopulas` (for example `uv add "rscopulas[viz]"` in a uv project, or `uv sync --all-extras` in this repo) and `uv run maturin develop` when working on the Rust extension:
 
 ```bash
-python python/examples/quickstart.py
-python python/examples/copula_visualisation.py
-python python/examples/copula_gallery.py
+uv run python python/examples/quickstart.py
+uv run python python/examples/copula_visualisation.py
+uv run python python/examples/copula_gallery.py
 ```
 
 **Gallery outputs:** PNGs under `python/examples/output/` are **checked in** as documentation assets. Regenerate when plotting or model behavior changes.

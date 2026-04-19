@@ -11,24 +11,21 @@ Invalid values are rejected (e.g. `PseudoObs::new` in Rust; Python raises mapped
 
 ## Python
 
-Install from PyPI:
+Install from PyPI with [uv](https://docs.astral.sh/uv/) (`uv add` in a [uv project](https://docs.astral.sh/uv/guides/projects/), or `uv pip install rscopulas` if you are not using a project):
 
 ```bash
-python -m pip install -U rscopulas
+uv add rscopulas
 ```
 
-For local development from this repository:
-
-From the repository root:
+For local development from this repository, from the repo root:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -e ".[dev,viz]"
-maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
-pytest
+uv sync --all-extras
+uv run maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
+uv run pytest
 ```
+
+This uses `uv.lock` and installs the **dev** group (pytest, maturin) plus the **`viz`** extra for plotting.
 
 Minimal fit:
 

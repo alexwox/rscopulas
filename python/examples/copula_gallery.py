@@ -1,8 +1,8 @@
 """Generate one figure per public copula model type (saved as PNG).
 
-Run from repo root (after `maturin develop` and `pip install -e ".[viz]"`):
+Run from repo root after `uv sync --all-extras` and `uv run maturin develop`:
 
-    PYTHONPATH=python python python/examples/copula_gallery.py
+    uv run python python/examples/copula_gallery.py
 """
 
 from __future__ import annotations

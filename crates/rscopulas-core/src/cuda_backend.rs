@@ -5,7 +5,7 @@ mod imp {
     use std::sync::OnceLock;
 
     use cudarc::{
-        driver::{CudaContext, LaunchConfig},
+        driver::{CudaContext, LaunchConfig, PushKernelArg},
         nvrtc::compile_ptx,
     };
 

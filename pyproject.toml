@@ -31,8 +31,13 @@ Issues = "https://github.com/alexwox/rscopulas/issues"
 Documentation = "https://github.com/alexwox/rscopulas/tree/master/docs"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
 viz = ["matplotlib>=3.8"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.8,<2.0",
+    "pytest>=8.0",
+]
 
 [tool.maturin]
 manifest-path = "crates/rscopulas-python/Cargo.toml"

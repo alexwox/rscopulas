@@ -8,14 +8,23 @@
 
 ## Install
 
+With [uv](https://docs.astral.sh/uv/), in a [uv project](https://docs.astral.sh/uv/guides/projects/) (recommended):
+
 ```bash
-pip install rscopulas
+uv add rscopulas
 ```
 
-Optional plotting helpers are available with:
+Optional plotting helpers (`viz` extra):
 
 ```bash
-pip install "rscopulas[viz]"
+uv add "rscopulas[viz]"
+```
+
+If you are not using a uv project, install the same packages as with pip:
+
+```bash
+uv pip install rscopulas
+uv pip install "rscopulas[viz]"
 ```
 
 ## Included models

@@ -34,8 +34,13 @@
 
 ## Quick start — Python
 
+Install with [uv](https://docs.astral.sh/uv/) using the [project workflow](https://docs.astral.sh/uv/guides/projects/) (lockfile + `uv sync` / `uv run`):
+
+- **In a uv project** (recommended): `uv add rscopulas` (adds a dependency and updates `uv.lock`).
+- **Without a project** (pip-style): `uv pip install rscopulas`.
+
 ```bash
-python -m pip install -U rscopulas
+uv add rscopulas
 ```
 
 Minimal fit:
@@ -50,23 +55,22 @@ print("AIC:", fit.diagnostics.aic)
 print("sample:\n", fit.model.sample(4, seed=7))
 ```
 
-For local development from this repository:
+For local development from this repository, use [uv sync](https://docs.astral.sh/uv/concepts/projects/sync/) so the lockfile and `.venv` stay aligned (see `uv.lock` in the repo root):
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -e ".[dev,viz]"
-maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
-pytest
+uv sync --all-extras
+uv run maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
+uv run pytest
 ```
 
-**Example scripts** (after installing `rscopulas`; use `pip install -U "rscopulas[viz]"` for the plotting scripts, or local `maturin develop` while developing):
+`uv sync` installs this package in editable mode and pulls the **dev** dependency group (pytest, maturin); `--all-extras` adds the optional **`viz`** extra (matplotlib) for plotting examples.
+
+**Example scripts** (after `uv sync --all-extras` and `uv run maturin develop`; or install `rscopulas[viz]` from PyPI when you only need plotting):
 
 ```bash
-python python/examples/quickstart.py
-python python/examples/copula_visualisation.py
-python python/examples/copula_gallery.py
+uv run python python/examples/quickstart.py
+uv run python python/examples/copula_visualisation.py
+uv run python python/examples/copula_gallery.py
 ```
 
 Gallery figures are written under `python/examples/output/`; see [docs/examples.md](docs/examples.md).

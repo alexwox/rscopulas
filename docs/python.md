@@ -33,7 +33,7 @@ Full detail: [hac.md](hac.md).
 
 ## Plotting (optional)
 
-Install with the `viz` extra (`pip install "rscopulas[viz]"`). For local repo development, use the editable install plus `maturin develop`. Import from `rscopulas.plotting`:
+Install with the `viz` extra (`uv add "rscopulas[viz]"` in a uv project, or `uv sync --extra viz` in this repo). For local repo development, run `uv sync` then `uv run maturin develop`. Import from `rscopulas.plotting`:
 
 - `plot_density`, `plot_scatter`, `plot_vine_structure`
 
@@ -44,7 +44,7 @@ The base package does not depend on Matplotlib.
 `python/examples/copula_gallery.py` generates one PNG per model kind under `python/examples/output/`. These files are **versioned as documentation assets** so the README and gallery stay in sync without running the script. Regenerate after behavior or plotting changes:
 
 ```bash
-python python/examples/copula_gallery.py
+uv run python python/examples/copula_gallery.py
 ```
 
 See [examples.md](examples.md).
