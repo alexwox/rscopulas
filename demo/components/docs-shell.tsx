@@ -5,29 +5,7 @@ import Link from "next/link";
 
 import { getDocsConfig, getDocNavEntries, getPageNeighbors, getTabLinks } from "@/lib/docs";
 
-function getLogoSource(
-  logo:
-    | string
-    | {
-        light?: string;
-        dark?: string;
-        href?: string;
-      }
-    | undefined,
-) {
-  if (!logo) {
-    return null;
-  }
-
-  if (typeof logo === "string") {
-    return { src: logo, href: "/" };
-  }
-
-  return {
-    src: logo.light ?? logo.dark ?? null,
-    href: logo.href ?? "/",
-  };
-}
+const DEMO_LOGO_SRC = "/rscopulas-logo.png";
 
 export async function DocsShell({
   currentSlug,
@@ -54,23 +32,21 @@ export async function DocsShell({
     config.navigation.tabs.find((tab) => tab.tab === currentTab) ??
     config.navigation.tabs[0];
   const neighbors = currentSlug ? await getPageNeighbors(currentSlug) : null;
-  const logo = getLogoSource(config.logo);
+  const logoHref =
+    typeof config.logo === "object" && config.logo?.href ? config.logo.href : "/";
 
   return (
     <div className="docs-shell">
       <header className="topbar">
         <div className="brand-row">
-          <Link href={logo?.href ?? "/"} className="brand-link">
-            {logo?.src ? (
-              <Image
-                src={logo.src}
-                alt={config.name}
-                width={36}
-                height={36}
-                className="brand-image"
-                unoptimized
-              />
-            ) : null}
+          <Link href={logoHref} className="brand-link">
+            <Image
+              src={DEMO_LOGO_SRC}
+              alt={config.name}
+              width={40}
+              height={40}
+              className="brand-image"
+            />
             <span>{config.name}</span>
           </Link>
           <nav className="tab-links" aria-label="Top navigation">
