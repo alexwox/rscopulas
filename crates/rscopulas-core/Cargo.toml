@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/rscopulas-core"
+readme = "README.md"
+description = "Core Rust library for fitting, evaluating, and sampling copula models and vine copulas"
+keywords = ["copula", "statistics", "vines", "dependence", "probability"]
+categories = ["mathematics", "science"]
 
 [features]
 default = []
@@ -14,7 +21,7 @@ metal = ["rscopulas-accel/metal"]
 ndarray.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
-rscopulas-accel = { path = "../rscopulas-accel" }
+rscopulas-accel.workspace = true
 serde.workspace = true
 statrs.workspace = true
 thiserror.workspace = true

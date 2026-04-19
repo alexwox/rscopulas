@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/rscopulas-accel"
+readme = "README.md"
+description = "Acceleration support crate for rscopulas CPU parallelism and narrow CUDA or Metal kernels"
+keywords = ["copula", "cuda", "metal", "parallel", "statistics"]
+categories = ["mathematics", "science"]
 
 [features]
 default = []

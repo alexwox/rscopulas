@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PyO3 extension crate used to build the rscopulas Python package"
+publish = false
 
 [lib]
 name = "_rscopulas"
@@ -14,5 +18,5 @@ ndarray.workspace = true
 numpy = "0.28.0"
 pyo3 = { version = "0.28.3", features = ["extension-module"] }
 rand.workspace = true
-rscopulas-core = { path = "../rscopulas-core" }
+rscopulas-core.workspace = true
 
