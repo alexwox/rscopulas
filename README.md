@@ -7,6 +7,7 @@
 **Copula modeling for Python and Rust** on the same core: fit, score, and sample dependence structures from **pseudo-observations** in the open unit hypercube
 `(0, 1)^d`, with explicit validation, diagnostics, and reference-backed tests.
 
+**Up to ~100× faster** than R’s [`copula`](https://cran.r-project.org/package=copula) / [`VineCopula`](https://cran.r-project.org/package=VineCopula) stack on the mixed R-vine `log_pdf` workload in our cross-language harness (see [Performance](#performance-and-benchmarking)).
 
 | Surface                     | Role                                                                                                                             |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -21,7 +22,7 @@
 - **Validated inputs** — Only finite values strictly inside `(0, 1)`; no silent coercion at the boundary.
 - **Single-family, pair, and vine copulas** — Gaussian, Student t, Archimedean families, **Khoudraji** asymmetric pair copulas, hierarchical Archimedean (HAC), and C-/D-/R-vines with mixed pair families.
 - **Fast Rust core for Python and Rust users** — Heavy vine work runs in `rscopulas`, so Python users keep a NumPy-first API without falling back to pure-Python orchestration on the hot path.
-- **Competitive with established R tooling on the benchmarked vine workloads** — On the shared mixed R-vine harness in this repo, the current Rust and Python implementations both beat `VineCopula`/R on `fit`, `sample`, and `log_pdf`.
+- **Large speedups vs R on the benchmarked vine workloads** — On the shared mixed R-vine harness (`python benchmarks/run.py`), mean iteration time vs `VineCopula`/R is about **3–4× faster** for `fit` and `sample`, and about **100× faster** for `log_pdf` (Rust and Python track each other; see Performance below).
 - **Diagnostics** — Log-likelihood, AIC, BIC, convergence, iteration count on fitted models.
 - **Reference fixtures** — JSON fixtures checked against R packages `copula` and `VineCopula`; see [docs/specs.md](docs/specs.md).
 - **Benchmarks** — Cross-language harness (Rust, Python, R) plus Criterion benches; see [docs/benchmarks.md](docs/benchmarks.md).
@@ -112,13 +113,15 @@ Runnable examples live under `crates/rscopulas-core/examples/` (e.g. `cargo run 
 - **Cross-language wall times** (Rust vs Python vs R on shared fixtures): `python benchmarks/run.py` — details in [benchmarks/README.md](benchmarks/README.md) and [docs/benchmarks.md](docs/benchmarks.md).
 - **Criterion microbenchmarks** (Rust, manifest-driven where applicable): `cargo bench -p rscopulas` (see crate benches).
 
-Current mixed R-vine harness results on the benchmark runner used during development show why this library is attractive even if your baseline is `VineCopula` in R or an existing Python copula stack:
+Representative mixed R-vine harness results (same fixture and iteration counts for each language; **speedup** = R mean time ÷ ours, so higher is better):
 
-- **Mixed R-vine fit** — Python `6.450ms`, Rust `7.091ms`, R `22.140ms`
-- **Mixed R-vine sample** — Python `27.939ms`, Rust `28.445ms`, R `112.870ms`
-- **Mixed R-vine log_pdf** — Python `23.481us`, Rust `22.858us`, R `2.596ms`
+| Workload | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
+| --- | ---: | ---: | --- |
+| **Fit** | **3.1×** | **3.4×** | 7.1 ms / 6.5 ms / 22.1 ms |
+| **Sample** | **4.0×** | **4.0×** | 28.4 ms / 27.9 ms / 112.9 ms |
+| **`log_pdf`** | **114×** | **111×** | 22.9 µs / 23.5 µs / 2.60 ms |
 
-That means you can use the Python API and still get the Rust speedups, instead of trading ergonomics for performance.
+Those multiples are from one development machine run (2026-04-18). Reproduce with `python benchmarks/run.py` and read `benchmarks/output/latest.md` locally—numbers depend on CPU and R package versions. They show you can keep the **Python API** and still sit on the same fast Rust core instead of trading ergonomics for performance.
 
 Do not compare harness wall times to Criterion reports directly; methodology differs. [docs/benchmarks.md](docs/benchmarks.md) explains both.
 
