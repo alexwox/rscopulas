@@ -1,0 +1,65 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "rscopulas",
+  "description": "Copula modeling for Python and Rust",
+  "colors": {
+    "primary": "#1e40af",
+    "light": "#3b82f6",
+    "dark": "#1e3a8a"
+  },
+  "logo": {
+    "light": "https://pub-ca706ca75c8a4972b721945607f0ff01.r2.dev/rscopulas-logo.png",
+    "dark": "https://pub-ca706ca75c8a4972b721945607f0ff01.r2.dev/rscopulas-logo.png",
+    "href": "https://github.com/alexwox/rscopulas"
+  },
+  "favicon": "https://pub-ca706ca75c8a4972b721945607f0ff01.r2.dev/rscopulas-logo.png",
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/alexwox/rscopulas"
+      },
+      {
+        "label": "PyPI",
+        "href": "https://pypi.org/project/rscopulas/"
+      }
+    ]
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "docs/getting-started",
+              "docs/python",
+              "docs/rust"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "docs/vines",
+              "docs/pair-copulas",
+              "docs/khoudraji",
+              "docs/hac",
+              "docs/examples"
+            ]
+          },
+          {
+            "group": "Performance & reference",
+            "pages": ["docs/benchmarks", "docs/specs"]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/alexwox/rscopulas"
+    }
+  }
+}
