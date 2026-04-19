@@ -1,0 +1,125 @@
+---
+title: "Pseudo-Observations: Preparing Data for Copula Fitting"
+sidebarTitle: "Pseudo-Observations"
+description: "Learn what pseudo-observations are, why rscopulas requires them, and how to transform raw data into valid uniform inputs using rank-based or parametric methods."
+---
+
+Before you can fit any copula model with rscopulas, you need to transform your raw data into **pseudo-observations** — values strictly in the open unit interval `(0, 1)`. rscopulas does not estimate marginal distributions for you; that step is your responsibility. This design keeps the library focused on dependence modeling and gives you full control over how each margin is handled.
+
+## What are pseudo-observations?
+
+A pseudo-observation is a probability-transformed value representing where a data point falls in its marginal distribution. For a dataset with `n` rows and `d` columns, you produce an `(n, d)` matrix `U` where every entry satisfies `0 < u < 1`. Each column of `U` is a uniform-looking representation of one margin; the copula captures the dependence structure between those margins.
+
+Pseudo-observations live strictly inside `(0, 1)` — not at the boundary. Values equal to 0 or 1 are invalid because they correspond to probability-zero or probability-one events that cause numerical problems in copula densities.
+
+## Methods for creating pseudo-observations
+
+There are three standard approaches, depending on how much you know about your data's marginal distributions.
+
+<AccordionGroup>
+  <Accordion title="Rank-based (recommended for unknown marginals)">
+    The rank-based approach makes no assumptions about the shape of each marginal distribution. You rank the observations within each column and divide by `n + 1` (the Hazen correction) to keep values away from 0 and 1.
+
+    This is the most common choice for exploratory analysis or when you cannot justify a parametric marginal model.
+
+    ```python
+    import numpy as np
+
+    # raw multivariate data, shape (n, d)
+    X = np.array([[1.2, 3.4], [2.5, 1.1], [0.8, 4.2], [3.1, 2.9]])
+    n = X.shape[0]
+    # rank-based pseudo-observations (Hazen correction)
+    U = np.argsort(np.argsort(X, axis=0), axis=0).astype(float) + 1
+    U = U / (n + 1)
+    print(U)
+    ```
+
+    The double `argsort` converts raw values to dense ranks (starting from 1) column-wise. Dividing by `n + 1` maps ranks to `(0, 1)` without reaching the boundary.
+  </Accordion>
+
+  <Accordion title="Empirical CDF">
+    If you prefer the empirical CDF directly, you can use `scipy.stats.rankdata` with `method='average'` to handle ties, then divide by `n + 1`. The result is equivalent to the rank-based approach but uses SciPy's tie-handling rules.
+
+    ```python
+    import numpy as np
+    from scipy.stats import rankdata
+
+    X = np.array([[1.2, 3.4], [2.5, 1.1], [0.8, 4.2], [3.1, 2.9]])
+    n = X.shape[0]
+    U = np.apply_along_axis(lambda col: rankdata(col, method='average'), axis=0, arr=X)
+    U = U / (n + 1)
+    print(U)
+    ```
+  </Accordion>
+
+  <Accordion title="Parametric (known marginal distribution)">
+    If you know the marginal distribution for a column — for example, that it follows a normal or exponential distribution — fit that distribution to the column and evaluate its CDF at each observation. The result is already in `(0, 1)` for distributions with support on the full real line.
+
+    ```python
+    import numpy as np
+    from scipy.stats import norm
+
+    X = np.array([[1.2, 3.4], [2.5, 1.1], [0.8, 4.2], [3.1, 2.9]])
+
+    # fit normal marginals column-wise
+    U = np.column_stack([
+        norm.cdf(X[:, j], loc=X[:, j].mean(), scale=X[:, j].std(ddof=1))
+        for j in range(X.shape[1])
+    ])
+    print(U)
+    ```
+
+    <Warning>
+      Parametric CDF values can land exactly at 0 or 1 for distributions with bounded support (such as uniform or beta). Clip values before passing them to rscopulas: `U = np.clip(U, 1e-12, 1 - 1e-12)`.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## Input requirements
+
+rscopulas enforces strict validation on all input arrays. Any violation raises an error immediately — no silent coercion or boundary clamping.
+
+<Steps>
+  <Step title="Type: float64">
+    Pass a NumPy array with `dtype=np.float64`. Integer arrays and other float types are not accepted directly; convert first with `data.astype(np.float64)`.
+  </Step>
+  <Step title="Shape: 2D matrix">
+    The input must be a 2D array with shape `(n, d)` — `n` observations and `d` dimensions. A 1D array raises a `ValueError`.
+  </Step>
+  <Step title="Values strictly in (0, 1)">
+    Every entry must satisfy `0 < u < 1`. Values at or outside the boundary, `NaN`, and `Inf` are all rejected.
+  </Step>
+</Steps>
+
+### Python errors
+
+In Python, invalid input raises `InvalidInputError`. Check that your transformation produces no boundary values before calling `.fit()`:
+
+```python
+import numpy as np
+
+U = your_pseudo_obs_matrix  # shape (n, d), dtype float64
+
+assert np.all(U > 0) and np.all(U < 1), "values outside (0, 1) detected"
+assert not np.any(np.isnan(U)), "NaN detected"
+assert not np.any(np.isinf(U)), "Inf detected"
+```
+
+### Rust errors
+
+In Rust, `PseudoObs::new()` validates the array at construction time and returns an `Err` for any invalid entry:
+
+```rust
+use ndarray::array;
+use rscopulas::PseudoObs;
+
+let data = PseudoObs::new(array![
+    [0.12_f64, 0.18],
+    [0.21, 0.25],
+    [0.82, 0.79],
+])?; // returns Err if any value is outside (0, 1) or non-finite
+```
+
+<Note>
+  Once you have a valid pseudo-observation matrix, pass it directly to any model's `.fit()` method. See [Copula Families](/concepts/copula-families) for an overview of available models.
+</Note>

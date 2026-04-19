@@ -1,0 +1,119 @@
+---
+title: "Fit Hierarchical Archimedean Copulas (HAC)"
+sidebarTitle: "HAC"
+description: "Build, fit, and evaluate nested Archimedean copula trees in rscopulas. Understand model structure, density evaluation paths, and sampling reliability."
+---
+
+A hierarchical Archimedean copula (HAC) extends the standard multivariate Archimedean copula by allowing a tree of nested Archimedean nodes — each node carries its own family and parameter, and leaves represent individual variables. This lets you capture group-level dependence structures that a single flat Archimedean copula cannot represent. rscopulas exposes HACs through `HierarchicalArchimedeanCopula` in both Python and Rust.
+
+## Model structure
+
+A HAC in rscopulas is a tree where:
+
+- Each **internal node** carries an Archimedean **family** (`"clayton"`, `"frank"`, or `"gumbel"`) and a scalar **parameter** `theta`.
+- Each **leaf** is a column index `0 … d-1` that identifies a pseudo-observation dimension.
+- Input data must be **pseudo-observations** — values strictly in `(0, 1)` — consistent with every other model in the library.
+
+The tree can be as shallow as a single Archimedean node over all leaves (a classical exchangeable Archimedean copula) or as deep as you need, with inner clusters having tighter dependence than the outer root.
+
+## Fitting from data
+
+`HierarchicalArchimedeanCopula.fit()` discovers tree structure and fits parameters from pseudo-observation data. Pass a `family_set` to restrict which Archimedean families the fitter considers.
+
+```python
+import numpy as np
+from rscopulas import HierarchicalArchimedeanCopula
+
+data = np.array(
+    [[0.12, 0.18, 0.21, 0.15], [0.21, 0.25, 0.29, 0.22],
+     [0.35, 0.42, 0.39, 0.44], [0.48, 0.51, 0.46, 0.53],
+     [0.68, 0.73, 0.69, 0.71], [0.82, 0.79, 0.76, 0.80]],
+    dtype=np.float64,
+)
+fit = HierarchicalArchimedeanCopula.fit(data, family_set=["gumbel", "clayton"])
+print("tree:", fit.model.tree)
+print("families:", fit.model.families)
+print("parameters:", fit.model.parameters)
+print("AIC:", fit.diagnostics.aic)
+```
+
+<AccordionGroup>
+  <Accordion title="fit() parameters">
+    | Parameter | Default | Description |
+    | --- | --- | --- |
+    | `family_set` | `None` (all families) | List of Archimedean family names to consider: `"clayton"`, `"frank"`, `"gumbel"`. |
+    | `structure_method` | `"agglomerative_tau_then_collapse"` | Algorithm for discovering tree structure from data. |
+    | `fit_method` | `"recursive_mle"` | Parameter estimation method applied to the discovered structure. |
+    | `max_iter` | `500` | Maximum iterations for the optimizer at each node. |
+  </Accordion>
+</AccordionGroup>
+
+## Constructing from a known tree
+
+If you already know the dependence structure, use `HierarchicalArchimedeanCopula.from_tree()` with a nested dict. Each node specifies `family`, `theta`, and `children`; children can be integer leaf indices or further nested nodes.
+
+```python
+from rscopulas import HierarchicalArchimedeanCopula
+
+tree = {
+    "family": "gumbel",
+    "theta": 2.0,
+    "children": [
+        0,
+        1,
+        {"family": "gumbel", "theta": 3.0, "children": [2, 3]},
+    ],
+}
+model = HierarchicalArchimedeanCopula.from_tree(tree)
+```
+
+This creates a 4-dimensional HAC where variables 2 and 3 share a tighter inner Gumbel cluster (θ = 3.0) nested inside a broader outer Gumbel (θ = 2.0) that also includes variables 0 and 1.
+
+## Density evaluation
+
+rscopulas uses two code paths for `log_pdf` depending on the tree shape:
+
+- **Exchangeable fast path** — When the model is a single Archimedean node whose children are all leaves (a classical flat structure), density evaluation uses the same closed-form implementation as `ClaytonCopula`, `FrankCopula`, or `GumbelCopula`. This path is exact and fast.
+- **Composite evaluation** — For deeper nested trees, the implementation evaluates a composite expression built from pair-copula terms associated with the tree structure. This is the intended construction for general HAC estimation workflows.
+
+Use the `is_exact` and `exact_loglik` properties to check which path applies to your model:
+
+```python
+print("is_exact:", model.is_exact)
+print("exact_loglik:", model.exact_loglik)
+```
+
+`is_exact` is `True` when the tree reduces to a single exchangeable Archimedean fan over all leaves. `exact_loglik` reflects whether the exchangeable closed-form log-likelihood is in use. For nested trees, both will be `False` and the composite path runs instead.
+
+## Sampling
+
+<Warning>
+**Mixed-family nesting can produce degenerate samples.** If a parent node and a child node use *different* Archimedean families (for example, Gumbel above Clayton), sampling goes through a numerical Laplace inversion path that is not robust in the current implementation. That path can produce coordinates stuck near 1 even when `log_pdf` returns finite values. Do not rely on `sample()` for mixed-family HAC trees for inference, calibration, or publication-quality output until this limitation is resolved.
+</Warning>
+
+### Reliable scenarios for Monte Carlo use
+
+Two scenarios are validated and safe to use today:
+
+- **Exchangeable Archimedean trees** — A single node over all leaves. Equivalent to a standard multivariate Archimedean copula; sampling is the same code path as `ClaytonCopula`, `FrankCopula`, or `GumbelCopula`.
+- **Nested same-family Gumbel** — Inner Gumbel clusters nested under an outer Gumbel root. This uses a closed-form frailty update for the inner group. Simulation tests verify that samples stay in `(0, 1)` and that Kendall's tau blocks are consistent with the tree structure.
+
+For this reason, rscopulas example scripts use nested Gumbel exclusively when demonstrating HAC sampling.
+
+<Tip>
+If your fitted tree contains mixed families, you can still use `log_pdf` for likelihood evaluation. Reserve `sample()` for exchangeable or nested same-family Gumbel configurations.
+</Tip>
+
+## Fit diagnostics
+
+`fit()` returns a `FitResult` with a `diagnostics` object:
+
+| Field | Description |
+| --- | --- |
+| `diagnostics.loglik` | Log-likelihood of the fitted model. |
+| `diagnostics.aic` | Akaike information criterion. |
+| `diagnostics.bic` | Bayesian information criterion. |
+| `diagnostics.converged` | Whether the optimizer converged at each node. |
+| `diagnostics.n_iter` | Total optimizer iterations used. |
+
+The same sampling caveats apply after fitting: if the fitter selects a mixed-family tree from `family_set`, treat `sample()` with the same caution described above.

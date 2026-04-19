@@ -1,0 +1,154 @@
+---
+title: "PairCopulaSpec — Bivariate Pair Kernels in Rust"
+sidebarTitle: "PairCopula"
+description: "Reference for PairCopulaSpec, PairCopulaParams, Rotation, and Khoudraji asymmetric pair copulas with log_pdf and h-function methods."
+---
+
+`PairCopulaSpec` is the low-level building block for vine copulas. It fully specifies a bivariate pair-copula kernel: the family, the rotation applied to the inputs, and the parameters. You can construct and evaluate pair copulas directly without fitting a full vine, which is useful for prototyping, testing, or building custom vine structures via `VineCopula::from_trees`.
+
+## PairCopulaSpec
+
+```rust
+pub struct PairCopulaSpec {
+    pub family: PairCopulaFamily,
+    pub rotation: Rotation,
+    pub params: PairCopulaParams,
+}
+```
+
+All three fields are public. Construct a spec by filling them directly:
+
+```rust
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+
+let spec = PairCopulaSpec {
+    family: PairCopulaFamily::Clayton,
+    rotation: Rotation::R90,
+    params: PairCopulaParams::One(1.4),
+};
+```
+
+### PairCopulaFamily
+
+| Variant | Parameter type | Notes |
+|---------|---------------|-------|
+| `Independence` | `PairCopulaParams::None` | log-density is always 0. |
+| `Gaussian` | `PairCopulaParams::One(rho)` | Correlation `rho` in `(-1, 1)`. |
+| `StudentT` | `PairCopulaParams::Two(rho, nu)` | Correlation and degrees of freedom. |
+| `Clayton` | `PairCopulaParams::One(theta)` | `theta > 0`. |
+| `Frank` | `PairCopulaParams::One(theta)` | `theta > 0`. |
+| `Gumbel` | `PairCopulaParams::One(theta)` | `theta >= 1`. |
+| `Khoudraji` | `PairCopulaParams::Khoudraji(...)` | Composed from two base specs. Use `PairCopulaSpec::khoudraji(...)`. |
+
+### PairCopulaParams
+
+```rust
+pub enum PairCopulaParams {
+    None,                      // Independence
+    One(f64),                  // Single-parameter families
+    Two(f64, f64),             // StudentT: (rho, nu)
+    Khoudraji(KhoudrajiParams),
+}
+```
+
+### Rotation
+
+Rotations reorient the copula kernel to capture dependence in different quadrants:
+
+| Variant | Effect |
+|---------|--------|
+| `R0` | No rotation. Captures positive dependence in lower-left tail (Clayton). |
+| `R90` | 90° rotation. Captures negative dependence or upper-left tail. |
+| `R180` | 180° rotation. Captures positive dependence in upper-right tail. |
+| `R270` | 270° rotation. Captures negative dependence or lower-right tail. |
+
+Gaussian, Student t, Frank, and Independence do not need rotation; use `Rotation::R0` for these.
+
+## Methods on PairCopulaSpec
+
+### log_pdf
+
+Evaluates the bivariate log-density at a single point `(u1, u2)`:
+
+```rust
+pub fn log_pdf(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError>
+```
+
+`clip_eps` is the boundary clipping tolerance. Use `1e-12` as the standard value.
+
+### Conditional h-functions
+
+The h-functions are used internally by vine fitting and evaluation, but are also available directly:
+
+| Method | Description |
+|--------|-------------|
+| `cond_first_given_second(u1, u2, clip_eps)` | h₁|₂(u1 \| u2) |
+| `cond_second_given_first(u1, u2, clip_eps)` | h₂|₁(u2 \| u1) |
+| `inv_first_given_second(p, u2, clip_eps)` | Inverse h-function for the first margin |
+| `inv_second_given_first(u1, p, clip_eps)` | Inverse h-function for the second margin |
+
+### Khoudraji constructor
+
+Khoudraji is a device for composing two base pair-copulas into an asymmetric bivariate model. Use the static constructor rather than filling `params` directly:
+
+```rust
+pub fn khoudraji(
+    first: PairCopulaSpec,
+    second: PairCopulaSpec,
+    shape_first: f64,
+    shape_second: f64,
+) -> Result<PairCopulaSpec, CopulaError>
+```
+
+Shape parameters must lie in `[0, 1]`. Nested Khoudraji (using `Khoudraji` as a base family) is not supported and returns an error.
+
+## Clayton example
+
+```rust
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let spec = PairCopulaSpec {
+        family: PairCopulaFamily::Clayton,
+        rotation: Rotation::R90,
+        params: PairCopulaParams::One(1.4),
+    };
+    println!("log_pdf = {}", spec.log_pdf(0.32, 0.77, 1e-12)?);
+    Ok(())
+}
+```
+
+## Khoudraji example
+
+```rust
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let first = PairCopulaSpec {
+        family: PairCopulaFamily::Gaussian,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(0.45),
+    };
+    let second = PairCopulaSpec {
+        family: PairCopulaFamily::Clayton,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(2.0),
+    };
+    let khoudraji = PairCopulaSpec::khoudraji(first, second, 0.35, 0.80)?;
+    println!("Khoudraji log_pdf = {}", khoudraji.log_pdf(0.32, 0.77, 1e-12)?);
+    Ok(())
+}
+```
+
+## Additional helpers
+
+| Method | Description |
+|--------|-------------|
+| `PairCopulaSpec::independence()` | Returns an independence spec (`R0`, no parameters). |
+| `.parameter_count()` | Number of free parameters in this spec. |
+| `.flat_parameters()` | Flattened `Vec<f64>` of all parameter values. |
+| `.swap_axes()` | Swaps `R90` ↔ `R270` while preserving the represented copula. |
+
+<Info>
+`PairCopulaSpec` is `Clone`, `Debug`, `Serialize`, and `Deserialize`. Vine structures serialize all edge specs, so you can round-trip a fitted vine through JSON using `serde_json`.
+</Info>

@@ -1,0 +1,84 @@
+---
+title: "rscopulas Performance: Benchmarks vs R"
+sidebarTitle: "Benchmarks"
+description: "rscopulas cross-language benchmarks versus R, plus Criterion microbenchmarks. See measured speedups for fit, sample, and log_pdf on mixed R-vine workloads."
+---
+
+rscopulas includes two complementary benchmarking surfaces: a cross-language harness that measures wall-clock time for Rust, Python, and R on identical inputs, and Criterion microbenchmarks that give per-iteration statistics for Rust-only code paths. The two surfaces use different methodologies — do not compare numbers from one directly against the other.
+
+## Cross-language harness results
+
+The table below shows representative results from the mixed R-vine workload in the cross-language harness. Each row uses the same fixture JSON and iteration counts for all three implementations. **Speedup** is R mean time divided by rscopulas mean time — higher is better.
+
+| Workload | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
+| --- | ---: | ---: | --- |
+| **Fit** | **3.1×** | **3.4×** | 7.1 ms / 6.5 ms / 22.1 ms |
+| **Sample** | **4.0×** | **4.0×** | 28.4 ms / 28.4 ms / 112.9 ms |
+| **`log_pdf`** | **114×** | **111×** | 22.9 µs / 23.5 µs / 2.60 ms |
+
+The Python and Rust numbers track each other closely because both call the same Rust core. The large `log_pdf` advantage comes from the vine density evaluation being entirely in Rust with no interpreter overhead on the hot path.
+
+<Note>
+These numbers are from a single development machine run on 2026-04-18. Results depend on CPU, memory bandwidth, and R package versions. Run the harness locally to get numbers relevant to your hardware.
+</Note>
+
+## Reproducing the benchmarks
+
+Both benchmark surfaces are available in the rscopulas source repository on [GitHub](https://github.com/alexwox/rscopulas).
+
+### Cross-language harness
+
+Clone the repository and run the harness from the root:
+
+```bash
+python benchmarks/run.py
+```
+
+Filter by language or workload:
+
+```bash
+python benchmarks/run.py --implementation rust --case vine
+```
+
+Results are written locally to `benchmarks/output/latest.md`.
+
+### Criterion microbenchmarks (Rust only)
+
+```bash
+cargo bench -p rscopulas
+```
+
+Criterion runs the Rust code paths and prints per-iteration statistics. Use this surface to isolate individual Rust functions rather than comparing across languages.
+
+## How the harness works
+
+The cross-language harness orchestrates three runners — Rust, Python, and R — over a shared manifest that defines:
+
+- **Cases** — workload name, fixture data, and which implementations to run.
+- **Iteration counts** — each case specifies how many repetitions to time.
+- **Fixture JSON** — the same input data is loaded by all three runners, guaranteeing apples-to-apples comparisons.
+
+The harness covers the following workloads by default:
+
+<AccordionGroup>
+  <Accordion title="Single-family copulas">
+    `log_pdf`, `fit`, and `sample` for the single-family Archimedean and Gaussian models.
+  </Accordion>
+  <Accordion title="Pair copula kernels">
+    Density and h-function / h-inverse kernels for pair copulas, including the Khoudraji asymmetric composition (`pair_khoudraji_kernels`).
+  </Accordion>
+  <Accordion title="Mixed R-vine">
+    End-to-end `log_pdf`, `sample`, and `fit` for a mixed-family R-vine — the workload shown in the results table above. This is the most realistic benchmark because it exercises the full vine traversal and pair-copula dispatch.
+  </Accordion>
+</AccordionGroup>
+
+## Harness vs Criterion — what each measures
+
+| | Cross-language harness | Criterion |
+| --- | --- | --- |
+| Languages | Rust, Python, R | Rust only |
+| Overhead included | Interpreter startup, FFI, JSON fixture load | None — pure Rust |
+| Output | `benchmarks/output/latest.md` | Terminal / Criterion HTML reports |
+| Best for | Comparing rscopulas against R; regression tracking | Profiling individual Rust functions |
+
+Because the harness includes Python interpreter and FFI overhead in Python timings, and R package load time in R timings, harness wall times are higher than Criterion per-iteration times for equivalent Rust operations. Use Criterion when you want to isolate a specific Rust code path; use the harness when you want end-to-end comparisons across languages.

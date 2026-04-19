@@ -1,0 +1,118 @@
+---
+title: "Asymmetric Dependence with Khoudraji Copulas"
+sidebarTitle: "Khoudraji"
+description: "Khoudraji copulas combine two base pair kernels with shape parameters to capture dependence asymmetry that families like Gaussian or Clayton cannot represent."
+---
+
+Standard symmetric copula families — Gaussian, Clayton, Gumbel — assume the same degree of dependence in both directions of the bivariate distribution. Khoudraji's construction breaks that symmetry: it mixes two base pair copula kernels using power transforms of the uniform margins, controlled by two shape parameters. The result is a flexible asymmetric bivariate copula that you can use standalone or as an edge family inside a vine model.
+
+## How Khoudraji copulas work
+
+Given two base pair copulas `C₁` and `C₂` and shape parameters `δ₁, δ₂ ∈ (0, 1]`, the Khoudraji copula is defined as:
+
+```
+C(u, v) = C₁(u^δ₁, v^δ₂) · C₂(u^(1-δ₁), v^(1-δ₂))
+```
+
+When both shape parameters equal 1, the construction reduces to `C₁`. As they move away from 1, the two kernels are blended and the resulting density becomes asymmetric. This lets you capture, for example, stronger lower tail dependence on one side of the distribution than the other.
+
+## Building a Khoudraji copula in Python
+
+Use `PairCopula.from_khoudraji` and provide the two base family names, the shape parameters, and the parameters for each base copula:
+
+```python
+import numpy as np
+from rscopulas import PairCopula
+
+model = PairCopula.from_khoudraji(
+    "gaussian",
+    "clayton",
+    shape_1=0.35,
+    shape_2=0.8,
+    first_parameters=[0.45],
+    second_parameters=[2.0],
+)
+u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+print("log_pdf:", model.log_pdf(u1, u2))
+```
+
+The returned `PairCopula` supports the same interface as any other pair copula: `log_pdf`, `cond_first_given_second`, `cond_second_given_first`, and their inverses.
+
+## Shape parameters
+
+`shape_1` and `shape_2` each take a value in `(0, 1]`. They independently control how much of the asymmetry weight each margin carries:
+
+- Values close to `1` push most of the contribution toward `C₁`.
+- Values close to `0` push most of the contribution toward `C₂`.
+- Different values for `shape_1` and `shape_2` create asymmetry between the two margins.
+
+<Note>
+Shape parameters must be strictly greater than 0 and at most 1. Passing 0 will raise a validation error from the Rust core.
+</Note>
+
+## Supported base families
+
+The first and second base families can be any of the classical pair copula families:
+
+- `"gaussian"`
+- `"student_t"`
+- `"clayton"`
+- `"frank"`
+- `"gumbel"`
+- `"independence"`
+
+You can also pass `first_rotation` and `second_rotation` keyword arguments (`"R0"`, `"R90"`, `"R180"`, `"R270"`) to rotate either base copula before composition.
+
+## Using Khoudraji in vine fitting
+
+Include `"khoudraji"` in the `family_set` argument of any vine fit call. The fitter will consider Khoudraji alongside the other families on each edge and select it when it improves the criterion:
+
+```python
+from rscopulas import VineCopula
+import numpy as np
+
+data = np.array(
+    [[0.12, 0.18, 0.21], [0.21, 0.25, 0.29], [0.35, 0.42, 0.39],
+     [0.48, 0.51, 0.46], [0.68, 0.73, 0.69], [0.82, 0.79, 0.76]],
+    dtype=np.float64,
+)
+fit = VineCopula.fit_r(
+    data,
+    family_set=["independence", "gaussian", "clayton", "frank", "gumbel", "khoudraji"],
+    truncation_level=1,
+)
+print("structure:", fit.model.structure_kind)
+```
+
+When a Khoudraji copula is selected on an edge, the corresponding `VineEdgeInfo` will have `family="khoudraji"` and expose `shape_1`, `shape_2`, `base_copula_1`, and `base_copula_2` fields in addition to the standard edge properties.
+
+<Warning>
+Khoudraji fitting uses a bounded internal search over supported base families and runs on CPU only. On large vines with many edges, including `"khoudraji"` in the family set will noticeably increase fit time compared to classical families alone.
+</Warning>
+
+## Building a Khoudraji spec in Rust
+
+In Rust, construct a `PairCopulaSpec::khoudraji` by passing two base `PairCopulaSpec` instances and the shape parameters:
+
+```rust
+use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let first = PairCopulaSpec {
+        family: PairCopulaFamily::Gaussian,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(0.45),
+    };
+    let second = PairCopulaSpec {
+        family: PairCopulaFamily::Clayton,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(2.0),
+    };
+    let khoudraji = PairCopulaSpec::khoudraji(first, second, 0.35, 0.80)?;
+    println!("Khoudraji log_pdf = {}", khoudraji.log_pdf(0.32, 0.77, 1e-12)?);
+    Ok(())
+}
+```
+
+To include Khoudraji as a candidate in vine fitting, add `PairCopulaFamily::Khoudraji` to `VineFitOptions::family_set`. The Rust fitter uses the same bounded internal search as the Python interface.

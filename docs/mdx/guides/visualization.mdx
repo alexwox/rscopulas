@@ -1,0 +1,153 @@
+---
+title: "Visualize Copula Densities and Vine Structures"
+sidebarTitle: "Visualization"
+description: "Plot copula densities, pseudo-observation scatter plots, and vine structure matrices using the optional rscopulas[viz] extra and matplotlib helpers."
+---
+
+rscopulas ships an optional visualization layer in `rscopulas.plotting` that gives you three matplotlib-based helpers for exploring fitted models and pseudo-observation data. The base `rscopulas` package does not depend on matplotlib — plotting support is entirely opt-in through the `viz` extra. This keeps the core library lightweight when you only need fitting, scoring, and sampling.
+
+## Installation
+
+Install rscopulas with the `viz` extra to pull in matplotlib:
+
+<CodeGroup>
+
+```bash uv
+uv add "rscopulas[viz]"
+```
+
+```bash pip
+pip install "rscopulas[viz]"
+```
+
+</CodeGroup>
+
+If you're working from a clone of the rscopulas repository, `uv sync --all-extras` installs the extra alongside the dev dependencies.
+
+<Note>
+Importing from `rscopulas.plotting` without matplotlib installed raises an `ImportError` with installation instructions. The rest of the library is unaffected.
+</Note>
+
+## Available functions
+
+| Function | Purpose |
+| --- | --- |
+| `plot_density(model)` | Contour plot of a bivariate copula density evaluated on a grid. |
+| `plot_scatter(sample=..., model=...)` | Scatter plot of pseudo-observations, either passed directly or drawn from a model. |
+| `plot_vine_structure(vine_model)` | Heatmap of the vine structure matrix with pair-copula annotations. |
+
+<AccordionGroup>
+  <Accordion title="plot_density">
+    Evaluates `model.log_pdf` on a `grid_size × grid_size` grid over `(0.01, 0.99)^2` and draws filled contours. Only works on 2D models (`model.dim == 2`).
+
+    ```python
+    plot_density(model, grid_size=100, levels=10, cmap="viridis")
+    ```
+
+    | Parameter | Default | Description |
+    | --- | --- | --- |
+    | `model` | required | A copula model with `dim` and `log_pdf`. Must be bivariate. |
+    | `grid_size` | `100` | Number of grid points along each axis. |
+    | `levels` | `10` | Number of contour levels. |
+    | `cmap` | `"viridis"` | Matplotlib colormap name. |
+    | `ax` | `None` | Existing `Axes` to draw on; creates a new figure if `None`. |
+  </Accordion>
+  <Accordion title="plot_scatter">
+    Plots pseudo-observations as a scatter. Pass either a data array via `sample` or a model via `model` (samples `n` points internally). You cannot pass both.
+
+    ```python
+    plot_scatter(sample=data[:, :2])           # observed data
+    plot_scatter(model=fitted_model, n=500)    # samples from a model
+    ```
+
+    | Parameter | Default | Description |
+    | --- | --- | --- |
+    | `sample` | `None` | 2D array of pseudo-observations to plot directly. |
+    | `model` | `None` | Copula model to sample from. Mutually exclusive with `sample`. |
+    | `n` | `500` | Number of samples to draw when using `model`. |
+    | `seed` | `None` | Random seed passed to `model.sample()`. |
+    | `dims` | `(0, 1)` | Column indices to plot on x and y axes. |
+    | `ax` | `None` | Existing `Axes` to draw on. |
+  </Accordion>
+  <Accordion title="plot_vine_structure">
+    Renders the vine structure matrix as a heatmap and annotates it with a per-tree summary of conditioned pairs, families, rotations, and parameters.
+
+    ```python
+    plot_vine_structure(vine_model, annotate=True)
+    ```
+
+    | Parameter | Default | Description |
+    | --- | --- | --- |
+    | `vine_model` | required | A `VineCopula` model with `structure_info` and `trees`. |
+    | `annotate` | `True` | Whether to overlay node labels and a pair-copula summary. |
+    | `ax` | `None` | Existing `Axes` to draw on. |
+  </Accordion>
+</AccordionGroup>
+
+## Full example
+
+The following example fits a Gaussian copula to the first two columns of a small dataset, plots the density and a scatter of observed data, then fits an R-vine to all three columns and displays its structure matrix.
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+from rscopulas import GaussianCopula, VineCopula
+from rscopulas.plotting import plot_density, plot_scatter, plot_vine_structure
+
+data = np.array(
+    [
+        [0.12, 0.18, 0.21],
+        [0.21, 0.25, 0.29],
+        [0.27, 0.22, 0.31],
+        [0.35, 0.42, 0.39],
+        [0.48, 0.51, 0.46],
+        [0.56, 0.49, 0.58],
+        [0.68, 0.73, 0.69],
+        [0.82, 0.79, 0.76],
+    ],
+    dtype=np.float64,
+)
+gaussian_fit = GaussianCopula.fit(data[:, :2])
+plot_scatter(sample=data[:, :2])
+plot_density(gaussian_fit.model)
+vine_fit = VineCopula.fit_r(
+    data,
+    family_set=["independence", "gaussian", "clayton", "frank", "gumbel", "khoudraji"],
+    truncation_level=1,
+)
+plot_vine_structure(vine_fit.model)
+plt.show()
+```
+
+<Steps>
+  <Step title="Fit a bivariate Gaussian copula">
+    `GaussianCopula.fit(data[:, :2])` returns a `FitResult`; use `fit.model` to pass the model object to `plot_density`.
+  </Step>
+  <Step title="Plot observed pseudo-observations">
+    `plot_scatter(sample=data[:, :2])` draws a scatter of the raw pseudo-observation columns. Pass `model=...` instead to generate samples from a fitted model.
+  </Step>
+  <Step title="Plot the density contours">
+    `plot_density(gaussian_fit.model)` evaluates the bivariate density on a grid and draws filled contours. This only works for 2D models.
+  </Step>
+  <Step title="Fit an R-vine and show its structure">
+    `VineCopula.fit_r()` selects pair families by AIC. `plot_vine_structure(vine_fit.model)` renders the structure matrix and annotates each tree with its pair-copula assignments.
+  </Step>
+  <Step title="Display all figures">
+    Call `plt.show()` once at the end to render all open figures. Each plotting function creates a new figure if you don't pass an `ax` argument.
+  </Step>
+</Steps>
+
+## Using axes directly
+
+Every function accepts an optional `ax` parameter so you can compose plots into a single figure:
+
+```python
+import matplotlib.pyplot as plt
+from rscopulas.plotting import plot_density, plot_scatter
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+plot_scatter(sample=data[:, :2], ax=axes[0])
+plot_density(gaussian_fit.model, ax=axes[1])
+plt.tight_layout()
+plt.show()
+```

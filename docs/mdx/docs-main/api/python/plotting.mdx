@@ -1,0 +1,233 @@
+---
+title: "Plotting — Visualize Copula Densities and Structures"
+sidebarTitle: "Plotting"
+description: "API reference for rscopulas.plotting: plot_density for contour plots, plot_scatter for pseudo-observations, and plot_vine_structure for vine tree visualization."
+---
+
+The `rscopulas.plotting` module provides three functions for visualizing fitted copula models. The base `rscopulas` package does not depend on `matplotlib`, so these functions are only available after you install the optional `viz` extra. If you call any plotting function without `matplotlib` installed, you will get a clear `ImportError` with installation instructions.
+
+## Installation
+
+```bash
+uv add "rscopulas[viz]"
+```
+
+If you use pip directly:
+
+```bash
+pip install "rscopulas[viz]"
+```
+
+## Import
+
+```python
+from rscopulas.plotting import plot_density, plot_scatter, plot_vine_structure
+```
+
+---
+
+## plot_density
+
+Plot a filled contour map of the bivariate copula density over the unit square `[0, 1]²`. This function only supports models with `dim == 2`.
+
+```python
+plot_density(
+    model,
+    *,
+    ax=None,
+    grid_size=100,
+    levels=10,
+    clip_eps=1e-12,
+    cmap="viridis",
+)
+```
+
+<ParamField body="model" type="Any" required>
+  A fitted copula model with a `dim` property equal to `2` and a `log_pdf(data, *, clip_eps)` method. Any rscopulas model with `dim == 2` satisfies this interface.
+</ParamField>
+
+<ParamField body="ax" type="matplotlib.axes.Axes | None" default="None">
+  A `matplotlib` `Axes` object to draw on. If `None`, a new figure and axes are created automatically.
+</ParamField>
+
+<ParamField body="grid_size" type="int" default="100">
+  Number of points per axis in the evaluation grid. Larger values produce smoother contours at the cost of more computation.
+</ParamField>
+
+<ParamField body="levels" type="int" default="10">
+  Number of filled contour levels. The contour overlay uses half this value.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping passed to `log_pdf` to avoid evaluation at exact 0 or 1.
+</ParamField>
+
+<ParamField body="cmap" type="str" default='"viridis"'>
+  A `matplotlib` colormap name for the filled contours.
+</ParamField>
+
+<ResponseField name="return" type="matplotlib.axes.Axes">
+  The axes object, so you can further customize or save the figure.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import GaussianCopula
+from rscopulas.plotting import plot_density
+import matplotlib.pyplot as plt
+
+corr = np.array([[1.0, 0.7], [0.7, 1.0]])
+model = GaussianCopula.from_params(corr)
+
+ax = plot_density(model, grid_size=80, cmap="plasma")
+plt.savefig("gaussian_density.png", dpi=150, bbox_inches="tight")
+plt.show()
+```
+
+---
+
+## plot_scatter
+
+Plot pseudo-observations as a scatter plot. You can pass either an existing sample array or a model to draw samples from.
+
+```python
+plot_scatter(
+    *,
+    sample=None,
+    model=None,
+    n=500,
+    seed=None,
+    ax=None,
+    alpha=0.4,
+    s=12,
+    dims=(0, 1),
+)
+```
+
+<Warning>
+You must pass exactly one of `sample` or `model`. Passing both or neither raises a `ValueError`.
+</Warning>
+
+<ParamField body="sample" type="ArrayLike | None" default="None">
+  A 2-D array of pseudo-observations to plot directly. Mutually exclusive with `model`.
+</ParamField>
+
+<ParamField body="model" type="Any | None" default="None">
+  A fitted copula model with a `sample(n, *, seed)` method. The function draws `n` samples from the model before plotting. Mutually exclusive with `sample`.
+</ParamField>
+
+<ParamField body="n" type="int" default="500">
+  Number of samples to draw when `model` is provided.
+</ParamField>
+
+<ParamField body="seed" type="int | None" default="None">
+  Random seed for reproducibility when sampling from `model`.
+</ParamField>
+
+<ParamField body="ax" type="matplotlib.axes.Axes | None" default="None">
+  Axes to draw on. A new figure is created if `None`.
+</ParamField>
+
+<ParamField body="alpha" type="float" default="0.4">
+  Point opacity. Lower values reduce overplotting for large samples.
+</ParamField>
+
+<ParamField body="s" type="float" default="12">
+  Marker size in points squared, passed to `matplotlib`'s `scatter`.
+</ParamField>
+
+<ParamField body="dims" type="tuple[int, int]" default="(0, 1)">
+  Column indices to plot on the x and y axes. Useful for visualizing a 2-D slice of a higher-dimensional model.
+</ParamField>
+
+<ResponseField name="return" type="matplotlib.axes.Axes">
+  The axes object.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+
+```python from model
+import numpy as np
+from rscopulas import ClaytonCopula
+from rscopulas.plotting import plot_scatter
+
+model = ClaytonCopula.from_params(dim=2, theta=3.0)
+ax = plot_scatter(model=model, n=800, seed=1)
+```
+
+```python from array
+import numpy as np
+from rscopulas.plotting import plot_scatter
+
+rng = np.random.default_rng(0)
+sample = rng.uniform(0.01, 0.99, size=(600, 4))
+
+# Plot dimensions 1 and 3
+ax = plot_scatter(sample=sample, dims=(1, 3), alpha=0.3)
+```
+
+</CodeGroup>
+
+---
+
+## plot_vine_structure
+
+Visualize a fitted vine copula's structure matrix as a heatmap, with an optional annotation sidebar summarizing each tree level's edges and pair-copula families.
+
+```python
+plot_vine_structure(vine_model, *, ax=None, annotate=True)
+```
+
+<ParamField body="vine_model" type="VineCopula" required>
+  A fitted `VineCopula` instance. The model must have `structure_info` and `trees` attributes.
+</ParamField>
+
+<ParamField body="ax" type="matplotlib.axes.Axes | None" default="None">
+  Axes to draw on. A new figure is created if `None`.
+</ParamField>
+
+<ParamField body="annotate" type="bool" default="True">
+  When `True`, cell values are printed over the matrix heatmap and a monospace summary of each tree's edges is added to the right of the plot.
+</ParamField>
+
+<ResponseField name="return" type="matplotlib.axes.Axes">
+  The axes object.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import VineCopula
+from rscopulas.plotting import plot_vine_structure
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+data = rng.uniform(0.01, 0.99, size=(500, 4))
+
+result = VineCopula.fit_r(data, family_set=["gaussian", "clayton", "gumbel"])
+vine = result.model
+
+ax = plot_vine_structure(vine, annotate=True)
+plt.tight_layout()
+plt.savefig("vine_structure.png", dpi=150, bbox_inches="tight")
+plt.show()
+```
+
+---
+
+## Missing viz extra
+
+If you import from `rscopulas.plotting` without `matplotlib` installed, you will see:
+
+```
+ImportError: matplotlib is required for rscopulas plotting support.
+Install it with `uv add 'rscopulas[viz]'` (in a uv project),
+or `uv pip install 'rscopulas[viz]'` / `matplotlib`.
+```
+
+The error is raised lazily—only when you call a plotting function, not at import time.

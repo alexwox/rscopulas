@@ -1,0 +1,253 @@
+---
+title: "PairCopula — Bivariate Copula Building Block"
+sidebarTitle: "PairCopula"
+description: "API reference for PairCopula: constructors, h-functions, inverse h-functions, and properties for bivariate copula evaluation in rscopulas."
+---
+
+`PairCopula` represents a single bivariate copula and is the fundamental building block used inside vine models. You can construct a pair-copula from a family specification or as a Khoudraji asymmetrization of two base copulas. The class exposes both the log-density and the h-functions (conditional CDFs) needed for vine construction and sequential sampling.
+
+## Constructors
+
+### `PairCopula.from_spec(family, parameters=(), *, rotation="R0") → PairCopula`
+
+Construct a `PairCopula` from a family name and parameter list.
+
+<ParamField body="family" type="str" required>
+  Copula family. Valid values: `"independence"`, `"gaussian"`, `"student_t"`, `"clayton"`, `"frank"`, `"gumbel"`.
+</ParamField>
+
+<ParamField body="parameters" type="Sequence[float]" default="()">
+  Parameter values in the order expected by the family. For example, Gaussian takes one correlation value; Student-t takes a correlation and degrees-of-freedom.
+</ParamField>
+
+<ParamField body="rotation" type="str" default='"R0"'>
+  Rotation applied to the bivariate copula. Valid values: `"R0"` (no rotation), `"R90"`, `"R180"`, `"R270"`. Rotations let you model negative dependence or lower-tail dependence with families that are canonically upper-tail.
+</ParamField>
+
+<ResponseField name="return" type="PairCopula">
+  A ready-to-use `PairCopula` instance.
+</ResponseField>
+
+### `PairCopula.from_khoudraji(first_family, second_family, *, shape_1, shape_2, ...) → PairCopula`
+
+Construct a Khoudraji asymmetrized pair-copula from two base families.
+
+<ParamField body="first_family" type="str" required>
+  Family name for the first base copula.
+</ParamField>
+
+<ParamField body="second_family" type="str" required>
+  Family name for the second base copula.
+</ParamField>
+
+<ParamField body="shape_1" type="float" required>
+  Shape parameter controlling the weight of the first base copula. Must be in `(0, 1)`.
+</ParamField>
+
+<ParamField body="shape_2" type="float" required>
+  Shape parameter controlling the weight of the second base copula. Must be in `(0, 1)`.
+</ParamField>
+
+<ParamField body="first_parameters" type="Sequence[float]" default="()">
+  Parameters for the first base copula.
+</ParamField>
+
+<ParamField body="second_parameters" type="Sequence[float]" default="()">
+  Parameters for the second base copula.
+</ParamField>
+
+<ParamField body="rotation" type="str" default='"R0"'>
+  Overall rotation applied to the Khoudraji copula.
+</ParamField>
+
+<ParamField body="first_rotation" type="str" default='"R0"'>
+  Rotation applied to the first base copula.
+</ParamField>
+
+<ParamField body="second_rotation" type="str" default='"R0"'>
+  Rotation applied to the second base copula.
+</ParamField>
+
+<ResponseField name="return" type="PairCopula">
+  A ready-to-use Khoudraji `PairCopula` instance.
+</ResponseField>
+
+### Examples
+
+<CodeGroup>
+
+```python from_spec
+from rscopulas import PairCopula
+
+# Gaussian pair-copula with correlation 0.6
+gaussian = PairCopula.from_spec("gaussian", [0.6])
+
+# Clayton with 90-degree rotation (models negative dependence)
+clayton_neg = PairCopula.from_spec("clayton", [2.0], rotation="R90")
+
+# Independence copula
+indep = PairCopula.from_spec("independence")
+```
+
+```python from_khoudraji
+from rscopulas import PairCopula
+
+# Khoudraji copula combining Gumbel and Clayton
+khoudraji = PairCopula.from_khoudraji(
+    "gumbel",
+    "clayton",
+    shape_1=0.6,
+    shape_2=0.4,
+    first_parameters=[1.5],
+    second_parameters=[2.0],
+)
+```
+
+</CodeGroup>
+
+---
+
+## Instance methods
+
+### `log_pdf(u1, u2, *, clip_eps=1e-12) → ndarray`
+
+Evaluate the log-density of the pair-copula at paired observations.
+
+<ParamField body="u1" type="ArrayLike" required>
+  A 1-D array of values for the first variable, with values strictly in `(0, 1)`.
+</ParamField>
+
+<ParamField body="u2" type="ArrayLike" required>
+  A 1-D array of values for the second variable, same length as `u1`.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance applied before evaluation.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 1-D array of log-density values with length equal to `u1`.
+</ResponseField>
+
+### `cond_first_given_second(u1, u2, *, clip_eps=1e-12) → ndarray`
+
+Compute the h-function `h(u1 | u2)`: the conditional CDF of the first variable given the second.
+
+<ParamField body="u1" type="ArrayLike" required>
+  Values of the first variable.
+</ParamField>
+
+<ParamField body="u2" type="ArrayLike" required>
+  Conditioning values of the second variable.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  Conditional CDF values in `(0, 1)`.
+</ResponseField>
+
+### `cond_second_given_first(u1, u2, *, clip_eps=1e-12) → ndarray`
+
+Compute the h-function `h(u2 | u1)`: the conditional CDF of the second variable given the first.
+
+<ParamField body="u1" type="ArrayLike" required>
+  Conditioning values of the first variable.
+</ParamField>
+
+<ParamField body="u2" type="ArrayLike" required>
+  Values of the second variable.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  Conditional CDF values in `(0, 1)`.
+</ResponseField>
+
+### `inv_first_given_second(p, u2, *, clip_eps=1e-12) → ndarray`
+
+Inverse h-function: given a probability `p` and a conditioning value `u2`, return the quantile `u1` such that `h(u1 | u2) = p`.
+
+<ParamField body="p" type="ArrayLike" required>
+  Probability values in `(0, 1)`.
+</ParamField>
+
+<ParamField body="u2" type="ArrayLike" required>
+  Conditioning values of the second variable.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  Quantile values in `(0, 1)`.
+</ResponseField>
+
+### `inv_second_given_first(u1, p, *, clip_eps=1e-12) → ndarray`
+
+Inverse h-function: given a conditioning value `u1` and a probability `p`, return the quantile `u2` such that `h(u2 | u1) = p`.
+
+<ParamField body="u1" type="ArrayLike" required>
+  Conditioning values of the first variable.
+</ParamField>
+
+<ParamField body="p" type="ArrayLike" required>
+  Probability values in `(0, 1)`.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  Quantile values in `(0, 1)`.
+</ResponseField>
+
+### H-function example
+
+```python
+import numpy as np
+from rscopulas import PairCopula
+
+copula = PairCopula.from_spec("gaussian", [0.7])
+
+u1 = np.array([0.2, 0.5, 0.8])
+u2 = np.array([0.3, 0.5, 0.7])
+
+# Conditional CDF: P(U1 <= u1 | U2 = u2)
+h = copula.cond_first_given_second(u1, u2)
+
+# Inverse: recover u1 from h values
+u1_recovered = copula.inv_first_given_second(h, u2)
+print(np.allclose(u1, u1_recovered))  # True
+```
+
+---
+
+## Properties
+
+<ResponseField name="dim" type="int">
+  Always `2` for a pair-copula.
+</ResponseField>
+
+<ResponseField name="family" type="str">
+  The copula family name: `"gaussian"`, `"student_t"`, `"clayton"`, `"frank"`, `"gumbel"`, `"independence"`, or `"khoudraji"`.
+</ResponseField>
+
+<ResponseField name="rotation" type="str">
+  The rotation applied to the copula: `"R0"`, `"R90"`, `"R180"`, or `"R270"`.
+</ResponseField>
+
+<ResponseField name="parameters" type="tuple[float, ...]">
+  The fitted or specified parameter values.
+</ResponseField>
+
+<ResponseField name="spec" type="dict">
+  A serializable dict representation of the pair-copula specification, including family, rotation, and parameters. For Khoudraji copulas, the dict also contains `shape_1`, `shape_2`, `base_copula_1`, and `base_copula_2`.
+</ResponseField>

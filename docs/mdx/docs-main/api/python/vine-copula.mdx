@@ -1,0 +1,328 @@
+---
+title: "VineCopula Python API: Fit, Inspect, Sample"
+sidebarTitle: "VineCopula"
+description: "API reference for VineCopula: fit_r, fit_c, fit_d methods, Gaussian constructors, and tree inspection types VineStructureInfo, VineTreeInfo, VineEdgeInfo."
+---
+
+`VineCopula` implements pair-copula constructions (PCCs) in C-vine, D-vine, and R-vine structures. A vine model decomposes a multivariate distribution into a cascade of bivariate copulas arranged in a tree sequence. You fit a vine by choosing a structure kind (`fit_c`, `fit_d`, or `fit_r`) and optionally restricting the family set and selection criterion. You can also construct vines analytically from a Gaussian correlation matrix or from a fully specified tree list.
+
+## Fitting methods
+
+### `VineCopula.fit_r(data, *, ...) → FitResult[VineCopula]`
+
+Fit an R-vine—the most flexible structure kind, where the tree sequence is learned from data.
+
+### `VineCopula.fit_c(data, *, ...) → FitResult[VineCopula]`
+
+Fit a C-vine, where one variable acts as a central node at each tree level.
+
+### `VineCopula.fit_d(data, *, ...) → FitResult[VineCopula]`
+
+Fit a D-vine, where variables are arranged in a path at each tree level.
+
+All three fitting methods accept identical keyword arguments:
+
+<ParamField body="data" type="ArrayLike" required>
+  A 2-D array of pseudo-observations with shape `(n_samples, n_dims)` and `dtype=float64`. Values must be strictly in `(0, 1)`.
+</ParamField>
+
+<ParamField body="family_set" type="Sequence[str] | None" default="None">
+  Restrict which bivariate copula families are considered at each edge. Pass `None` to use all available families. Valid strings:
+
+  `"independence"`, `"gaussian"`, `"student_t"`, `"clayton"`, `"frank"`, `"gumbel"`, `"khoudraji"`
+</ParamField>
+
+<ParamField body="include_rotations" type="bool" default="True">
+  When `True`, rotated versions of asymmetric families (Clayton, Gumbel) are included in the candidate set. Disable to restrict to the canonical orientation.
+</ParamField>
+
+<ParamField body="criterion" type="str" default='"aic"'>
+  Information criterion used for pair-copula family selection at each edge. Valid values: `"aic"`, `"bic"`.
+</ParamField>
+
+<ParamField body="truncation_level" type="int | None" default="None">
+  Truncate the vine at a given tree depth, replacing all deeper trees with independence copulas. Pass `None` to fit all `d - 1` trees.
+</ParamField>
+
+<ParamField body="independence_threshold" type="float | None" default="None">
+  If the Kendall's tau of an edge is below this threshold, that edge is set to independence without fitting. Pass `None` to disable.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance applied before density evaluation.
+</ParamField>
+
+<ParamField body="max_iter" type="int" default="500">
+  Maximum optimizer iterations per pair-copula.
+</ParamField>
+
+<ResponseField name="return" type="FitResult[VineCopula]">
+  A [`FitResult`](/api/python/fit-result) with `.model` (the fitted `VineCopula`) and `.diagnostics`.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+
+```python R-vine
+import numpy as np
+from rscopulas import VineCopula
+
+rng = np.random.default_rng(0)
+data = rng.uniform(0.01, 0.99, size=(600, 4))
+
+result = VineCopula.fit_r(
+    data,
+    family_set=["gaussian", "clayton", "gumbel"],
+    criterion="bic",
+    truncation_level=2,
+)
+model = result.model
+print("AIC:", result.diagnostics.aic)
+print("structure:", model.structure_kind)
+```
+
+```python C-vine
+import numpy as np
+from rscopulas import VineCopula
+
+rng = np.random.default_rng(1)
+data = rng.uniform(0.01, 0.99, size=(600, 4))
+
+result = VineCopula.fit_c(data, criterion="aic")
+model = result.model
+samples = model.sample(200, seed=42)
+```
+
+```python D-vine
+import numpy as np
+from rscopulas import VineCopula
+
+rng = np.random.default_rng(2)
+data = rng.uniform(0.01, 0.99, size=(600, 4))
+
+result = VineCopula.fit_d(
+    data,
+    independence_threshold=0.05,
+)
+model = result.model
+log_d = model.log_pdf(data)
+```
+
+</CodeGroup>
+
+---
+
+## Constructors
+
+### `VineCopula.gaussian_c_vine(order, correlation) → VineCopula`
+
+Construct a C-vine with Gaussian pair-copulas from a variable ordering and a correlation matrix.
+
+<ParamField body="order" type="Sequence[int]" required>
+  A permutation of variable indices specifying the C-vine ordering (root at `order[0]`).
+</ParamField>
+
+<ParamField body="correlation" type="ArrayLike" required>
+  A positive-definite correlation matrix of shape `(d, d)`.
+</ParamField>
+
+<ResponseField name="return" type="VineCopula">
+  A `VineCopula` with Gaussian pair-copulas and C-vine structure.
+</ResponseField>
+
+### `VineCopula.gaussian_d_vine(order, correlation) → VineCopula`
+
+Construct a D-vine with Gaussian pair-copulas from a variable ordering and a correlation matrix.
+
+<ParamField body="order" type="Sequence[int]" required>
+  A permutation of variable indices specifying the D-vine path order.
+</ParamField>
+
+<ParamField body="correlation" type="ArrayLike" required>
+  A positive-definite correlation matrix of shape `(d, d)`.
+</ParamField>
+
+<ResponseField name="return" type="VineCopula">
+  A `VineCopula` with Gaussian pair-copulas and D-vine structure.
+</ResponseField>
+
+### `VineCopula.from_trees(kind, trees, *, truncation_level=None) → VineCopula`
+
+Construct a `VineCopula` from a fully specified list of `VineTreeInfo` objects or equivalent dicts.
+
+<ParamField body="kind" type="str" required>
+  Structure kind: `"c"`, `"d"`, or `"r"`.
+</ParamField>
+
+<ParamField body="trees" type="Sequence[VineTreeInfo | dict]" required>
+  A list of tree specifications, one per level. Each element must be a `VineTreeInfo` instance or a compatible dict with `level` and `edges` keys.
+</ParamField>
+
+<ParamField body="truncation_level" type="int | None" default="None">
+  Truncation depth for the resulting vine. Pass `None` to use all provided trees.
+</ParamField>
+
+<ResponseField name="return" type="VineCopula">
+  A fully specified `VineCopula` ready for `log_pdf` and `sample`.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import VineCopula
+
+corr = np.array([
+    [1.0, 0.7, 0.4],
+    [0.7, 1.0, 0.5],
+    [0.4, 0.5, 1.0],
+])
+
+# Gaussian C-vine with variable order [0, 1, 2]
+vine = VineCopula.gaussian_c_vine(order=[0, 1, 2], correlation=corr)
+samples = vine.sample(300, seed=0)
+log_d = vine.log_pdf(samples)
+```
+
+---
+
+## Instance methods
+
+### `log_pdf(data, *, clip_eps=1e-12) → ndarray`
+
+Evaluate the vine log-density at each row of `data`.
+
+<ParamField body="data" type="ArrayLike" required>
+  A 2-D array of pseudo-observations matching the vine's dimension.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 1-D array of log-density values, one per row.
+</ResponseField>
+
+### `sample(n, *, seed=None) → ndarray`
+
+Draw `n` pseudo-observations from the vine copula.
+
+<ParamField body="n" type="int" required>
+  Number of samples.
+</ParamField>
+
+<ParamField body="seed" type="int | None" default="None">
+  Random seed for reproducibility.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 2-D array of shape `(n, dim)` with values in `(0, 1)`.
+</ResponseField>
+
+---
+
+## Properties
+
+<ResponseField name="structure_kind" type="str">
+  The vine structure kind: `"c"`, `"d"`, or `"r"`.
+</ResponseField>
+
+<ResponseField name="truncation_level" type="int | None">
+  The truncation depth. `None` means all `d - 1` trees are active.
+</ResponseField>
+
+<ResponseField name="order" type="list[int]">
+  The variable ordering used by the vine structure.
+</ResponseField>
+
+<ResponseField name="pair_parameters" type="ndarray[float64]">
+  A 2-D array containing the fitted parameters for each pair-copula, indexed by tree level and edge position.
+</ResponseField>
+
+<ResponseField name="structure_info" type="VineStructureInfo">
+  Full structure metadata. See [VineStructureInfo](#vinestructureinfo) below.
+</ResponseField>
+
+<ResponseField name="trees" type="list[VineTreeInfo]">
+  All fitted trees. See [VineTreeInfo](#vinetreeinfo) below.
+</ResponseField>
+
+---
+
+## VineStructureInfo
+
+A frozen dataclass describing the vine's matrix representation and structure kind.
+
+<ResponseField name="kind" type="str">
+  Structure kind: `"c"`, `"d"`, or `"r"`.
+</ResponseField>
+
+<ResponseField name="matrix" type="ndarray[int]">
+  The vine structure matrix of shape `(d, d)`.
+</ResponseField>
+
+<ResponseField name="truncation_level" type="int | None">
+  Effective truncation level, or `None` if the vine is not truncated.
+</ResponseField>
+
+---
+
+## VineTreeInfo
+
+A frozen dataclass describing one level of the vine tree sequence.
+
+<ResponseField name="level" type="int">
+  Tree level, starting from 1 for the first (unconditional) tree.
+</ResponseField>
+
+<ResponseField name="edges" type="list[VineEdgeInfo]">
+  All edges in this tree level.
+</ResponseField>
+
+---
+
+## VineEdgeInfo
+
+A frozen dataclass describing a single pair-copula edge in the vine.
+
+<ResponseField name="tree" type="int">
+  Tree level this edge belongs to.
+</ResponseField>
+
+<ResponseField name="conditioned" type="tuple[int, int]">
+  The two conditioned variable indices for this edge.
+</ResponseField>
+
+<ResponseField name="conditioning" type="list[int]">
+  The conditioning set (empty for tree 1 edges).
+</ResponseField>
+
+<ResponseField name="family" type="str">
+  Pair-copula family name, e.g. `"gaussian"`, `"clayton"`, `"khoudraji"`.
+</ResponseField>
+
+<ResponseField name="rotation" type="str">
+  Rotation applied to the pair-copula: `"R0"`, `"R90"`, `"R180"`, or `"R270"`.
+</ResponseField>
+
+<ResponseField name="parameters" type="tuple[float, ...]">
+  Fitted parameters for the pair-copula.
+</ResponseField>
+
+<ResponseField name="shape_1" type="float | None">
+  First shape parameter for Khoudraji copulas; `None` for all other families.
+</ResponseField>
+
+<ResponseField name="shape_2" type="float | None">
+  Second shape parameter for Khoudraji copulas; `None` for all other families.
+</ResponseField>
+
+<ResponseField name="base_copula_1" type="dict | None">
+  Specification dict for the first base copula in a Khoudraji pair; `None` otherwise.
+</ResponseField>
+
+<ResponseField name="base_copula_2" type="dict | None">
+  Specification dict for the second base copula in a Khoudraji pair; `None` otherwise.
+</ResponseField>

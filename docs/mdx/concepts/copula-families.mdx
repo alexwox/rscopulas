@@ -1,0 +1,213 @@
+---
+title: "Copula Families: Gaussian, Vine, HAC, and More"
+sidebarTitle: "Copula Families"
+description: "Overview of every copula family in rscopulas: Gaussian, Student t, Archimedean, vine, HAC, and Khoudraji — with parameters, use cases, and shared interface."
+---
+
+rscopulas supports a wide range of copula families, from simple single-parameter Archimedean models to flexible vine structures with mixed pair families. Every model shares the same three-method interface — `fit()`, `log_pdf()`, and `sample()` — so you can swap families without restructuring your code.
+
+## Supported families
+
+| Family | Python class | Parameters | Notes |
+|--------|-------------|------------|-------|
+| Gaussian | `GaussianCopula` | correlation matrix | Elliptical, symmetric |
+| Student t | `StudentTCopula` | correlation matrix, `degrees_of_freedom` | Elliptical, heavier tails |
+| Clayton | `ClaytonCopula` | `theta > 0` | Archimedean, lower-tail dependence |
+| Frank | `FrankCopula` | `theta ≠ 0` | Archimedean, symmetric |
+| Gumbel | `GumbelCopula` | `theta ≥ 1` | Archimedean, upper-tail dependence |
+| C-vine | `VineCopula` | mixed pair families | Regular vine, canonical ordering |
+| D-vine | `VineCopula` | mixed pair families | Regular vine, path ordering |
+| R-vine | `VineCopula` | mixed pair families | General regular vine |
+| Hierarchical Archimedean | `HierarchicalArchimedeanCopula` | nested tree structure | HAC |
+| Khoudraji | `PairCopula` | two base families + shape params | Asymmetric pair copula |
+
+## Single-family copulas
+
+<AccordionGroup>
+  <Accordion title="Gaussian">
+    The Gaussian copula captures symmetric linear dependence parameterized by a correlation matrix. It is a natural starting point and widely used in finance and risk modeling. Upper- and lower-tail dependence are both zero, making it a poor fit for data with extreme co-movements.
+
+    ```python
+    import numpy as np
+    from rscopulas import GaussianCopula
+
+    data = np.array([[0.12, 0.18], [0.21, 0.25], [0.68, 0.73], [0.82, 0.79]], dtype=np.float64)
+    result = GaussianCopula.fit(data)
+    print(result.model.correlation)
+    ```
+
+    Use `GaussianCopula.from_params(correlation)` to construct a model from a known correlation matrix without fitting.
+  </Accordion>
+
+  <Accordion title="Student t">
+    The Student t copula is elliptical like the Gaussian but has heavier tails controlled by the `degrees_of_freedom` parameter. Both upper and lower tail dependence are positive, making it suitable when joint extremes occur more often than a Gaussian copula would predict.
+
+    ```python
+    import numpy as np
+    from rscopulas import StudentTCopula
+
+    data = np.array([[0.12, 0.18], [0.21, 0.25], [0.68, 0.73], [0.82, 0.79]], dtype=np.float64)
+    result = StudentTCopula.fit(data)
+    print(result.model.degrees_of_freedom)
+    ```
+  </Accordion>
+
+  <Accordion title="Clayton">
+    The Clayton copula is an Archimedean family parameterized by a single `theta > 0`. It exhibits strong lower-tail dependence — variables are more likely to be simultaneously low than simultaneously high. Choose Clayton when you expect dependence to concentrate in the lower joint tail (e.g., simultaneous losses).
+
+    ```python
+    import numpy as np
+    from rscopulas import ClaytonCopula
+
+    data = np.array([[0.12, 0.18], [0.21, 0.25], [0.68, 0.73], [0.82, 0.79]], dtype=np.float64)
+    result = ClaytonCopula.fit(data)
+    print(result.model.theta)
+    ```
+  </Accordion>
+
+  <Accordion title="Frank">
+    The Frank copula is an Archimedean family with a single `theta ≠ 0`. It is symmetric — no tail dependence in either direction — and allows both positive and negative dependence. It is often a good baseline for moderate, symmetric association.
+
+    ```python
+    import numpy as np
+    from rscopulas import FrankCopula
+
+    data = np.array([[0.12, 0.18], [0.21, 0.25], [0.68, 0.73], [0.82, 0.79]], dtype=np.float64)
+    result = FrankCopula.fit(data)
+    print(result.model.theta)
+    ```
+  </Accordion>
+
+  <Accordion title="Gumbel">
+    The Gumbel copula is an Archimedean family parameterized by `theta ≥ 1`, where `theta = 1` corresponds to independence. It has upper-tail dependence, meaning joint extreme high values are more likely than a Gaussian copula predicts. Choose Gumbel when dependence concentrates in the upper joint tail.
+
+    ```python
+    import numpy as np
+    from rscopulas import GumbelCopula
+
+    data = np.array([[0.12, 0.18], [0.21, 0.25], [0.68, 0.73], [0.82, 0.79]], dtype=np.float64)
+    result = GumbelCopula.fit(data)
+    print(result.model.theta)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Vine copulas
+
+Vine copulas decompose a multivariate dependence structure into a cascade of bivariate pair copulas arranged in a tree sequence. This makes them highly flexible for high-dimensional data. rscopulas supports three vine structures, all using the `VineCopula` class.
+
+<AccordionGroup>
+  <Accordion title="C-vine (canonical vine)">
+    A C-vine has a star graph at each tree level: one variable acts as the central "hub" and is paired with all others. This structure is natural when one variable drives dependence with all remaining variables.
+
+    ```python
+    import numpy as np
+    from rscopulas import VineCopula
+
+    data = np.array([
+        [0.12, 0.18, 0.21], [0.21, 0.25, 0.29],
+        [0.48, 0.51, 0.46], [0.82, 0.79, 0.76],
+    ], dtype=np.float64)
+
+    result = VineCopula.fit_c(
+        data,
+        family_set=["gaussian", "clayton", "frank", "gumbel"],
+        criterion="aic",
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="D-vine (drawable vine)">
+    A D-vine has a path graph at each tree level: variables are arranged in a sequence and each is paired with its immediate neighbors. D-vines are well suited to data with a natural ordering, such as time series or spatial sequences.
+
+    ```python
+    result = VineCopula.fit_d(
+        data,
+        family_set=["gaussian", "clayton", "frank", "gumbel"],
+        criterion="aic",
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="R-vine (regular vine)">
+    An R-vine allows any valid tree structure at each level, making it the most general option. rscopulas selects the structure that minimizes the chosen criterion (AIC by default). Use R-vine when you have no prior reason to prefer C- or D-vine and want the model to choose its own structure.
+
+    ```python
+    result = VineCopula.fit_r(
+        data,
+        family_set=["independence", "gaussian", "clayton", "frank", "gumbel", "khoudraji"],
+        include_rotations=True,
+        truncation_level=1,
+    )
+    print(result.model.structure_info.kind)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Rotations for vine pair edges
+
+Each bivariate pair copula in a vine can be rotated to capture different tail behavior. rscopulas supports four rotations:
+
+| Rotation | Effect |
+|----------|--------|
+| `R0` | No rotation — original family orientation |
+| `R90` | 90° counterclockwise — reflects dependence pattern |
+| `R180` | 180° — reverses tail dependence direction |
+| `R270` | 270° counterclockwise — alternative reflection |
+
+For example, a Clayton R180 captures upper-tail dependence instead of lower-tail. Pass `include_rotations=True` to vine fitting methods to let rscopulas consider all valid rotations during family selection.
+
+## Hierarchical Archimedean copulas (HAC)
+
+`HierarchicalArchimedeanCopula` builds a nested Archimedean structure where sub-groups of variables share a common generator, and those sub-groups are nested under a parent generator. This captures asymmetric groupwise dependence that flat Archimedean models cannot represent.
+
+```python
+import numpy as np
+from rscopulas import HierarchicalArchimedeanCopula
+
+data = np.array([
+    [0.12, 0.18, 0.21], [0.21, 0.25, 0.29],
+    [0.48, 0.51, 0.46], [0.82, 0.79, 0.76],
+], dtype=np.float64)
+
+result = HierarchicalArchimedeanCopula.fit(data)
+print(result.model.families)
+print(result.model.tree)
+```
+
+<Warning>
+  Sampling from mixed-family HAC trees (where a child node uses a different Archimedean family than its parent) uses a numerical frailty sampler that can degenerate near the boundary. Do not rely on `sample()` for mixed-family nested trees in production until this is resolved. Fully exchangeable and same-family Gumbel clusters are the validated scenarios for Monte Carlo use.
+</Warning>
+
+## Khoudraji asymmetric pair copulas
+
+The Khoudraji construction composes two base pair copula families with shape parameters `shape_1` and `shape_2` to produce an asymmetric bivariate copula. It is available as a standalone `PairCopula` and as a selectable family in vine fitting.
+
+```python
+import numpy as np
+from rscopulas import PairCopula
+
+model = PairCopula.from_khoudraji(
+    "gaussian",
+    "clayton",
+    shape_1=0.35,
+    shape_2=0.8,
+    first_parameters=[0.45],
+    second_parameters=[2.0],
+)
+u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+print("log_pdf:", model.log_pdf(u1, u2))
+```
+
+## Shared interface
+
+Every model in rscopulas exposes the same three core methods:
+
+| Method | Description |
+|--------|-------------|
+| `fit(data)` | Fits the model to pseudo-observations and returns a `FitResult` |
+| `log_pdf(data)` | Evaluates the log-density at each row of a pseudo-observation matrix |
+| `sample(n)` | Draws `n` samples from the fitted model |
+
+This consistency means you can compare families, swap models, or iterate over a list of classes without changing surrounding code. See [Fit Diagnostics](/concepts/fit-diagnostics) for how to use the `FitResult` returned by `fit()`.

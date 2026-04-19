@@ -1,0 +1,98 @@
+---
+title: "ExecPolicy — Controlling the Compute Backend"
+sidebarTitle: "Exec Policy"
+description: "Configure CPU, CUDA, or Metal execution in Rust. Covers ExecPolicy variants, Device options, current GPU support, and how to pin deterministic CPU execution."
+---
+
+`ExecPolicy` is the mechanism rscopulas uses to select a compute backend for fitting, evaluation, and sampling. You attach a policy to `FitOptions`, `EvalOptions`, or `SampleOptions` and the library routes each operation accordingly. Explicit device control is a Rust-only feature; the Python bindings always use `ExecPolicy::Auto` internally.
+
+## ExecPolicy and Device
+
+```rust
+pub enum ExecPolicy {
+    Auto,
+    Force(Device),
+}
+
+pub enum Device {
+    Cpu,
+    Cuda(u32),  // ordinal identifies the GPU device
+    Metal,
+}
+```
+
+### ExecPolicy::Auto
+
+The default. Picks CPU serial or CPU parallel execution depending on the batch size and operation type. `Auto` does not opportunistically promote work to CUDA or Metal — it stays on CPU until the GPU-accelerated path coverage is broader. Use `Auto` in production unless you have a specific reason to force a backend.
+
+### ExecPolicy::Force(Device::Cpu)
+
+Pins execution to CPU. The library still chooses between serial and parallel CPU dispatch based on batch size; `Force(Device::Cpu)` only prevents any GPU path from being considered. This variant is also used in Criterion benchmarks to keep results deterministic across machines.
+
+### ExecPolicy::Force(Device::Cuda(_)) and Device::Metal
+
+<Warning>
+GPU paths are not fully implemented in the current release. Only Gaussian pair batch evaluation and Gaussian vine log-density are GPU-accelerated today. Other operations (single-family density, sampling, non-Gaussian pair families) return a `BackendError::Unsupported` if you force a GPU device. Use `Auto` or `Force(Device::Cpu)` for production workloads.
+</Warning>
+
+Forcing a GPU device on an unsupported operation returns `Err(CopulaError::Backend(...))`. You can check availability at runtime; the library will return `BackendError::Unavailable` if the requested device is not present.
+
+## Using ExecPolicy in FitOptions
+
+Pass the policy through the options struct for any operation:
+
+```rust
+use rscopulas::{CopulaModel, Device, ExecPolicy, FitOptions, GaussianCopula, PseudoObs};
+use ndarray::array;
+
+let data = PseudoObs::new(array![[0.2_f64, 0.3], [0.5, 0.6], [0.8, 0.7]])?;
+let opts = FitOptions {
+    exec: ExecPolicy::Force(Device::Cpu),
+    ..FitOptions::default()
+};
+let fit = GaussianCopula::fit(&data, &opts)?;
+```
+
+The same pattern applies to `EvalOptions` and `SampleOptions`:
+
+```rust
+use rscopulas::{CopulaModel, Device, EvalOptions, ExecPolicy};
+
+let eval_opts = EvalOptions {
+    exec: ExecPolicy::Force(Device::Cpu),
+    clip_eps: 1e-12,
+};
+let log_densities = fit.model.log_pdf(&data, &eval_opts)?;
+```
+
+## Operations and backend support
+
+| Operation | CPU serial | CPU parallel | CUDA | Metal |
+|-----------|-----------|--------------|------|-------|
+| Single-family density eval | Yes | Yes | No | No |
+| Gaussian pair batch eval | Yes | Yes | Partial | Partial |
+| Vine log-pdf (Gaussian) | Yes | Yes | Partial | Partial |
+| Vine fitting (pair scoring) | Yes | Yes | No | No |
+| Sampling | Yes | Yes | No | No |
+
+"Partial" means the operation is GPU-accelerated only when all pair edges are Gaussian with no rotation. Mixed-family vines fall back to CPU parallel.
+
+## VineFitOptions and ExecPolicy
+
+`VineFitOptions` embeds a `base: FitOptions` field. Set the execution policy there:
+
+```rust
+use rscopulas::{Device, ExecPolicy, FitOptions, VineFitOptions};
+
+let options = VineFitOptions {
+    base: FitOptions {
+        exec: ExecPolicy::Force(Device::Cpu),
+        ..FitOptions::default()
+    },
+    ..VineFitOptions::default()
+};
+```
+
+<Tip>
+When running Criterion benchmarks for vine workloads, always pass `ExecPolicy::Force(Device::Cpu)` to get stable, reproducible wall times unaffected by GPU availability on the benchmark machine.
+</Tip>

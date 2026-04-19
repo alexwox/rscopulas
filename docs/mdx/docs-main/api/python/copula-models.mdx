@@ -1,0 +1,395 @@
+---
+title: "Single-Family Copula Models Python Reference"
+sidebarTitle: "Copula Models"
+description: "API reference for GaussianCopula, StudentTCopula, ClaytonCopula, FrankCopula, GumbelCopula, and HierarchicalArchimedeanCopula in rscopulas."
+---
+
+rscopulas provides six single-family copula classes. Each class shares the same core interface—`fit`, `log_pdf`, and `sample`—and exposes family-specific parameters as read-only properties. Elliptical copulas (`GaussianCopula`, `StudentTCopula`) infer dimension from their correlation matrix. Archimedean copulas (`ClaytonCopula`, `FrankCopula`, `GumbelCopula`) take an explicit `dim` argument. `HierarchicalArchimedeanCopula` accepts a nested tree structure.
+
+## Shared interface
+
+Every single-family copula class exposes the following methods and properties.
+
+### `fit(data, *, clip_eps=1e-12, max_iter=500) → FitResult`
+
+Fit the copula to pseudo-observations by maximum likelihood. Returns a [`FitResult`](/api/python/fit-result) containing the fitted model and diagnostics.
+
+<ParamField body="data" type="ArrayLike" required>
+  A 2-D array of pseudo-observations with shape `(n_samples, n_dims)` and `dtype=float64`. Every value must be strictly in `(0, 1)`.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Values closer than `clip_eps` to 0 or 1 are clipped before evaluation to avoid numerical overflow.
+</ParamField>
+
+<ParamField body="max_iter" type="int" default="500">
+  Maximum number of optimizer iterations. If the optimizer has not converged by this limit, the result is still returned but `diagnostics.converged` will be `False`.
+</ParamField>
+
+### `log_pdf(data, *, clip_eps=1e-12) → ndarray`
+
+Evaluate the log-density of the copula at each row of `data`.
+
+<ParamField body="data" type="ArrayLike" required>
+  A 2-D array with the same column count as the fitted model.
+</ParamField>
+
+<ParamField body="clip_eps" type="float" default="1e-12">
+  Boundary clipping tolerance applied before evaluation.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 1-D array of log-density values, one per row of `data`.
+</ResponseField>
+
+### `sample(n, *, seed=None) → ndarray`
+
+Draw `n` pseudo-observations from the copula.
+
+<ParamField body="n" type="int" required>
+  Number of samples to draw.
+</ParamField>
+
+<ParamField body="seed" type="int | None" default="None">
+  Random seed for reproducibility. Pass `None` for a non-deterministic draw.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 2-D array of shape `(n, dim)` with values in `(0, 1)`.
+</ResponseField>
+
+### `dim` property
+
+<ResponseField name="dim" type="int">
+  Number of dimensions (variables) in the fitted copula.
+</ResponseField>
+
+### `family` property
+
+<ResponseField name="family" type="str">
+  Family name string, e.g. `"gaussian"`, `"student_t"`, `"clayton"`.
+</ResponseField>
+
+---
+
+## GaussianCopula
+
+A multivariate Gaussian (normal) copula parameterized by a correlation matrix. It captures symmetric, linear dependence and has no tail dependence.
+
+### `GaussianCopula.from_params(correlation)`
+
+Construct a `GaussianCopula` directly from a correlation matrix without fitting.
+
+<ParamField body="correlation" type="ArrayLike" required>
+  A positive-definite correlation matrix of shape `(d, d)` with ones on the diagonal and values in `(-1, 1)` on the off-diagonals.
+</ParamField>
+
+<ResponseField name="return" type="GaussianCopula">
+  A ready-to-use `GaussianCopula` instance.
+</ResponseField>
+
+### Properties
+
+<ResponseField name="correlation" type="ndarray[float64]">
+  A copy of the fitted correlation matrix with shape `(d, d)`.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import GaussianCopula
+
+rng = np.random.default_rng(0)
+data = rng.uniform(0.01, 0.99, size=(500, 3))
+
+# Fit from data
+result = GaussianCopula.fit(data)
+model = result.model
+print(model.correlation)
+
+# Or build from known parameters
+corr = np.array([[1.0, 0.6], [0.6, 1.0]])
+manual = GaussianCopula.from_params(corr)
+samples = manual.sample(100, seed=7)
+```
+
+---
+
+## StudentTCopula
+
+A multivariate Student-t copula parameterized by a correlation matrix and degrees-of-freedom. It captures symmetric dependence with heavier tails than the Gaussian copula, making it useful when you expect joint extreme events.
+
+### `StudentTCopula.from_params(correlation, degrees_of_freedom)`
+
+<ParamField body="correlation" type="ArrayLike" required>
+  A positive-definite correlation matrix of shape `(d, d)`.
+</ParamField>
+
+<ParamField body="degrees_of_freedom" type="float" required>
+  Degrees of freedom (must be `> 2` for finite variance). Smaller values produce heavier tails.
+</ParamField>
+
+<ResponseField name="return" type="StudentTCopula">
+  A ready-to-use `StudentTCopula` instance.
+</ResponseField>
+
+### Properties
+
+<ResponseField name="correlation" type="ndarray[float64]">
+  A copy of the fitted correlation matrix with shape `(d, d)`.
+</ResponseField>
+
+<ResponseField name="degrees_of_freedom" type="float">
+  The fitted degrees-of-freedom parameter.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import StudentTCopula
+
+rng = np.random.default_rng(1)
+data = rng.uniform(0.01, 0.99, size=(400, 2))
+
+result = StudentTCopula.fit(data)
+model = result.model
+print("df:", model.degrees_of_freedom)
+print("correlation:", model.correlation)
+
+# Build from known parameters
+corr = np.array([[1.0, 0.4], [0.4, 1.0]])
+manual = StudentTCopula.from_params(corr, degrees_of_freedom=4.0)
+log_d = manual.log_pdf(data)
+```
+
+---
+
+## ClaytonCopula
+
+An Archimedean copula with lower-tail dependence. The `theta` parameter controls the strength of dependence: larger values mean stronger lower-tail clustering.
+
+### `ClaytonCopula.from_params(dim, theta)`
+
+<ParamField body="dim" type="int" required>
+  Number of dimensions.
+</ParamField>
+
+<ParamField body="theta" type="float" required>
+  Dependence parameter. Must be `> 0`.
+</ParamField>
+
+<ResponseField name="return" type="ClaytonCopula">
+  A ready-to-use `ClaytonCopula` instance.
+</ResponseField>
+
+### Properties
+
+<ResponseField name="theta" type="float">
+  The fitted Archimedean dependence parameter.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import ClaytonCopula
+
+rng = np.random.default_rng(2)
+data = rng.uniform(0.01, 0.99, size=(300, 2))
+
+result = ClaytonCopula.fit(data)
+print("theta:", result.model.theta)
+
+# Build from known theta
+manual = ClaytonCopula.from_params(dim=2, theta=2.5)
+samples = manual.sample(200, seed=42)
+```
+
+---
+
+## FrankCopula
+
+An Archimedean copula with symmetric dependence and no tail dependence. `theta` can be positive or negative, making the Frank copula suitable for modeling mild positive or negative dependence.
+
+### `FrankCopula.from_params(dim, theta)`
+
+<ParamField body="dim" type="int" required>
+  Number of dimensions.
+</ParamField>
+
+<ParamField body="theta" type="float" required>
+  Dependence parameter. Positive values indicate positive dependence; negative values indicate negative dependence.
+</ParamField>
+
+<ResponseField name="return" type="FrankCopula">
+  A ready-to-use `FrankCopula` instance.
+</ResponseField>
+
+### Properties
+
+<ResponseField name="theta" type="float">
+  The fitted dependence parameter.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import FrankCopula
+
+rng = np.random.default_rng(3)
+data = rng.uniform(0.01, 0.99, size=(300, 2))
+
+result = FrankCopula.fit(data)
+print("theta:", result.model.theta)
+
+manual = FrankCopula.from_params(dim=2, theta=3.0)
+log_d = manual.log_pdf(data)
+```
+
+---
+
+## GumbelCopula
+
+An Archimedean copula with upper-tail dependence. The `theta` parameter must be `≥ 1`; at `theta = 1` the Gumbel copula reduces to the independence copula.
+
+### `GumbelCopula.from_params(dim, theta)`
+
+<ParamField body="dim" type="int" required>
+  Number of dimensions.
+</ParamField>
+
+<ParamField body="theta" type="float" required>
+  Dependence parameter. Must be `≥ 1`.
+</ParamField>
+
+<ResponseField name="return" type="GumbelCopula">
+  A ready-to-use `GumbelCopula` instance.
+</ResponseField>
+
+### Properties
+
+<ResponseField name="theta" type="float">
+  The fitted dependence parameter.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import GumbelCopula
+
+rng = np.random.default_rng(4)
+data = rng.uniform(0.01, 0.99, size=(300, 2))
+
+result = GumbelCopula.fit(data)
+print("theta:", result.model.theta)
+
+manual = GumbelCopula.from_params(dim=2, theta=1.8)
+samples = manual.sample(100, seed=0)
+```
+
+---
+
+## HierarchicalArchimedeanCopula
+
+A nested Archimedean copula that supports a hierarchical tree structure where different subtrees can use different Archimedean families. Density evaluation uses an exact exchangeable path for single-fan Archimedean trees; nested trees use a composite pair-copula evaluation.
+
+<Warning>
+Mixed-family nesting (different Archimedean family on a child node than on its parent) uses a numerical frailty sampler that can degenerate near the boundary. Do not rely on `sample()` for mixed-family trees until the implementation is stabilized.
+</Warning>
+
+### `HierarchicalArchimedeanCopula.from_tree(tree)`
+
+Construct a `HierarchicalArchimedeanCopula` directly from a nested tree specification.
+
+<ParamField body="tree" type="int | dict" required>
+  A nested dict describing the HAC structure. Each node specifies `"family"`, `"theta"`, and `"children"`. Children can be integer leaf indices or nested node dicts. See the [HAC guide](/guides/hierarchical-archimedean) for a full example.
+</ParamField>
+
+<ResponseField name="return" type="HierarchicalArchimedeanCopula">
+  A ready-to-use instance.
+</ResponseField>
+
+### `HierarchicalArchimedeanCopula.fit(data, *, ...)`
+
+Fit the copula to pseudo-observations. In addition to the shared `clip_eps` and `max_iter`, the following keyword arguments control structure and parameter estimation.
+
+<ParamField body="data" type="ArrayLike" required>
+  Pseudo-observations with shape `(n_samples, n_dims)` and values strictly in `(0, 1)`.
+</ParamField>
+
+<ParamField body="tree" type="int | dict | None" default="None">
+  Fix the tree structure and only fit parameters. Pass `None` to let the algorithm infer the structure.
+</ParamField>
+
+<ParamField body="family_set" type="Sequence[str] | None" default="None">
+  Restrict the allowed Archimedean families. Pass `None` to use all supported families.
+</ParamField>
+
+<ParamField body="structure_method" type="str" default='"agglomerative_tau_then_collapse"'>
+  Algorithm used to infer the hierarchical nesting structure.
+</ParamField>
+
+<ParamField body="fit_method" type="str" default='"recursive_mle"'>
+  Parameter estimation method.
+</ParamField>
+
+<ParamField body="collapse_eps" type="float" default="0.05">
+  Threshold for collapsing subtrees when the structure method uses agglomeration.
+</ParamField>
+
+<ParamField body="mc_samples" type="int" default="256">
+  Number of Monte Carlo samples used for likelihood approximation in nested settings.
+</ParamField>
+
+<ParamField body="allow_experimental" type="bool" default="True">
+  Allow experimental code paths in the Rust backend.
+</ParamField>
+
+### Properties
+
+<ResponseField name="is_exact" type="bool">
+  `True` when the model uses the exact density path (single Archimedean fan).
+</ResponseField>
+
+<ResponseField name="exact_loglik" type="bool">
+  `True` when the log-likelihood was computed exactly rather than approximated.
+</ResponseField>
+
+<ResponseField name="tree" type="int | dict">
+  The fitted tree structure as a nested dict.
+</ResponseField>
+
+<ResponseField name="families" type="list[str]">
+  Archimedean family assigned to each node in the hierarchy.
+</ResponseField>
+
+<ResponseField name="parameters" type="list[float]">
+  Dependence parameters for each node, in the same order as `families`.
+</ResponseField>
+
+<ResponseField name="leaf_order" type="list[int]">
+  The order of leaf variables in the fitted tree.
+</ResponseField>
+
+### Example
+
+```python
+import numpy as np
+from rscopulas import HierarchicalArchimedeanCopula
+
+rng = np.random.default_rng(5)
+data = rng.uniform(0.01, 0.99, size=(400, 4))
+
+result = HierarchicalArchimedeanCopula.fit(
+    data,
+    family_set=["clayton", "gumbel"],
+)
+model = result.model
+print("families:", model.families)
+print("parameters:", model.parameters)
+print("leaf order:", model.leaf_order)
+```

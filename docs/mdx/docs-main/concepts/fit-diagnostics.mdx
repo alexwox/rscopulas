@@ -1,0 +1,123 @@
+---
+title: "Fit Diagnostics: Evaluating and Comparing Copula Models"
+sidebarTitle: "Fit Diagnostics"
+description: "Understand the FitResult and FitDiagnostics objects returned by every .fit() call, and learn how to use AIC and BIC to compare copula families."
+---
+
+Every `.fit()` call in rscopulas returns a `FitResult` object containing two things: the fitted model and a `FitDiagnostics` record with numerical summaries of the fitting process. You use these diagnostics to assess whether a model converged, evaluate its quality, and compare it against alternative families.
+
+## The FitResult object
+
+`FitResult` is a frozen dataclass with two fields:
+
+- **`model`** — the fitted copula instance, ready to call `.log_pdf()` and `.sample()` on
+- **`diagnostics`** — a `FitDiagnostics` instance with convergence and information criterion values
+
+## FitDiagnostics fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `loglik` | `float` | Log-likelihood at the fitted parameters |
+| `aic` | `float` | Akaike Information Criterion — lower is better |
+| `bic` | `float` | Bayesian Information Criterion — lower is better |
+| `converged` | `bool` | Whether the optimizer converged |
+| `n_iter` | `int` | Number of optimizer iterations taken |
+
+## Accessing diagnostics
+
+```python
+import numpy as np
+from rscopulas import GaussianCopula
+
+data = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]], dtype=np.float64)
+result = GaussianCopula.fit(data)
+
+print(f"Log-likelihood: {result.diagnostics.loglik:.4f}")
+print(f"AIC: {result.diagnostics.aic:.4f}")
+print(f"BIC: {result.diagnostics.bic:.4f}")
+print(f"Converged: {result.diagnostics.converged}")
+print(f"Iterations: {result.diagnostics.n_iter}")
+```
+
+The fitted model is available on the same object:
+
+```python
+samples = result.model.sample(100, seed=42)
+log_densities = result.model.log_pdf(data)
+```
+
+## Using AIC and BIC for model selection
+
+AIC and BIC both penalize model complexity, but BIC applies a stronger penalty that grows with sample size. Lower values indicate a better trade-off between fit quality and the number of parameters used.
+
+To select a copula family, fit several candidates on the same pseudo-observation matrix and compare their AIC or BIC values:
+
+```python
+import numpy as np
+from rscopulas import GaussianCopula, ClaytonCopula, FrankCopula
+
+data = np.array([[0.12, 0.18], [0.21, 0.25], [0.45, 0.52],
+                 [0.68, 0.73], [0.82, 0.79]], dtype=np.float64)
+
+for cls in [GaussianCopula, ClaytonCopula, FrankCopula]:
+    result = cls.fit(data)
+    print(f"{cls.__name__}: AIC={result.diagnostics.aic:.2f}")
+```
+
+The family with the lowest AIC (or BIC) is the best-fitting model for that criterion.
+
+<Tip>
+  AIC tends to select more complex models and is preferable when prediction accuracy matters. BIC penalizes complexity more strongly and is preferable when interpretability and parsimony are the priority.
+</Tip>
+
+## Checking convergence
+
+The `converged` flag tells you whether the optimizer reached a local optimum within the allowed number of iterations. A `False` value means the optimizer stopped before fully converging, and the reported parameters, log-likelihood, and information criteria may be unreliable.
+
+<Warning>
+  Do not use a model's AIC or BIC for selection if `converged` is `False`. The optimizer may have stopped at a poor solution, making the values incomparable to models that did converge.
+</Warning>
+
+If you see `converged=False`, try these steps:
+
+<Steps>
+  <Step title="Increase max_iter">
+    Pass a larger `max_iter` to `.fit()`. The default is 500.
+
+    ```python
+    result = GaussianCopula.fit(data, max_iter=2000)
+    ```
+  </Step>
+  <Step title="Check data quality">
+    Inspect your pseudo-observations for near-boundary values, strong ties, or very small sample sizes. Values very close to 0 or 1 can cause numerical issues in the optimizer even if they pass validation.
+  </Step>
+  <Step title="Try a different family">
+    Some families are numerically easier to optimize than others. If convergence problems persist on one family, it may indicate the model is poorly suited to the data's dependence structure.
+  </Step>
+</Steps>
+
+## Vine and HAC diagnostics
+
+Vine copulas and hierarchical Archimedean copulas return the same `FitDiagnostics` structure. For vines, the log-likelihood aggregates contributions from all pair copulas across all tree levels.
+
+```python
+import numpy as np
+from rscopulas import VineCopula
+
+data = np.array([
+    [0.12, 0.18, 0.21], [0.21, 0.25, 0.29],
+    [0.48, 0.51, 0.46], [0.82, 0.79, 0.76],
+], dtype=np.float64)
+
+result = VineCopula.fit_r(
+    data,
+    family_set=["gaussian", "clayton", "frank", "gumbel"],
+    criterion="aic",
+)
+print(f"AIC: {result.diagnostics.aic:.4f}")
+print(f"Converged: {result.diagnostics.converged}")
+```
+
+<Note>
+  For vine fitting, rscopulas uses the `criterion` parameter (`"aic"` or `"bic"`) during family selection at each pair edge — this is separate from the `diagnostics.aic` field, which reports the aggregate AIC of the final fitted vine.
+</Note>

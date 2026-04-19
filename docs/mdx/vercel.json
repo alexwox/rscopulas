@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "https://woxstab.mintlify.app/"
+    },
+    {
+      "source": "/:path*",
+      "destination": "https://woxstab.mintlify.app/:path*"
+    }
+  ]
+}

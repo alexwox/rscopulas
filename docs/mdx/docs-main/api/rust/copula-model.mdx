@@ -1,0 +1,207 @@
+---
+title: "CopulaModel Trait and Single-Family Copulas"
+sidebarTitle: "CopulaModel"
+description: "Reference for the CopulaModel trait, FitResult, FitOptions, and all single-family copula types: Gaussian, Student t, Clayton, Frank, and Gumbel."
+---
+
+`CopulaModel` is the shared interface for evaluating and sampling from any fitted or constructed copula in rscopulas. Every concrete type — `GaussianCopula`, `StudentTCopula`, `ClaytonCopula`, `FrankCopula`, `GumbelHougaardCopula`, `VineCopula`, and `HierarchicalArchimedeanCopula` — implements this trait. You must bring `CopulaModel` into scope to call `log_pdf` or `sample` on concrete instances.
+
+## The CopulaModel trait
+
+```rust
+pub trait CopulaModel {
+    fn family(&self) -> CopulaFamily;
+    fn dim(&self) -> usize;
+    fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError>;
+    fn sample<R: Rng + ?Sized>(
+        &self,
+        n: usize,
+        rng: &mut R,
+        options: &SampleOptions,
+    ) -> Result<Array2<f64>, CopulaError>;
+}
+```
+
+- `log_pdf` returns one log-density value per observation row in `data`.
+- `sample` draws `n` pseudo-observations and returns an `Array2<f64>` of shape `(n, dim)`.
+
+<Note>
+`use rscopulas::CopulaModel;` is required at the call site. Without this import, calling `.log_pdf(...)` or `.sample(...)` on a concrete type produces a compile error.
+</Note>
+
+## FitResult
+
+All `fit` methods return `FitResult<T>`, which bundles the fitted model with likelihood-based diagnostics:
+
+```rust
+pub struct FitResult<T> {
+    pub model: T,
+    pub diagnostics: FitDiagnostics,
+}
+
+pub struct FitDiagnostics {
+    pub loglik: f64,
+    pub aic: f64,
+    pub bic: f64,
+    pub converged: bool,
+    pub n_iter: usize,
+}
+```
+
+Access the model with `fit.model` and diagnostics with `fit.diagnostics.aic`, `fit.diagnostics.bic`, etc.
+
+## FitOptions, EvalOptions, SampleOptions
+
+<Tabs>
+  <Tab title="FitOptions">
+    Controls fitting behavior. The default is suitable for most workflows.
+
+    | Field | Type | Default | Description |
+    |-------|------|---------|-------------|
+    | `exec` | `ExecPolicy` | `Auto` | Compute backend for fitting. |
+    | `clip_eps` | `f64` | `1e-12` | Clipping applied to pseudo-observations during density evaluation inside the fitter. |
+    | `max_iter` | `usize` | `500` | Upper bound for iterative search routines. |
+
+    ```rust
+    let opts = FitOptions {
+        clip_eps: 1e-10,
+        max_iter: 200,
+        ..FitOptions::default()
+    };
+    ```
+  </Tab>
+  <Tab title="EvalOptions">
+    Controls `log_pdf` evaluation. The field name for the policy is `exec`.
+
+    | Field | Type | Default | Description |
+    |-------|------|---------|-------------|
+    | `exec` | `ExecPolicy` | `Auto` | Compute backend for density evaluation. |
+    | `clip_eps` | `f64` | `1e-12` | Clamps pseudo-observations before inversion. |
+
+    ```rust
+    let opts = EvalOptions {
+        clip_eps: 1e-10,
+        ..EvalOptions::default()
+    };
+    ```
+  </Tab>
+  <Tab title="SampleOptions">
+    Controls `sample`. Sampling is CPU-only in the current release.
+
+    | Field | Type | Default | Description |
+    |-------|------|---------|-------------|
+    | `exec` | `ExecPolicy` | `Auto` | Backend policy. GPU sampling returns an error. |
+
+    ```rust
+    let opts = SampleOptions::default();
+    ```
+  </Tab>
+</Tabs>
+
+## Gaussian quickstart
+
+The example below fits a `GaussianCopula`, reads diagnostics, and draws samples:
+
+```rust
+use ndarray::array;
+use rand::{SeedableRng, rngs::StdRng};
+use rscopulas::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = PseudoObs::new(array![
+        [0.12_f64, 0.18],
+        [0.21, 0.25],
+        [0.82, 0.79],
+    ])?;
+    let fit = GaussianCopula::fit(&data, &FitOptions::default())?;
+    println!("AIC: {}", fit.diagnostics.aic);
+    let mut rng = StdRng::seed_from_u64(7);
+    println!("sample:\n{:?}", fit.model.sample(4, &mut rng, &Default::default())?);
+    Ok(())
+}
+```
+
+## Single-family copula types
+
+### GaussianCopula
+
+Parameterized by a positive-definite correlation matrix. Fitting uses Kendall tau inversion.
+
+```rust
+// Fit from data
+let fit = GaussianCopula::fit(&data, &FitOptions::default())?;
+
+// Construct directly from a correlation matrix
+use ndarray::array;
+let correlation = array![[1.0_f64, 0.6], [0.6, 1.0]];
+let model = GaussianCopula::new(correlation)?;
+```
+
+### StudentTCopula
+
+Parameterized by a correlation matrix and degrees of freedom `nu > 0`. Fitting performs a grid search over candidate `nu` values after Kendall tau inversion.
+
+```rust
+// Fit from data
+let fit = StudentTCopula::fit(&data, &FitOptions::default())?;
+println!("nu = {}", fit.model.degrees_of_freedom());
+
+// Construct directly
+use ndarray::array;
+let correlation = array![[1.0_f64, 0.5], [0.5, 1.0]];
+let model = StudentTCopula::new(correlation, 4.0)?;
+```
+
+### ClaytonCopula
+
+Parameterized by `theta > 0`. Fitting uses the mean pairwise Kendall tau.
+
+```rust
+// Fit from data
+let fit = ClaytonCopula::fit(&data, &FitOptions::default())?;
+println!("theta = {}", fit.model.theta());
+
+// Construct directly (dim, theta)
+let model = ClaytonCopula::new(2, 1.4)?;
+```
+
+### FrankCopula
+
+Parameterized by `theta > 0`. Fitting uses mean pairwise Kendall tau inversion.
+
+```rust
+// Fit from data
+let fit = FrankCopula::fit(&data, &FitOptions::default())?;
+
+// Construct directly (dim, theta)
+let model = FrankCopula::new(2, 3.0)?;
+```
+
+### GumbelHougaardCopula
+
+Parameterized by `theta >= 1`. Fitting uses the mean pairwise Kendall tau.
+
+```rust
+// Fit from data
+let fit = GumbelHougaardCopula::fit(&data, &FitOptions::default())?;
+
+// Construct directly (dim, theta)
+let model = GumbelHougaardCopula::new(2, 2.5)?;
+```
+
+<Tip>
+All single-family constructors validate their parameters and return `Err` on invalid input (e.g., `theta <= 0` for Clayton, `nu <= 0` for Student t, a non-positive-definite matrix for Gaussian).
+</Tip>
+
+## Evaluating log-density
+
+After fitting or constructing a model, evaluate the copula log-density on new data:
+
+```rust
+use rscopulas::{CopulaModel, EvalOptions};
+
+let log_densities = fit.model.log_pdf(&data, &EvalOptions::default())?;
+println!("first log density = {}", log_densities[0]);
+```
+
+`log_pdf` returns one `f64` per observation row. The length of the returned `Vec` equals `data.n_obs()`.

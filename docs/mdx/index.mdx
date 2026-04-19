@@ -1,0 +1,64 @@
+---
+title: "rscopulas: High-Performance Copula Modeling"
+description: "rscopulas is a Python and Rust copula library with a shared Rust core. Fit, evaluate, and sample dependence structures up to ~100× faster than R's VineCopula."
+---
+
+rscopulas gives you a NumPy-first Python API and a Rust library for fitting, evaluating, and sampling copula models on pseudo-observations. The Rust core powers both interfaces, delivering up to **~100× speedup** over R's `copula`/`VineCopula` stack on vine `log_pdf` workloads — without sacrificing ergonomics.
+
+<CardGroup cols={2}>
+  <Card title="Python Quickstart" icon="python" href="/quickstart-python">
+    Install from PyPI and fit your first copula model in minutes.
+  </Card>
+  <Card title="Rust Quickstart" icon="rust" href="/quickstart-rust">
+    Add the crate and run the shipped examples from your workspace.
+  </Card>
+  <Card title="Copula Families" icon="chart-scatter" href="/concepts/copula-families">
+    Explore Gaussian, Student t, Archimedean, vine, and HAC models.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/python/overview">
+    Full reference for every class, method, and parameter.
+  </Card>
+</CardGroup>
+
+## What you can do with rscopulas
+
+rscopulas supports the full copula workflow: transform your raw data to pseudo-observations, choose a copula family, fit to data, evaluate log-density, and draw samples.
+
+<CardGroup cols={2}>
+  <Card title="Vine Copulas" icon="diagram-project" href="/guides/vine-copulas">
+    Fit C-vine, D-vine, and R-vine models with mixed pair families.
+  </Card>
+  <Card title="Pair Copulas" icon="link" href="/guides/pair-copulas">
+    Work with bivariate pair kernels, h-functions, and rotations.
+  </Card>
+  <Card title="Khoudraji Copulas" icon="sliders" href="/guides/khoudraji">
+    Model asymmetric dependence with Khoudraji compositions.
+  </Card>
+  <Card title="Hierarchical Archimedean" icon="sitemap" href="/guides/hierarchical-archimedean">
+    Build and fit nested Archimedean copula trees.
+  </Card>
+</CardGroup>
+
+## Key features
+
+- **~100× faster log_pdf** on vine workloads versus R's VineCopula
+- **Python and Rust** — same Rust core, two idiomatic APIs
+- **Validated inputs** — strict `(0, 1)` pseudo-observation checks with clear error messages
+- **Fit diagnostics** — log-likelihood, AIC, BIC, convergence flag, and iteration count on every fit
+- **Optional visualization** — density plots, scatter plots, and vine structure graphs via `rscopulas[viz]`
+
+## Installation
+
+<CodeGroup>
+```bash uv (recommended)
+uv add rscopulas
+```
+
+```bash pip
+pip install rscopulas
+```
+
+```bash With visualization
+uv add "rscopulas[viz]"
+```
+</CodeGroup>

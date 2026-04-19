@@ -1,0 +1,215 @@
+---
+title: "Fitting C-vine, D-vine, and R-vine Copulas"
+sidebarTitle: "Vine Copulas"
+description: "Vine copulas decompose high-dimensional dependence into bivariate pair copulas in a tree sequence. Learn when to use C-, D-, and R-vines and how to fit them."
+---
+
+Vine copulas let you model complex, high-dimensional dependence structures by breaking them down into a sequence of bivariate building blocks called pair copulas. Each tree in the vine connects variables (or pseudo-variables) through edges, and each edge carries its own pair copula family, parameters, and optional rotation. This decomposition gives you far more flexibility than a single multivariate copula family, and rscopulas fits the structure and pair families jointly from your pseudo-observations.
+
+## When to use each vine type
+
+rscopulas supports three vine structures:
+
+- **C-vine** — Use when one variable drives the dependence on all others. The root variable appears in every first-tree edge (star structure). Fit with `VineCopula.fit_c`.
+- **D-vine** — Use when variables have a natural chain ordering, such as time series or spatially ordered measurements. Each variable connects to its two neighbors in the first tree. Fit with `VineCopula.fit_d`.
+- **R-vine** — The general case. No ordering is assumed; the algorithm selects the structure during fitting using a maximum spanning tree criterion. Fit with `VineCopula.fit_r`.
+
+When in doubt, start with `fit_r` and inspect `fit.model.structure_kind` afterward to see what structure was selected.
+
+## Fitting an R-vine in Python
+
+<Steps>
+  <Step title="Prepare your pseudo-observations">
+    Vine copulas operate on pseudo-observations — values strictly inside `(0, 1)`. Transform your raw data to uniforms before calling any fit method. Each row is one observation, each column is one variable.
+
+    ```python
+    import numpy as np
+    from rscopulas import VineCopula
+
+    data = np.array(
+        [
+            [0.10, 0.14, 0.18, 0.22],
+            [0.18, 0.21, 0.24, 0.27],
+            [0.24, 0.29, 0.33, 0.31],
+            [0.33, 0.30, 0.38, 0.41],
+            [0.47, 0.45, 0.43, 0.49],
+            [0.52, 0.58, 0.55, 0.53],
+            [0.69, 0.63, 0.67, 0.71],
+            [0.81, 0.78, 0.74, 0.76],
+        ],
+        dtype=np.float64,
+    )
+    ```
+  </Step>
+  <Step title="Fit the vine">
+    Call `VineCopula.fit_r` with a `family_set` and any options you need. The fitter selects both the vine structure and the pair copula family on each edge.
+
+    ```python
+    fit = VineCopula.fit_r(
+        data,
+        family_set=["independence", "gaussian", "clayton", "frank", "gumbel"],
+        truncation_level=2,
+        max_iter=200,
+    )
+    ```
+  </Step>
+  <Step title="Inspect the fitted model">
+    The returned `FitResult` carries a `model` and `diagnostics`. Use the model's properties to understand the selected structure and pair families.
+
+    ```python
+    print("structure kind:", fit.model.structure_kind)
+    print("order:", fit.model.order)
+    print("first-tree families:", [edge.family for edge in fit.model.trees[0].edges])
+    print("sample:\n", fit.model.sample(4, seed=13))
+    ```
+  </Step>
+</Steps>
+
+## Fitting options
+
+### `family_set`
+
+A list of string family names to consider on each vine edge. The fitter evaluates all candidates and picks the best according to `criterion`.
+
+| String | Family |
+|---|---|
+| `"independence"` | Independence (no dependence) |
+| `"gaussian"` | Gaussian |
+| `"student_t"` | Student t |
+| `"clayton"` | Clayton |
+| `"frank"` | Frank |
+| `"gumbel"` | Gumbel |
+| `"khoudraji"` | Khoudraji (asymmetric composition) |
+
+<Tip>
+Include `"independence"` in your family set to allow the fitter to drop edges where there is no detectable dependence, which keeps the model parsimonious.
+</Tip>
+
+### `criterion`
+
+Controls which information criterion the fitter minimizes when selecting pair families on each edge. Accepts `"aic"` (default) or `"bic"`. BIC applies a stronger penalty for model complexity and tends to select simpler pair families.
+
+### `truncation_level`
+
+Limits fitting to only the first `k` trees. Higher trees in a vine model tend to have weaker conditional dependence, so truncating at a low level (e.g. `truncation_level=2`) often produces a good approximation while reducing computation significantly. Edges in truncated trees are set to the independence copula.
+
+<Note>
+For large `d`, always set `truncation_level`. Fitting all `d - 1` trees grows quadratically in the number of pair copulas that must be estimated.
+</Note>
+
+### `independence_threshold`
+
+A float in `(0, 1)`. When set, the fitter skips edges where a statistical test fails to reject independence at this significance level, treating those edges as independence copulas without running full family selection. This is a fast way to sparsify the vine.
+
+### `include_rotations`
+
+Boolean, defaults to `True`. When enabled, the fitter also considers 90°, 180°, and 270° rotations of asymmetric families (Clayton, Gumbel) to capture lower tail, upper tail, and reflected dependence patterns.
+
+## Fitting C-vine and D-vine
+
+`fit_c` and `fit_d` accept the same keyword arguments as `fit_r`:
+
+<CodeGroup>
+```python C-vine
+fit_c = VineCopula.fit_c(
+    data,
+    family_set=["independence", "gaussian", "clayton", "gumbel"],
+    criterion="bic",
+)
+print("structure:", fit_c.model.structure_kind)
+```
+
+```python D-vine
+fit_d = VineCopula.fit_d(
+    data,
+    family_set=["independence", "gaussian", "clayton", "gumbel"],
+    criterion="bic",
+)
+print("structure:", fit_d.model.structure_kind)
+```
+</CodeGroup>
+
+## Inspecting a fitted vine
+
+A `VineCopula` model exposes the following properties:
+
+| Property | Type | Description |
+|---|---|---|
+| `structure_kind` | `str` | `"c_vine"`, `"d_vine"`, or `"r_vine"` |
+| `order` | `list[int]` | Variable ordering of the vine |
+| `pair_parameters` | `ndarray` | Flat array of all pair copula parameters |
+| `trees` | `list[VineTreeInfo]` | Tree-by-tree edge information (family, rotation, parameters) |
+| `structure_info` | `VineStructureInfo` | Structure matrix and truncation level |
+
+Each `VineTreeInfo` contains a list of `VineEdgeInfo` objects with `family`, `rotation`, `parameters`, `conditioned`, and `conditioning` fields.
+
+## Constructing a Gaussian vine from a correlation matrix
+
+If you already have a correlation matrix, you can build a Gaussian C-vine or D-vine directly without fitting:
+
+```python
+import numpy as np
+from rscopulas import VineCopula
+
+correlation = np.array([
+    [1.0, 0.60, 0.35],
+    [0.60, 1.0, 0.25],
+    [0.35, 0.25, 1.0],
+], dtype=np.float64)
+
+model = VineCopula.gaussian_c_vine(order=[0, 1, 2], correlation=correlation)
+print("order:", model.order)
+
+model_d = VineCopula.gaussian_d_vine(order=[0, 1, 2], correlation=correlation)
+```
+
+<Info>
+`gaussian_c_vine` and `gaussian_d_vine` return a `VineCopula` model directly, not a `FitResult`. There are no diagnostics because no data is fitted.
+</Info>
+
+## Fitting a vine in Rust
+
+The Rust API mirrors the Python interface. Use `VineCopula::fit_r_vine` with `VineFitOptions` to control families, criterion, and truncation:
+
+```rust
+use ndarray::array;
+use rscopulas_core::{
+    PairCopulaFamily, PseudoObs, SelectionCriterion, VineCopula, VineFitOptions,
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = PseudoObs::new(array![
+        [0.12, 0.18, 0.21],
+        [0.21, 0.25, 0.29],
+        [0.27, 0.22, 0.31],
+        [0.35, 0.42, 0.39],
+        [0.48, 0.51, 0.46],
+        [0.56, 0.49, 0.58],
+        [0.68, 0.73, 0.69],
+        [0.82, 0.79, 0.76],
+    ])?;
+
+    let options = VineFitOptions {
+        family_set: vec![
+            PairCopulaFamily::Independence,
+            PairCopulaFamily::Gaussian,
+            PairCopulaFamily::Clayton,
+            PairCopulaFamily::Frank,
+            PairCopulaFamily::Gumbel,
+            PairCopulaFamily::Khoudraji,
+        ],
+        include_rotations: true,
+        criterion: SelectionCriterion::Aic,
+        truncation_level: Some(1),
+        ..VineFitOptions::default()
+    };
+
+    let fit = VineCopula::fit_r_vine(&data, &options)?;
+    println!("structure = {:?}", fit.model.structure());
+    println!("order = {:?}", fit.model.order());
+    println!("pair parameters = {:?}", fit.model.pair_parameters());
+    Ok(())
+}
+```
+
+Use `VineCopula::fit_c_vine` and `VineCopula::fit_d_vine` for the other vine types. The Rust `VineFitOptions::default()` uses AIC, all classical families with rotations, and no truncation.

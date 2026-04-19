@@ -1,0 +1,106 @@
+---
+title: "Rust API Reference Overview — rscopulas"
+sidebarTitle: "Overview"
+description: "Everything you need to start using rscopulas in Rust: dependency setup, key types, PseudoObs validation, and runnable examples included in the repository."
+---
+
+The `rscopulas` crate is the primary Rust interface for copula modeling. All public types — copula models, fitting options, execution policy, and the `PseudoObs` wrapper — are re-exported from the crate root, so a single `use rscopulas::...` import covers most workflows. The crate expects your data to already be in pseudo-observation form: finite values strictly inside the open unit interval `(0, 1)`.
+
+## Adding the dependency
+
+Inside the rscopulas workspace, reference the core crate as a path dependency:
+
+```toml Cargo.toml
+[dependencies]
+ndarray = "0.17"
+rand = "0.9"
+rscopulas = { path = "crates/rscopulas-core" }
+```
+
+<Note>
+Once the crate is published to crates.io, replace the path dependency with a version specifier such as `rscopulas = "0.2"`.
+</Note>
+
+## Key types
+
+Import what you need from the crate root. The following types cover all standard workflows:
+
+```rust
+use rscopulas::{
+    // Data validation
+    PseudoObs,
+
+    // Trait — bring into scope to call log_pdf / sample on concrete types
+    CopulaModel,
+
+    // Single-family copulas
+    GaussianCopula,
+    StudentTCopula,
+    ClaytonCopula,
+    FrankCopula,
+    GumbelHougaardCopula,
+
+    // Vine copulas
+    VineCopula,
+    VineFitOptions,
+
+    // Options
+    FitOptions,
+    EvalOptions,
+    SampleOptions,
+
+    // Execution policy
+    ExecPolicy,
+    Device,
+
+    // Selection criterion (vine fitting)
+    SelectionCriterion,
+
+    // Pair copulas (from the paircopula module)
+    PairCopulaFamily,
+};
+```
+
+## PseudoObs
+
+`PseudoObs` is a validated wrapper around an `ndarray::Array2<f64>`. Constructing it checks every entry:
+
+- The value must be finite.
+- The value must satisfy `0 < u < 1` (strict — boundary values are rejected).
+- The matrix must have at least two columns and at least one row.
+
+If any check fails, `PseudoObs::new` returns an `Err(InputError)` describing the offending position and value.
+
+```rust
+use ndarray::array;
+use rscopulas::PseudoObs;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = PseudoObs::new(array![
+        [0.12_f64, 0.18],
+        [0.21, 0.25],
+        [0.82, 0.79],
+    ])?;
+
+    println!("observations: {}", data.n_obs()); // 3
+    println!("dimension:    {}", data.dim());    // 2
+    Ok(())
+}
+```
+
+<Warning>
+Values exactly equal to `0.0` or `1.0` are rejected. Transform your raw data to the open unit interval before constructing `PseudoObs`.
+</Warning>
+
+You can also construct from a borrowed view with `PseudoObs::from_view`, or recover the inner array with `.into_inner()` and borrow it with `.as_view()`.
+
+## Runnable examples
+
+All examples ship under `crates/rscopulas-core/examples/` and can be run from the workspace root:
+
+| Example | Command |
+|---------|---------|
+| Gaussian quickstart | `cargo run -p rscopulas --example quickstart_gaussian` |
+| R-vine fit | `cargo run -p rscopulas --example vine_r_vine_fit` |
+| Pair copula | `cargo run -p rscopulas --example pair_copula_clayton` |
+| Khoudraji pair | `cargo run -p rscopulas --example khoudraji_pair` |

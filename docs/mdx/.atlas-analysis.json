@@ -1,0 +1,120 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "rscopulas",
+  "projectDescription": "A Python and Rust library for fitting, evaluating, and sampling copula models on pseudo-observations, with a high-performance Rust core up to ~100× faster than R's copula stack.",
+  "theme": "luma",
+  "primaryColor": "#e0c155",
+  "lightColor": "#4a6a83",
+  "darkColor": "#d5d6d3",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart-python",
+              "quickstart-rust"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/pseudo-observations",
+              "concepts/copula-families",
+              "concepts/fit-diagnostics"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/vine-copulas",
+              "guides/pair-copulas",
+              "guides/khoudraji",
+              "guides/hierarchical-archimedean",
+              "guides/visualization"
+            ]
+          },
+          {
+            "group": "Performance",
+            "pages": [
+              "performance/benchmarks"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Python API",
+            "pages": [
+              "api/python/overview",
+              "api/python/copula-models",
+              "api/python/vine-copula",
+              "api/python/pair-copula",
+              "api/python/fit-result",
+              "api/python/plotting"
+            ]
+          },
+          {
+            "group": "Rust API",
+            "pages": [
+              "api/rust/overview",
+              "api/rust/copula-model",
+              "api/rust/vine-copula",
+              "api/rust/pair-copula",
+              "api/rust/exec-policy"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Up to ~100× faster than R's copula/VineCopula stack on vine log_pdf workloads",
+    "NumPy-first Python API backed by a Rust core via PyO3/maturin",
+    "Single-family copulas: Gaussian, Student t, Clayton, Frank, Gumbel",
+    "Vine copulas: C-vine, D-vine, and R-vine with mixed pair-family fitting",
+    "Khoudraji asymmetric pair copulas for flexible skewed dependence",
+    "Hierarchical Archimedean copulas (HAC) with nested structure",
+    "Fit diagnostics: log-likelihood, AIC, BIC, convergence, iteration count",
+    "Optional visualization via rscopulas.plotting (matplotlib, viz extra)",
+    "Strict pseudo-observation validation — rejects boundary and non-finite values",
+    "Reference-tested against R packages copula and VineCopula"
+  ],
+  "publicApiSurface": [
+    "GaussianCopula.fit(data)",
+    "GaussianCopula.from_params(correlation)",
+    "StudentTCopula.fit(data)",
+    "StudentTCopula.from_params(correlation, degrees_of_freedom)",
+    "ClaytonCopula.fit(data)",
+    "ClaytonCopula.from_params(dim, theta)",
+    "FrankCopula.fit(data)",
+    "FrankCopula.from_params(dim, theta)",
+    "GumbelCopula.fit(data)",
+    "GumbelCopula.from_params(dim, theta)",
+    "VineCopula.fit_r(data, family_set, criterion, truncation_level)",
+    "VineCopula.fit_c(data, family_set, criterion, truncation_level)",
+    "VineCopula.fit_d(data, family_set, criterion, truncation_level)",
+    "VineCopula.gaussian_c_vine(order, correlation)",
+    "VineCopula.gaussian_d_vine(order, correlation)",
+    "VineCopula.from_trees(kind, trees)",
+    "PairCopula.from_spec(family, parameters, rotation)",
+    "PairCopula.from_khoudraji(first_family, second_family, shape_1, shape_2, ...)",
+    "PairCopula.log_pdf(u1, u2)",
+    "PairCopula.cond_first_given_second(u1, u2)",
+    "PairCopula.cond_second_given_first(u1, u2)",
+    "HierarchicalArchimedeanCopula.fit(data, family_set, structure_method)",
+    "HierarchicalArchimedeanCopula.from_tree(tree)",
+    "FitResult.model",
+    "FitResult.diagnostics (loglik, aic, bic, converged, n_iter)",
+    "model.log_pdf(data)",
+    "model.sample(n, seed)",
+    "rscopulas.plotting.plot_density(model)",
+    "rscopulas.plotting.plot_scatter(sample)",
+    "rscopulas.plotting.plot_vine_structure(vine_model)"
+  ]
+}

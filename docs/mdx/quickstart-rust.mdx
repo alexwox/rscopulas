@@ -1,0 +1,73 @@
+---
+title: "Rust Quickstart: Add rscopulas and Fit a Copula"
+sidebarTitle: "Rust"
+description: "Add the rscopulas crate to your Rust workspace, fit a Gaussian copula from pseudo-observations, inspect diagnostics, and run the shipped examples."
+---
+
+rscopulas ships a native Rust library crate (`rscopulas-core`) that provides the same fitting, scoring, and sampling capabilities as the Python API. This guide shows you how to add the crate as a dependency, fit a model, read diagnostics, sample from it, and run the runnable examples included in the repository.
+
+## Add the dependency
+
+While developing inside the rscopulas workspace, add the crate as a path dependency alongside `ndarray` and `rand`:
+
+```toml
+[dependencies]
+ndarray = "0.17"
+rand = "0.9"
+rscopulas = { path = "crates/rscopulas-core" }
+```
+
+`ndarray` provides the array types used for pseudo-observations and samples. `rand` supplies the RNG required by `sample`.
+
+## Fit a Gaussian copula
+
+Wrap your data in `PseudoObs` to validate that every entry is strictly inside `(0, 1)`, then call `GaussianCopula::fit`.
+
+```rust
+use ndarray::array;
+use rand::{SeedableRng, rngs::StdRng};
+use rscopulas::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = PseudoObs::new(array![
+        [0.12_f64, 0.18],
+        [0.21, 0.25],
+        [0.82, 0.79],
+    ])?;
+    let fit = GaussianCopula::fit(&data, &FitOptions::default())?;
+    println!("AIC: {}", fit.diagnostics.aic);
+    let mut rng = StdRng::seed_from_u64(7);
+    println!("sample:\n{:?}", fit.model.sample(4, &mut rng, &Default::default())?);
+    Ok(())
+}
+```
+
+`fit.diagnostics` exposes `loglik`, `aic`, `bic`, `converged`, and `n_iter` — the same fields available in the Python API.
+
+<Note>
+  Import the `CopulaModel` trait to access `log_pdf` and `sample` on concrete copula types such as `GaussianCopula`. Without the trait in scope, those methods are not visible.
+</Note>
+
+## Runnable examples
+
+The repository ships several ready-to-run examples under `crates/rscopulas-core/examples/`. Run them from the workspace root with `cargo run`:
+
+| Example | Command |
+|---------|---------|
+| Gaussian quickstart | `cargo run -p rscopulas --example quickstart_gaussian` |
+| R-vine fit | `cargo run -p rscopulas --example vine_r_vine_fit` |
+| Pair copula | `cargo run -p rscopulas --example pair_copula_clayton` |
+| Khoudraji pair | `cargo run -p rscopulas --example khoudraji_pair` |
+
+Each example is self-contained and uses fixtures or hardcoded pseudo-observations, so you can run it without any additional setup.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Rust API overview" icon="rust" href="/api/rust/overview">
+    Full reference for traits, types, and execution policy options.
+  </Card>
+  <Card title="Vine copulas guide" icon="diagram-project" href="/guides/vine-copulas">
+    Fit R-vine, C-vine, and D-vine models with mixed pair families in Rust.
+  </Card>
+</CardGroup>

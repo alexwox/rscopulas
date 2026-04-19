@@ -1,0 +1,88 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "rscopulas",
+  "theme": "luma",
+  "logo": {
+    "light": "https://media.brand.dev/f178c4d1-c126-4cc5-9e28-165160ef002b.svg",
+    "dark": "https://media.brand.dev/f178c4d1-c126-4cc5-9e28-165160ef002b.svg"
+  },
+  "favicon": "https://media.brand.dev/79c4f7e8-2497-42f9-aa9b-1f25e2929a04.jpg",
+  "colors": {
+    "primary": "#e0c155",
+    "light": "#4a6a83",
+    "dark": "#d5d6d3"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/alexwox/rscopulas"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart-python",
+              "quickstart-rust"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/pseudo-observations",
+              "concepts/copula-families",
+              "concepts/fit-diagnostics"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/vine-copulas",
+              "guides/pair-copulas",
+              "guides/khoudraji",
+              "guides/hierarchical-archimedean",
+              "guides/visualization"
+            ]
+          },
+          {
+            "group": "Performance",
+            "pages": [
+              "performance/benchmarks"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Python API",
+            "pages": [
+              "api/python/overview",
+              "api/python/copula-models",
+              "api/python/vine-copula",
+              "api/python/pair-copula",
+              "api/python/fit-result",
+              "api/python/plotting"
+            ]
+          },
+          {
+            "group": "Rust API",
+            "pages": [
+              "api/rust/overview",
+              "api/rust/copula-model",
+              "api/rust/vine-copula",
+              "api/rust/pair-copula",
+              "api/rust/exec-policy"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

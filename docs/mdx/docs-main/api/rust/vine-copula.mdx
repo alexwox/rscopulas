@@ -1,0 +1,175 @@
+---
+title: "VineCopula — C-vine, D-vine, and R-vine in Rust"
+sidebarTitle: "VineCopula"
+description: "Construct and fit C-vine, D-vine, and R-vine copulas in Rust. Covers VineCopula constructors, VineFitOptions, family selection, and result accessors."
+---
+
+`VineCopula` represents a pair-copula construction over `d` variables organized as a sequence of trees. rscopulas supports three vine types — C-vine, D-vine, and R-vine — each available as a direct Gaussian construction and as a data-driven fit with mixed pair-copula families. `VineCopula` implements `CopulaModel`, so you can call `log_pdf` and `sample` on any fitted vine after importing the trait.
+
+## Constructors
+
+### Gaussian constructions
+
+Use these when you already have a correlation matrix and want to skip fitting:
+
+```rust
+use ndarray::array;
+use rscopulas::VineCopula;
+
+// C-vine: star structure, root has highest total dependence
+let correlation = array![
+    [1.0_f64, 0.60, 0.35],
+    [0.60,    1.0,  0.25],
+    [0.35,    0.25, 1.0 ],
+];
+let model = VineCopula::gaussian_c_vine(vec![0, 1, 2], correlation.clone())?;
+println!("order = {:?}", model.order());
+
+// D-vine: path structure
+let model = VineCopula::gaussian_d_vine(vec![0, 1, 2], correlation)?;
+```
+
+Both functions accept an explicit `order: Vec<usize>` and a valid correlation matrix. They return `Err` if the matrix is not a valid correlation matrix or the order is inconsistent with its dimension.
+
+### Constructing from explicit trees
+
+If you have hand-specified pair-copula edges, assemble them into `VineTree` values and call `from_trees`:
+
+```rust
+use rscopulas::{VineCopula, VineStructureKind};
+
+let model = VineCopula::from_trees(
+    VineStructureKind::R,
+    trees,          // Vec<VineTree>
+    Some(2),        // optional truncation level
+)?;
+```
+
+## Fitting
+
+All three fit methods accept a `&PseudoObs` and a `&VineFitOptions` and return `FitResult<VineCopula>`.
+
+| Method | Structure | Tree selection |
+|--------|-----------|----------------|
+| `VineCopula::fit_c_vine` | C-vine | Root chosen by maximum total Kendall tau weight |
+| `VineCopula::fit_d_vine` | D-vine | Path order chosen by greedy Kendall tau |
+| `VineCopula::fit_r_vine` | R-vine | Dissmann-style maximum spanning tree per level |
+
+```rust
+use rscopulas::{PseudoObs, VineCopula, VineFitOptions};
+use ndarray::array;
+
+let data = PseudoObs::new(array![
+    [0.12_f64, 0.18, 0.21],
+    [0.48,     0.51, 0.46],
+    [0.82,     0.79, 0.76],
+])?;
+
+let fit = VineCopula::fit_r_vine(&data, &VineFitOptions::default())?;
+println!("AIC: {}", fit.diagnostics.aic);
+```
+
+## VineFitOptions
+
+`VineFitOptions` controls which pair-copula families are considered, how rotations are handled, which information criterion selects the best edge model, and whether the vine is truncated.
+
+```rust
+pub struct VineFitOptions {
+    pub base: FitOptions,                      // exec_policy, clip_eps, max_iter
+    pub family_set: Vec<PairCopulaFamily>,     // families considered per edge
+    pub include_rotations: bool,               // allow rotated Archimedean families
+    pub criterion: SelectionCriterion,         // Aic or Bic
+    pub truncation_level: Option<usize>,       // stop fitting after this tree level
+    pub independence_threshold: Option<f64>,  // select independence if |tau| <= threshold
+}
+```
+
+**`PairCopulaFamily` variants:**
+
+| Variant | Notes |
+|---------|-------|
+| `Independence` | No parameters; always available. |
+| `Gaussian` | Single parameter `rho`. No rotation needed. |
+| `StudentT` | Two parameters `(rho, nu)`. No rotation. |
+| `Clayton` | Single `theta > 0`. Rotations available. |
+| `Frank` | Single `theta > 0`. No rotation. |
+| `Gumbel` | Single `theta >= 1`. Rotations available. |
+| `Khoudraji` | Asymmetric composition. Fitted via bounded CPU search. |
+
+**`SelectionCriterion` variants:** `Aic`, `Bic`.
+
+The default `VineFitOptions` includes all families, enables rotations, uses AIC, and applies no truncation.
+
+## R-vine fit example
+
+```rust
+use ndarray::array;
+use rscopulas::{
+    PairCopulaFamily, PseudoObs, SelectionCriterion, VineCopula, VineFitOptions,
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = PseudoObs::new(array![
+        [0.12, 0.18, 0.21],
+        [0.21, 0.25, 0.29],
+        [0.27, 0.22, 0.31],
+        [0.35, 0.42, 0.39],
+        [0.48, 0.51, 0.46],
+        [0.56, 0.49, 0.58],
+        [0.68, 0.73, 0.69],
+        [0.82, 0.79, 0.76],
+    ])?;
+
+    let options = VineFitOptions {
+        family_set: vec![
+            PairCopulaFamily::Independence,
+            PairCopulaFamily::Gaussian,
+            PairCopulaFamily::Clayton,
+            PairCopulaFamily::Frank,
+            PairCopulaFamily::Gumbel,
+            PairCopulaFamily::Khoudraji,
+        ],
+        include_rotations: true,
+        criterion: SelectionCriterion::Aic,
+        truncation_level: Some(1),
+        ..VineFitOptions::default()
+    };
+
+    let fit = VineCopula::fit_r_vine(&data, &options)?;
+    println!("structure = {:?}", fit.model.structure());
+    println!("order = {:?}", fit.model.order());
+    println!("pair parameters = {:?}", fit.model.pair_parameters());
+    Ok(())
+}
+```
+
+## Accessors
+
+Once you have a `VineCopula` (from a fit or a constructor), the following methods expose its structure and parameters:
+
+| Method | Return type | Description |
+|--------|-------------|-------------|
+| `.structure()` | `VineStructureKind` | `C`, `D`, or `R`. |
+| `.structure_info()` | `&VineStructure` | R-vine matrix, kind, and truncation level. |
+| `.order()` | `Vec<usize>` | Top-level variable order implied by the structure. |
+| `.trees()` | `&[VineTree]` | All fitted tree levels in evaluation order. |
+| `.pair_parameters()` | `Vec<f64>` | Flattened first parameter from each edge copula. |
+| `.truncation_level()` | `Option<usize>` | Configured truncation level, if any. |
+
+<Tip>
+Use `.truncation_level(Some(1))` in `VineFitOptions` to fit only the first tree and assign independence copulas to deeper levels. This is the fastest configuration and still captures primary pairwise dependence.
+</Tip>
+
+## Evaluating and sampling
+
+`VineCopula` implements `CopulaModel`, so the standard `log_pdf` and `sample` calls work identically to the single-family types:
+
+```rust
+use rscopulas::{CopulaModel, EvalOptions, SampleOptions};
+use rand::{SeedableRng, rngs::StdRng};
+
+let log_densities = fit.model.log_pdf(&data, &EvalOptions::default())?;
+
+let mut rng = StdRng::seed_from_u64(42);
+let samples = fit.model.sample(100, &mut rng, &SampleOptions::default())?;
+```

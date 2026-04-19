@@ -1,0 +1,123 @@
+---
+title: "Pair Copulas: H-Functions and Bivariate Kernels"
+sidebarTitle: "Pair Copulas"
+description: "Pair copulas are bivariate building blocks used in vine models and for direct two-dimensional modeling. Learn how to construct, evaluate, and use h-functions."
+---
+
+Pair copulas are the bivariate building blocks that make vine copula models work, but you can also use them standalone for any two-dimensional dependence problem. Each pair copula has a family, an optional rotation, and one or two parameters. rscopulas exposes log-density evaluation, conditional distributions (h-functions), and their inverses — everything you need to build or inspect a vine layer by layer, or to work directly with bivariate data.
+
+## Constructing a pair copula
+
+Use `PairCopula.from_spec` to build a pair copula from a family name, parameter list, and optional rotation:
+
+```python
+from rscopulas import PairCopula
+
+# Clayton pair copula with theta=1.4, rotated 90 degrees
+pc = PairCopula.from_spec("clayton", parameters=[1.4], rotation="R90")
+print("family:", pc.family)
+print("rotation:", pc.rotation)
+print("parameters:", pc.parameters)
+```
+
+The returned `PairCopula` object is immutable. Inspect its state through the `family`, `rotation`, and `parameters` properties.
+
+## Available families
+
+| String | Family | Parameters |
+|---|---|---|
+| `"gaussian"` | Gaussian | 1 (correlation ρ) |
+| `"student_t"` | Student t | 2 (correlation ρ, degrees of freedom ν) |
+| `"clayton"` | Clayton | 1 (theta θ > 0) |
+| `"frank"` | Frank | 1 (theta θ ≠ 0) |
+| `"gumbel"` | Gumbel | 1 (theta θ ≥ 1) |
+| `"independence"` | Independence | 0 |
+
+## Rotations
+
+Rotations extend asymmetric families — Clayton and Gumbel — to capture different tail dependence patterns:
+
+| Rotation string | Effect |
+|---|---|
+| `"R0"` | Default; no rotation |
+| `"R90"` | 90° rotation; lower tail becomes right tail |
+| `"R180"` | 180° rotation; reverses the dependence direction |
+| `"R270"` | 270° rotation; reflects across the other diagonal |
+
+<Tip>
+Use `"R90"` or `"R270"` with Clayton to model upper tail dependence, which the unrotated Clayton family cannot capture. Gumbel has upper tail dependence by default; rotate it to capture lower tail dependence instead.
+</Tip>
+
+## Evaluating log-density and h-functions
+
+`PairCopula` provides five evaluation methods. All accept 1-D `float64` NumPy arrays with values strictly in `(0, 1)`:
+
+```python
+import numpy as np
+from rscopulas import PairCopula
+
+pc = PairCopula.from_spec("gaussian", parameters=[0.7])
+u1 = np.array([0.2, 0.5, 0.8], dtype=np.float64)
+u2 = np.array([0.3, 0.6, 0.7], dtype=np.float64)
+print("log_pdf:", pc.log_pdf(u1, u2))
+print("h-function:", pc.cond_first_given_second(u1, u2))
+```
+
+| Method | Description |
+|---|---|
+| `log_pdf(u1, u2)` | Log-density of the pair copula at `(u1, u2)` |
+| `cond_first_given_second(u1, u2)` | h-function: `P(U1 ≤ u1 \| U2 = u2)` |
+| `cond_second_given_first(u1, u2)` | h-function: `P(U2 ≤ u2 \| U1 = u1)` |
+| `inv_first_given_second(p, u2)` | Inverse h-function: quantile of `U1` given `U2 = u2` at probability `p` |
+| `inv_second_given_first(u1, p)` | Inverse h-function: quantile of `U2` given `U1 = u1` at probability `p` |
+
+The h-functions are the conditional CDFs used inside vine sampling and probability integral transform steps. The inverse h-functions invert those conditionals and are used during simulation.
+
+<Warning>
+All input arrays must be `dtype=np.float64` and contain values **strictly** in `(0, 1)`. Values at 0 or 1 are invalid and will raise an error. The library clips internally by `clip_eps` (default `1e-12`) to guard numerical stability, but boundary values themselves are not accepted.
+</Warning>
+
+## Rust: constructing a pair copula spec
+
+In Rust, pair copulas are represented as `PairCopulaSpec` values. Build one directly and call `log_pdf`:
+
+```rust
+use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let spec = PairCopulaSpec {
+        family: PairCopulaFamily::Clayton,
+        rotation: Rotation::R90,
+        params: PairCopulaParams::One(1.4),
+    };
+    println!("log_pdf = {}", spec.log_pdf(0.32, 0.77, 1e-12)?);
+    Ok(())
+}
+```
+
+The Rust API exposes the same methods as Python: `log_pdf`, `cond_first_given_second`, `cond_second_given_first`, `inv_first_given_second`, and `inv_second_given_first`. The `clip_eps` parameter controls how close to 0 or 1 values are allowed to approach before clipping.
+
+## Pair copulas as vine edges
+
+When you fit a vine copula, each edge in each tree is assigned a `PairCopula`. You can inspect those assignments through `fit.model.trees`:
+
+```python
+from rscopulas import VineCopula
+import numpy as np
+
+data = np.array(
+    [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9],
+     [0.2, 0.3, 0.1], [0.6, 0.4, 0.5], [0.8, 0.9, 0.7]],
+    dtype=np.float64,
+)
+fit = VineCopula.fit_r(data, family_set=["independence", "gaussian", "clayton"])
+
+for tree in fit.model.trees:
+    for edge in tree.edges:
+        print(
+            f"tree {edge.tree}, edge {edge.conditioned}: "
+            f"family={edge.family}, rotation={edge.rotation}, params={edge.parameters}"
+        )
+```
+
+Each `VineEdgeInfo` object mirrors the `PairCopula` properties: `family`, `rotation`, and `parameters`.
