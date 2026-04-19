@@ -915,8 +915,8 @@ pub(crate) fn evaluate_pair_batch_into(
         }
         ExecutionStrategy::Cuda(ordinal) => match gaussian_pair_request(spec, u1, u2, clip_eps) {
             Some(request) => {
-                let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
-                    rscopulas_accel::Device::Cuda(ordinal),
+                let batch = crate::accel::evaluate_gaussian_pair_batch(
+                    crate::accel::Device::Cuda(ordinal),
                     request,
                 )
                 .map_err(|err| BackendError::Failed {
@@ -937,8 +937,8 @@ pub(crate) fn evaluate_pair_batch_into(
         },
         ExecutionStrategy::Metal => match gaussian_pair_request(spec, u1, u2, clip_eps) {
             Some(request) => {
-                let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
-                    rscopulas_accel::Device::Metal,
+                let batch = crate::accel::evaluate_gaussian_pair_batch(
+                    crate::accel::Device::Metal,
                     request,
                 )
                 .map_err(|err| BackendError::Failed {
@@ -993,10 +993,10 @@ fn gaussian_pair_request<'a>(
     u1: &'a [f64],
     u2: &'a [f64],
     clip_eps: f64,
-) -> Option<rscopulas_accel::GaussianPairBatchRequest<'a>> {
+) -> Option<crate::accel::GaussianPairBatchRequest<'a>> {
     match (spec.family, spec.rotation, &spec.params) {
         (PairCopulaFamily::Gaussian, Rotation::R0, PairCopulaParams::One(rho)) => {
-            Some(rscopulas_accel::GaussianPairBatchRequest {
+            Some(crate::accel::GaussianPairBatchRequest {
                 u1,
                 u2,
                 rho: *rho,
@@ -1093,7 +1093,7 @@ fn validate_batch_buffers(
 }
 
 fn copy_gaussian_batch(
-    batch: rscopulas_accel::GaussianPairBatchResult,
+    batch: crate::accel::GaussianPairBatchResult,
     outputs: &mut PairBatchBuffers<'_>,
 ) {
     outputs.log_pdf.copy_from_slice(&batch.log_pdf);

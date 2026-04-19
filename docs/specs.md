@@ -10,7 +10,7 @@ This page summarizes **what the codebase is designed to enforce** and **how it i
 
 ## Model surface (high level)
 
-| Area | Rust (`rscopulas-core`) | Python (`rscopulas`) |
+| Area | Rust (`rscopulas`) | Python (`rscopulas`) |
 |------|-------------------------|----------------------|
 | Single-family copulas | Yes | Yes |
 | Pair copulas + rotations | Yes | Yes |

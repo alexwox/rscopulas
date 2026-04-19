@@ -1,7 +1,7 @@
 //! Gaussian copula: validate data, fit, log-density, sample.
 use ndarray::array;
 use rand::{SeedableRng, rngs::StdRng};
-use rscopulas_core::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
+use rscopulas::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data = PseudoObs::new(array![

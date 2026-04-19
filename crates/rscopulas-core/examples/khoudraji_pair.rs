@@ -1,5 +1,5 @@
 //! Khoudraji pair copula from Gaussian × Clayton base specs.
-use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first = PairCopulaSpec {

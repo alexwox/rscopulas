@@ -7,7 +7,7 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use rscopulas_core::{
+use rscopulas::{
     ClaytonCopula, CopulaError, CopulaModel, EvalOptions, FitOptions, FrankCopula, GaussianCopula,
     GumbelHougaardCopula, KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec,
     PseudoObs, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, VineCopula, VineEdge,

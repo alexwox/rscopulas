@@ -1,6 +1,6 @@
-# Rust API (`rscopulas-core`)
+# Rust API (`rscopulas`)
 
-`rscopulas-core` is the main library crate. Import the prelude-style re-exports from the crate root.
+`rscopulas` is the main library crate. Import the prelude-style re-exports from the crate root.
 
 ## Key concepts
 
@@ -29,13 +29,13 @@ Runnable examples ship in `crates/rscopulas-core/examples/`:
 
 | Example | Command |
 |---------|---------|
-| Gaussian quickstart | `cargo run -p rscopulas-core --example quickstart_gaussian` |
-| R-vine fit | `cargo run -p rscopulas-core --example vine_r_vine_fit` |
-| Pair copula | `cargo run -p rscopulas-core --example pair_copula_clayton` |
-| Khoudraji pair | `cargo run -p rscopulas-core --example khoudraji_pair` |
+| Gaussian quickstart | `cargo run -p rscopulas --example quickstart_gaussian` |
+| R-vine fit | `cargo run -p rscopulas --example vine_r_vine_fit` |
+| Pair copula | `cargo run -p rscopulas --example pair_copula_clayton` |
+| Khoudraji pair | `cargo run -p rscopulas --example khoudraji_pair` |
 
 Benchmark runners: `benchmark_runner` (cross-language harness binary), Criterion targets in `benches/`.
 
 ## Workspace dependency
 
-Inside this repo, depend on the path crate. For a released crate later, use the crates.io version once published.
+Inside this repo, depend on the path crate with `rscopulas = { path = "crates/rscopulas-core" }`. For a released crate later, use the crates.io version once published.

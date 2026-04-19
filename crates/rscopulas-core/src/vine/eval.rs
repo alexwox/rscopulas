@@ -1,4 +1,5 @@
 use crate::{
+    accel,
     backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
     data::PseudoObs,
     domain::{Device, ExecPolicy},
@@ -43,13 +44,11 @@ impl VineCopula {
             ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => {
                 evaluate_vine_cpu(&ctx, strategy)
             }
-            ExecutionStrategy::Cuda(ordinal) => evaluate_vine_with_gpu_pair_batches(
-                &ctx,
-                rscopulas_accel::Device::Cuda(ordinal),
-                "cuda",
-            ),
+            ExecutionStrategy::Cuda(ordinal) => {
+                evaluate_vine_with_gpu_pair_batches(&ctx, accel::Device::Cuda(ordinal), "cuda")
+            }
             ExecutionStrategy::Metal => {
-                evaluate_vine_with_gpu_pair_batches(&ctx, rscopulas_accel::Device::Metal, "metal")
+                evaluate_vine_with_gpu_pair_batches(&ctx, accel::Device::Metal, "metal")
             }
         }
     }
@@ -85,7 +84,7 @@ fn evaluate_vine_cpu(
 
 fn evaluate_vine_with_gpu_pair_batches(
     ctx: &VineEvalContext<'_>,
-    device: rscopulas_accel::Device,
+    device: accel::Device,
     backend: &'static str,
 ) -> Result<Vec<f64>, CopulaError> {
     if !ctx.runtime.all_gaussian {
@@ -127,9 +126,9 @@ fn evaluate_vine_with_gpu_pair_batches(
             targets[obs] = vdirect[workspace_index(obs, step.row, step.col, d)];
         }
 
-        let batch = rscopulas_accel::evaluate_gaussian_pair_batch(
+        let batch = accel::evaluate_gaussian_pair_batch(
             device,
-            rscopulas_accel::GaussianPairBatchRequest {
+            accel::GaussianPairBatchRequest {
                 u1: &sources,
                 u2: &targets,
                 rho,

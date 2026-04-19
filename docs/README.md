@@ -19,7 +19,7 @@ Start here for guides beyond the root [README.md](../README.md).
 
 ## Repository map
 
-- Rust library: `crates/rscopulas-core`
+- Rust library package: `rscopulas` in `crates/rscopulas-core`
 - Python package: `python/rscopulas`
 - Reference JSON: `fixtures/reference/`
 - Benchmark orchestration: `benchmarks/`

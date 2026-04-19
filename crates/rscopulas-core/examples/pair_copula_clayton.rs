@@ -1,5 +1,5 @@
 //! Clayton pair copula with rotation: density and h-function.
-use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = PairCopulaSpec {

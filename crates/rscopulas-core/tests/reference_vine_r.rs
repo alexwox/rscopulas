@@ -4,7 +4,7 @@ use ndarray::Array2;
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 
-use rscopulas_core::{
+use rscopulas::{
     CopulaModel, EvalOptions, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PseudoObs,
     Rotation, SampleOptions, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
 };
@@ -107,7 +107,7 @@ fn mixed_r_vine_sample_statistics_match_vinecopula_fixture() {
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("sample should be valid");
     let means = column_means(&sample_obs);
-    let tau = rscopulas_core::stats::kendall_tau_matrix(&sample_obs);
+    let tau = rscopulas::stats::kendall_tau_matrix(&sample_obs);
 
     for (idx, (actual, expected)) in means.iter().zip(fixture.expected_mean.iter()).enumerate() {
         assert!(

@@ -7,7 +7,7 @@ use pyo3::{
     types::{PyDict, PyList, PyModule},
 };
 use rand::{SeedableRng, random, rngs::StdRng};
-use rscopulas_core::{
+use rscopulas::{
     ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FitDiagnostics,
     FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod,
     HacFitOptions, HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula,
@@ -56,8 +56,8 @@ fn rng_from_seed(seed: Option<u64>) -> StdRng {
     StdRng::seed_from_u64(seed.unwrap_or_else(random))
 }
 
-fn pseudo_obs_from_py(data: PyReadonlyArray2<'_, f64>) -> PyResult<rscopulas_core::PseudoObs> {
-    rscopulas_core::PseudoObs::from_view(data.as_array())
+fn pseudo_obs_from_py(data: PyReadonlyArray2<'_, f64>) -> PyResult<rscopulas::PseudoObs> {
+    rscopulas::PseudoObs::from_view(data.as_array())
         .map_err(|err| InvalidInputError::new_err(err.to_string()))
 }
 
@@ -125,16 +125,16 @@ fn pair_spec_from_values(
     family: &str,
     rotation: &str,
     parameters: Vec<f64>,
-) -> PyResult<rscopulas_core::PairCopulaSpec> {
+) -> PyResult<rscopulas::PairCopulaSpec> {
     let family = pair_family_from_name(family)?;
-    Ok(rscopulas_core::PairCopulaSpec {
+    Ok(rscopulas::PairCopulaSpec {
         family,
         rotation: rotation_from_name(rotation)?,
         params: pair_params_from_values(family, parameters)?,
     })
 }
 
-fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas_core::PairCopulaSpec> {
+fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas::PairCopulaSpec> {
     let family = dict
         .get_item("family")?
         .ok_or_else(|| PyValueError::new_err("pair spec dictionaries require 'family'"))?
@@ -162,7 +162,7 @@ fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas_core::
             .get_item("shape_2")?
             .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'shape_2'"))?
             .extract::<f64>()?;
-        return Ok(rscopulas_core::PairCopulaSpec {
+        return Ok(rscopulas::PairCopulaSpec {
             family: PairCopulaFamily::Khoudraji,
             rotation: rotation_from_name(&rotation)?,
             params: PairCopulaParams::Khoudraji(
@@ -444,7 +444,7 @@ fn params_to_vec(params: &PairCopulaParams) -> Vec<f64> {
 fn attach_pair_components<'py>(
     py: Python<'py>,
     dict: &Bound<'py, PyDict>,
-    spec: &rscopulas_core::PairCopulaSpec,
+    spec: &rscopulas::PairCopulaSpec,
 ) -> PyResult<()> {
     if let PairCopulaParams::Khoudraji(params) = &spec.params {
         dict.set_item("shape_1", params.shape_first)?;
@@ -457,7 +457,7 @@ fn attach_pair_components<'py>(
 
 fn pair_spec_to_py<'py>(
     py: Python<'py>,
-    spec: &rscopulas_core::PairCopulaSpec,
+    spec: &rscopulas::PairCopulaSpec,
 ) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("family", pair_family_name(spec.family))?;
@@ -985,7 +985,7 @@ impl PyGumbelCopula {
 )]
 #[derive(Clone)]
 struct PyPairCopula {
-    inner: rscopulas_core::PairCopulaSpec,
+    inner: rscopulas::PairCopulaSpec,
 }
 
 impl PyPairCopula {
@@ -1001,7 +1001,7 @@ impl PyPairCopula {
         mut callback: F,
     ) -> PyResult<Bound<'py, PyArray1<f64>>>
     where
-        F: FnMut(&rscopulas_core::PairCopulaSpec, f64, f64, f64) -> Result<f64, CopulaError>,
+        F: FnMut(&rscopulas::PairCopulaSpec, f64, f64, f64) -> Result<f64, CopulaError>,
     {
         let (left_values, right_values) =
             paired_vectors_from_py(left, right, left_name, right_name)?;
@@ -1054,7 +1054,7 @@ impl PyPairCopula {
         second_rotation: &str,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: rscopulas_core::PairCopulaSpec {
+            inner: rscopulas::PairCopulaSpec {
                 family: PairCopulaFamily::Khoudraji,
                 rotation: rotation_from_name(rotation)?,
                 params: PairCopulaParams::Khoudraji(

@@ -32,7 +32,7 @@ package under this directory.
 Rust:
 
 ```sh
-cargo build --release --manifest-path crates/rscopulas-core/Cargo.toml --example benchmark_runner
+cargo build --release -p rscopulas --example benchmark_runner
 ```
 
 Python bindings (from the local checkout):

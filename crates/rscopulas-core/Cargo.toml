@@ -1,12 +1,12 @@
 [package]
-name = "rscopulas-core"
+name = "rscopulas"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation = "https://docs.rs/rscopulas-core"
+documentation = "https://docs.rs/rscopulas"
 readme = "README.md"
 description = "Core Rust library for fitting, evaluating, and sampling copula models and vine copulas"
 keywords = ["copula", "statistics", "vines", "dependence", "probability"]
@@ -14,17 +14,23 @@ categories = ["mathematics", "science"]
 
 [features]
 default = []
-cuda = ["rscopulas-accel/cuda"]
-metal = ["rscopulas-accel/metal"]
+cuda = []
+metal = []
 
 [dependencies]
 ndarray.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
-rscopulas-accel.workspace = true
+rayon.workspace = true
 serde.workspace = true
 statrs.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.31"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+cudarc = { version = "0.19.4", default-features = false, features = ["driver", "nvrtc", "dynamic-loading", "cuda-12040"] }
 
 [dev-dependencies]
 criterion.workspace = true

@@ -11,7 +11,7 @@
 | Surface                     | Role                                                                                                                             |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | **Python** (`rscopulas`)    | NumPy-first API built with PyO3/maturin; optional plotting via `rscopulas.plotting` (`viz` extra).                               |
-| **Rust** (`rscopulas-core`) | Primary library crate: traits, `PseudoObs`, execution policy (`ExecPolicy` / `Device`), and accelerated paths where implemented. |
+| **Rust** (`rscopulas`) | Primary library crate: traits, `PseudoObs`, execution policy (`ExecPolicy` / `Device`), and accelerated paths where implemented. |
 
 
 **Documentation:** start with [docs/README.md](docs/README.md) (guides, specs, benchmarks). This README stays the install-and-quickstart landing page.
@@ -20,7 +20,7 @@
 
 - **Validated inputs** — Only finite values strictly inside `(0, 1)`; no silent coercion at the boundary.
 - **Single-family, pair, and vine copulas** — Gaussian, Student t, Archimedean families, **Khoudraji** asymmetric pair copulas, hierarchical Archimedean (HAC), and C-/D-/R-vines with mixed pair families.
-- **Fast Rust core for Python and Rust users** — Heavy vine work runs in `rscopulas-core`, so Python users keep a NumPy-first API without falling back to pure-Python orchestration on the hot path.
+- **Fast Rust core for Python and Rust users** — Heavy vine work runs in `rscopulas`, so Python users keep a NumPy-first API without falling back to pure-Python orchestration on the hot path.
 - **Competitive with established R tooling on the benchmarked vine workloads** — On the shared mixed R-vine harness in this repo, the current Rust and Python implementations both beat `VineCopula`/R on `fit`, `sample`, and `log_pdf`.
 - **Diagnostics** — Log-likelihood, AIC, BIC, convergence, iteration count on fitted models.
 - **Reference fixtures** — JSON fixtures checked against R packages `copula` and `VineCopula`; see [docs/specs.md](docs/specs.md).
@@ -79,13 +79,13 @@ Add the crate (path dependency while developing in this workspace):
 [dependencies]
 ndarray = "0.17"
 rand = "0.9"
-rscopulas-core = { path = "crates/rscopulas-core" }
+rscopulas = { path = "crates/rscopulas-core" }
 ```
 
 ```rust
 use ndarray::array;
 use rand::{SeedableRng, rngs::StdRng};
-use rscopulas_core::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
+use rscopulas::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data = PseudoObs::new(array![
@@ -101,12 +101,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Runnable examples live under `crates/rscopulas-core/examples/` (e.g. `cargo run -p rscopulas-core --example quickstart_gaussian` from the workspace root). See [docs/rust.md](docs/rust.md).
+Runnable examples live under `crates/rscopulas-core/examples/` (e.g. `cargo run -p rscopulas --example quickstart_gaussian` from the workspace root). See [docs/rust.md](docs/rust.md).
 
 ## Performance and benchmarking
 
 - **Cross-language wall times** (Rust vs Python vs R on shared fixtures): `python benchmarks/run.py` — details in [benchmarks/README.md](benchmarks/README.md) and [docs/benchmarks.md](docs/benchmarks.md).
-- **Criterion microbenchmarks** (Rust, manifest-driven where applicable): `cargo bench -p rscopulas-core` (see crate benches).
+- **Criterion microbenchmarks** (Rust, manifest-driven where applicable): `cargo bench -p rscopulas` (see crate benches).
 
 Current mixed R-vine harness results on the benchmark runner used during development show why this library is attractive even if your baseline is `VineCopula` in R or an existing Python copula stack:
 
@@ -114,7 +114,7 @@ Current mixed R-vine harness results on the benchmark runner used during develop
 - **Mixed R-vine sample** — Python `27.939ms`, Rust `28.445ms`, R `112.870ms`
 - **Mixed R-vine log_pdf** — Python `23.481us`, Rust `22.858us`, R `2.596ms`
 
-That means you can use the Python API and still get the Rust-core speedups, instead of trading ergonomics for performance.
+That means you can use the Python API and still get the Rust speedups, instead of trading ergonomics for performance.
 
 Do not compare harness wall times to Criterion reports directly; methodology differs. [docs/benchmarks.md](docs/benchmarks.md) explains both.
 
@@ -127,8 +127,7 @@ Do not compare harness wall times to Criterion reports directly; methodology dif
 
 ## Workspace layout (for contributors)
 
-- `crates/rscopulas-core` — main Rust library.
-- `crates/rscopulas-accel` — CPU parallelism and narrow CUDA/Metal hooks.
+- `crates/rscopulas-core` — Rust library package `rscopulas`, including internal CPU/GPU acceleration support.
 - `crates/rscopulas-python` — PyO3 bindings.
 - `python/` — Python package source.
 - `fixtures/reference/` — R-generated JSON for tests and benchmarks.

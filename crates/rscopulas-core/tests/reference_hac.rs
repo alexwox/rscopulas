@@ -1,7 +1,7 @@
 use ndarray::array;
 use rand::{SeedableRng, rngs::StdRng};
 
-use rscopulas_core::{
+use rscopulas::{
     CopulaModel, HacFamily, HacFitMethod, HacFitOptions, HacNode, HacStructureMethod, HacTree,
     HierarchicalArchimedeanCopula, PseudoObs,
 };
@@ -41,7 +41,7 @@ fn nested_gumbel_sampling_recovers_hierarchical_tau_blocks() {
         .sample(1500, &mut rng, &Default::default())
         .expect("sampling should succeed");
     let pobs = PseudoObs::new(sample).expect("sample must stay inside (0,1)");
-    let tau = rscopulas_core::stats::kendall_tau_matrix(&pobs);
+    let tau = rscopulas::stats::kendall_tau_matrix(&pobs);
 
     assert!((tau[(2, 3)] - 0.5).abs() < 0.1);
     assert!((tau[(0, 1)] - (1.0 - 1.0 / 1.2)).abs() < 0.1);
@@ -160,7 +160,7 @@ fn exchangeable_hac_matches_exact_exchangeable_log_pdf() {
     let actual = model
         .log_pdf(&data, &Default::default())
         .expect("log pdf should evaluate");
-    let exact = rscopulas_core::ClaytonCopula::new(3, 1.4)
+    let exact = rscopulas::ClaytonCopula::new(3, 1.4)
         .expect("theta should be valid")
         .log_pdf(&data, &Default::default())
         .expect("exact log pdf should evaluate");

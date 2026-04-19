@@ -88,7 +88,7 @@ def save_vine_example() -> Path:
 
 def save_hac_example() -> Path:
     # Nested Archimedean (same-family Gumbel nesting). This matches the validated
-    # sampler path in rscopulas-core (see `nested_gumbel_sampling_recovers_*`).
+    # sampler path in rscopulas (see `nested_gumbel_sampling_recovers_*`).
     # Cross-family nesting currently uses a Laplace/Stehfest child-frailty path
     # that can mis-sample nested margins (values stuck near 1); avoid that here
     # so the figure reflects a correct dependence structure.

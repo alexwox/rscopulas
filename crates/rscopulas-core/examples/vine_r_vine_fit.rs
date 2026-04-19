@@ -1,6 +1,6 @@
 //! Mixed-family R-vine fit (includes Khoudraji in the candidate set).
 use ndarray::array;
-use rscopulas_core::{PairCopulaFamily, PseudoObs, SelectionCriterion, VineCopula, VineFitOptions};
+use rscopulas::{PairCopulaFamily, PseudoObs, SelectionCriterion, VineCopula, VineFitOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data = PseudoObs::new(array![

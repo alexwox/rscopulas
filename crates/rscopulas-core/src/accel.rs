@@ -1,19 +1,16 @@
-//! Acceleration support for `rscopulas`.
+//! Internal acceleration support for `rscopulas`.
 //!
-//! This crate has three roles:
-//! - provide CPU-parallel helpers used by `rscopulas-core`
+//! This module has three roles:
+//! - provide CPU-parallel helpers used by the main crate
 //! - report backend capability information for CUDA and Metal
-//! - expose a narrow GPU facade for the first batch kernels that have true device
-//!   implementations
+//! - expose a narrow GPU facade for the first batch kernels that have true
+//!   device implementations
 //!
 //! The current GPU surface is intentionally narrow:
 //! - CUDA targets `f64` Gaussian pair batch evaluation and is the primary GPU
 //!   path for the current numerics
 //! - Metal targets a bounded `f32` Gaussian pair batch kernel and is only used
 //!   where the reduced-precision contract is acceptable
-
-mod cuda_backend;
-mod metal_backend;
 
 #[cfg(feature = "cuda")]
 use std::process::Command;
@@ -30,7 +27,7 @@ pub enum Device {
     Metal,
 }
 
-/// Capability snapshot reported by the accel crate.
+/// Capability snapshot reported by the accel module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeCapabilities {
     pub cpu_simd: bool,
@@ -141,8 +138,10 @@ pub fn evaluate_gaussian_pair_batch(
             backend: "cpu",
             operation: "gaussian pair batch gpu evaluation",
         }),
-        Device::Cuda(ordinal) => cuda_backend::evaluate_gaussian_pair_batch(ordinal, request),
-        Device::Metal => metal_backend::evaluate_gaussian_pair_batch(request),
+        Device::Cuda(ordinal) => {
+            crate::cuda_backend::evaluate_gaussian_pair_batch(ordinal, request)
+        }
+        Device::Metal => crate::metal_backend::evaluate_gaussian_pair_batch(request),
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::{
+    accel,
     domain::{Device, ExecPolicy},
     errors::{BackendError, CopulaError},
 };
@@ -56,7 +57,7 @@ where
 {
     match strategy {
         ExecutionStrategy::CpuSerial => (0..len).map(f).collect(),
-        ExecutionStrategy::CpuParallel => rscopulas_accel::parallel_try_map_range_collect(len, f),
+        ExecutionStrategy::CpuParallel => accel::parallel_try_map_range_collect(len, f),
         ExecutionStrategy::Cuda(_) | ExecutionStrategy::Metal => {
             unreachable!("GPU strategies must be handled before CPU range mapping")
         }
@@ -82,7 +83,7 @@ fn resolve_accelerated_device(
 
     let accel_device = accel_device(device);
     let backend = backend_name(device);
-    if !rscopulas_accel::is_device_available(accel_device) {
+    if !accel::is_device_available(accel_device) {
         return Err(BackendError::Unavailable { backend }.into());
     }
 
@@ -130,10 +131,10 @@ fn backend_name(device: Device) -> &'static str {
     }
 }
 
-fn accel_device(device: Device) -> rscopulas_accel::Device {
+fn accel_device(device: Device) -> accel::Device {
     match device {
-        Device::Cpu => rscopulas_accel::Device::Cpu,
-        Device::Cuda(ordinal) => rscopulas_accel::Device::Cuda(ordinal),
-        Device::Metal => rscopulas_accel::Device::Metal,
+        Device::Cpu => accel::Device::Cpu,
+        Device::Cuda(ordinal) => accel::Device::Cuda(ordinal),
+        Device::Metal => accel::Device::Metal,
     }
 }

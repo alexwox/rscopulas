@@ -4,8 +4,8 @@ use ndarray::Array2;
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 
-use rscopulas_accel::is_device_available as accel_device_available;
-use rscopulas_core::{
+use rscopulas::accel::is_device_available as accel_device_available;
+use rscopulas::{
     CopulaError, CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, GaussianCopula,
     PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PseudoObs, Rotation, SampleOptions,
     StudentTCopula, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
@@ -203,7 +203,7 @@ fn mixed_r_vine_auto_matches_forced_cpu() {
 
 #[test]
 fn forced_metal_gaussian_pair_fit_matches_cpu_with_tolerance() {
-    if !accel_device_available(rscopulas_accel::Device::Metal) {
+    if !accel_device_available(rscopulas::accel::Device::Metal) {
         return;
     }
 
@@ -229,7 +229,7 @@ fn forced_metal_gaussian_pair_fit_matches_cpu_with_tolerance() {
 
 #[test]
 fn forced_metal_gaussian_vines_match_cpu_with_tolerance() {
-    if !accel_device_available(rscopulas_accel::Device::Metal) {
+    if !accel_device_available(rscopulas::accel::Device::Metal) {
         return;
     }
 
@@ -275,7 +275,7 @@ fn forced_metal_gaussian_vines_match_cpu_with_tolerance() {
 
 #[test]
 fn forced_metal_mixed_r_vine_falls_back_to_cpu() {
-    if !accel_device_available(rscopulas_accel::Device::Metal) {
+    if !accel_device_available(rscopulas::accel::Device::Metal) {
         return;
     }
 
@@ -302,7 +302,7 @@ fn forced_metal_mixed_r_vine_falls_back_to_cpu() {
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
 #[test]
 fn forced_cuda_gaussian_vines_match_cpu_when_available() {
-    if !accel_device_available(rscopulas_accel::Device::Cuda(0)) {
+    if !accel_device_available(rscopulas::accel::Device::Cuda(0)) {
         return;
     }
 

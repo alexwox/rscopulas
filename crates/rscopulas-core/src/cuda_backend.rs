@@ -1,15 +1,15 @@
-use crate::{Device, DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
+use crate::accel::{Device, DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
 
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
 mod imp {
     use std::sync::OnceLock;
 
     use cudarc::{
-        driver::{CudaContext, LaunchConfig, PushKernelArg},
+        driver::{CudaContext, LaunchConfig},
         nvrtc::compile_ptx,
     };
 
-    use crate::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
+    use crate::accel::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
 
     const CUDA_GAUSSIAN_PAIR_SRC: &str = r#"
 extern "C" __device__ double normcdf(double x) {
@@ -212,7 +212,7 @@ extern "C" __global__ void gaussian_pair_batch(
 
 #[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
 mod imp {
-    use crate::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
+    use crate::accel::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
 
     pub(super) fn evaluate_gaussian_pair_batch(
         _ordinal: u32,
@@ -229,7 +229,7 @@ pub(crate) fn evaluate_gaussian_pair_batch(
     ordinal: u32,
     request: GaussianPairBatchRequest<'_>,
 ) -> Result<GaussianPairBatchResult, DispatchError> {
-    if !crate::is_device_available(Device::Cuda(ordinal)) {
+    if !crate::accel::is_device_available(Device::Cuda(ordinal)) {
         return Err(DispatchError::DeviceUnavailable(Device::Cuda(ordinal)));
     }
     imp::evaluate_gaussian_pair_batch(ordinal, request)

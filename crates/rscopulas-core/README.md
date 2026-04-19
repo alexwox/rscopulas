@@ -1,12 +1,12 @@
-# rscopulas-core
+# rscopulas
 
-`rscopulas-core` is the primary Rust crate in the `rscopulas` workspace. It provides validated pseudo-observation handling, single-family and pair-copula models, and C-vine, D-vine, and R-vine fitting, evaluation, and sampling.
+`rscopulas` is the primary Rust crate in the `rscopulas` workspace. It provides validated pseudo-observation handling, single-family and pair-copula models, and C-vine, D-vine, and R-vine fitting, evaluation, and sampling.
 
 ## Add the crate
 
 ```toml
 [dependencies]
-rscopulas-core = "0.1.2"
+rscopulas = "0.2.0"
 ```
 
 ## What it includes
@@ -20,4 +20,4 @@ rscopulas-core = "0.1.2"
 ## Links
 
 - Repository: https://github.com/alexwox/rscopulas
-- Docs: https://docs.rs/rscopulas-core
+- Docs: https://docs.rs/rscopulas

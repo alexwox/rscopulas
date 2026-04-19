@@ -18,5 +18,5 @@ ndarray.workspace = true
 numpy = "0.28.0"
 pyo3 = { version = "0.28.3", features = ["extension-module"] }
 rand.workspace = true
-rscopulas-core.workspace = true
+rscopulas.workspace = true
 

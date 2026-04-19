@@ -5,8 +5,8 @@ use rand::{SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use rscopulas_core::paircopula::fit_pair_copula;
-use rscopulas_core::{
+use rscopulas::paircopula::fit_pair_copula;
+use rscopulas::{
     CopulaError, CopulaModel, FitOptions, KhoudrajiParams, PairCopulaFamily, PairCopulaParams,
     PairCopulaSpec, PseudoObs, Rotation, SampleOptions, VineCopula, VineEdge, VineFitOptions,
     VineStructureKind, VineTree,
@@ -177,7 +177,7 @@ fn khoudraji_sampling_matches_r_fixture_statistics() {
         .expect("sampling should succeed");
     let sample_obs = PseudoObs::new(samples).expect("sample should stay inside (0,1)");
     let means = column_means(&sample_obs);
-    let tau = rscopulas_core::stats::kendall_tau_matrix(&sample_obs);
+    let tau = rscopulas::stats::kendall_tau_matrix(&sample_obs);
 
     for (idx, (actual, expected)) in means.iter().zip(fixture.expected_mean.iter()).enumerate() {
         assert!(

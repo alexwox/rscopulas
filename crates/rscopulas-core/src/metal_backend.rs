@@ -1,4 +1,4 @@
-use crate::{Device, DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
+use crate::accel::{Device, DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
 
 #[cfg(all(feature = "metal", target_os = "macos"))]
 mod imp {
@@ -8,7 +8,7 @@ mod imp {
         CommandQueue, CompileOptions, ComputePipelineState, Device, MTLResourceOptions, MTLSize,
     };
 
-    use crate::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
+    use crate::accel::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
 
     const METAL_GAUSSIAN_PAIR_SRC: &str = r#"
 #include <metal_stdlib>
@@ -262,7 +262,7 @@ kernel void gaussian_pair_batch(
 
 #[cfg(not(all(feature = "metal", target_os = "macos")))]
 mod imp {
-    use crate::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
+    use crate::accel::{DispatchError, GaussianPairBatchRequest, GaussianPairBatchResult};
 
     pub(super) fn evaluate_gaussian_pair_batch(
         _request: GaussianPairBatchRequest<'_>,
@@ -277,7 +277,7 @@ mod imp {
 pub(crate) fn evaluate_gaussian_pair_batch(
     request: GaussianPairBatchRequest<'_>,
 ) -> Result<GaussianPairBatchResult, DispatchError> {
-    if !crate::is_device_available(Device::Metal) {
+    if !crate::accel::is_device_available(Device::Metal) {
         return Err(DispatchError::DeviceUnavailable(Device::Metal));
     }
     imp::evaluate_gaussian_pair_batch(request)

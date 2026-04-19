@@ -5,7 +5,7 @@ This note describes how **hierarchical Archimedean copulas** are implemented in 
 ## Model shape
 
 - A **tree** whose internal nodes carry an Archimedean **family** (`clayton`, `frank`, or `gumbel`) and a **parameter** `theta`, and whose **leaves** are column indices `0 … d-1` (pseudo-observation dimensions).
-- Rust: `HierarchicalArchimedeanCopula` and `HacTree` / `HacNode` in `rscopulas-core`.
+- Rust: `HierarchicalArchimedeanCopula` and `HacTree` / `HacNode` in `rscopulas`.
 - Python: `HierarchicalArchimedeanCopula.from_tree({...})` with the same JSON-like nesting as in tests (`family`, `theta`, `children`).
 
 Input data are always **pseudo-observations** in `(0, 1)^d`, consistent with the rest of the library.

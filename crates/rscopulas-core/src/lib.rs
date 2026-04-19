@@ -1,6 +1,6 @@
 //! Core copula modeling for validated pseudo-observations.
 //!
-//! `rscopulas-core` is the main Rust surface for fitting, evaluating, and
+//! `rscopulas` is the main Rust surface for fitting, evaluating, and
 //! sampling:
 //!
 //! - single-family copulas such as Gaussian, Student t, Clayton, Frank, and
@@ -18,7 +18,7 @@
 //! ```no_run
 //! use ndarray::array;
 //! use rand::{rngs::StdRng, SeedableRng};
-//! use rscopulas_core::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
+//! use rscopulas::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let data = PseudoObs::new(array![
@@ -49,7 +49,7 @@
 //!
 //! ```no_run
 //! use ndarray::array;
-//! use rscopulas_core::{
+//! use rscopulas::{
 //!     PairCopulaFamily, PseudoObs, SelectionCriterion, VineCopula, VineFitOptions,
 //! };
 //!
@@ -96,8 +96,12 @@
 //!
 mod archimedean_math;
 mod backend;
+mod cuda_backend;
 mod hac;
+mod metal_backend;
 
+#[doc(hidden)]
+pub mod accel;
 pub mod data;
 pub mod domain;
 pub mod errors;

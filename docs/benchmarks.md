@@ -18,9 +18,9 @@ There are **two** complementary benchmarking surfaces. They share the same **fix
 
 **Outputs:** Written under `benchmarks/output/` (e.g. `latest.json`, `latest.md`). That directory is gitignored except `.gitignore`; results are **local**.
 
-**Rust binary:** Built as `rscopulas-core` example `benchmark_runner` (invoked by the orchestrator).
+**Rust binary:** Built as the `rscopulas` example `benchmark_runner` (invoked by the orchestrator).
 
-## 2. Criterion benches (`crates/rscopulas-core/benches/`)
+## 2. Criterion benches (`rscopulas`, sources under `crates/rscopulas-core/benches/`)
 
 **What it measures:** Microbenchmark statistics (typically per-iteration) for Rust-only code paths.
 
@@ -48,7 +48,7 @@ python benchmarks/run.py --implementation rust --case vine
 **Criterion (Rust only):**
 
 ```bash
-cargo bench -p rscopulas-core
+cargo bench -p rscopulas
 ```
 
 ## What not to infer

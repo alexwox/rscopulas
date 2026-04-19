@@ -46,10 +46,10 @@ See [python.md](python.md) and [examples.md](examples.md).
 
 ## Rust
 
-Add `rscopulas-core` to your crate (path while working inside this workspace):
+Add `rscopulas` to your crate (path while working inside this workspace):
 
 ```toml
-rscopulas-core = { path = "crates/rscopulas-core" }
+rscopulas = { path = "crates/rscopulas-core" }
 ndarray = "0.17"
 rand = "0.9"
 ```
@@ -58,7 +58,7 @@ Minimal fit:
 
 ```rust
 use ndarray::array;
-use rscopulas_core::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
+use rscopulas::{CopulaModel, FitOptions, GaussianCopula, PseudoObs};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data = PseudoObs::new(array![[0.1_f64, 0.2], [0.3, 0.4], [0.5, 0.6]])?;
@@ -68,10 +68,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Run the shipped examples from `crates/rscopulas-core`:
+Run the shipped examples from the `rscopulas` workspace crate:
 
 ```bash
-cargo run --manifest-path crates/rscopulas-core/Cargo.toml --example quickstart_gaussian
+cargo run -p rscopulas --example quickstart_gaussian
 ```
 
 See [rust.md](rust.md).

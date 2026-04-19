@@ -12,7 +12,7 @@ use benchmark_support::{
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::{SeedableRng, rngs::StdRng};
-use rscopulas_core::{
+use rscopulas::{
     CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, SampleOptions, VineCopula,
 };
 

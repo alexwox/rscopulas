@@ -10,7 +10,7 @@ use benchmark_support::{
     vine_sample_seed, vine_sample_size,
 };
 use rand::{SeedableRng, rngs::StdRng};
-use rscopulas_core::{
+use rscopulas::{
     CopulaModel, Device, EvalOptions, ExecPolicy, FitOptions, SampleOptions, VineCopula,
 };
 use serde::Serialize;
