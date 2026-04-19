@@ -35,7 +35,7 @@ Rust:
 cargo build --release --manifest-path crates/rscopulas-core/Cargo.toml --example benchmark_runner
 ```
 
-Python bindings:
+Python bindings (from the local checkout):
 
 ```sh
 maturin develop --release

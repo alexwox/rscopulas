@@ -35,13 +35,10 @@
 ## Quick start — Python
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -e ".[dev,viz]"
-maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
-pytest
+python -m pip install -U rscopulas
 ```
+
+Minimal fit:
 
 ```python
 import numpy as np
@@ -53,12 +50,23 @@ print("AIC:", fit.diagnostics.aic)
 print("sample:\n", fit.model.sample(4, seed=7))
 ```
 
-**Example scripts** (after `maturin develop` and `viz` if plotting):
+For local development from this repository:
 
 ```bash
-PYTHONPATH=python python python/examples/quickstart.py
-PYTHONPATH=python python python/examples/copula_visualisation.py
-PYTHONPATH=python python python/examples/copula_gallery.py
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev,viz]"
+maturin develop --manifest-path crates/rscopulas-python/Cargo.toml
+pytest
+```
+
+**Example scripts** (after installing `rscopulas`; use `pip install -U "rscopulas[viz]"` for the plotting scripts, or local `maturin develop` while developing):
+
+```bash
+python python/examples/quickstart.py
+python python/examples/copula_visualisation.py
+python python/examples/copula_gallery.py
 ```
 
 Gallery figures are written under `python/examples/output/`; see [docs/examples.md](docs/examples.md).
@@ -289,7 +297,7 @@ print("log_pdf:", model.log_pdf(u1, u2))
 
 **Implemented:** pseudo-obs validation; single-family fit/score/sample; pair kernels and `fit_pair_copula`; vines (Gaussian construction + mixed-family fitting); HAC; Khoudraji in pair and vine fitting; reference tests and benchmarks.
 
-**Still evolving:** no single “auto-discover family” facade; `Copula` enum not the main UX; Python packaging is dev-first (local `maturin develop` / editable install) rather than a polished PyPI story.
+**Still evolving:** no single “auto-discover family” facade; `Copula` enum not the main UX; Rust crate publishing and multi-platform Python wheel automation are still separate release tasks.
 
 ## Reference fixtures
 

@@ -9,7 +9,15 @@
 
 Invalid values are rejected (e.g. `PseudoObs::new` in Rust; Python raises mapped errors).
 
-## Python (local development)
+## Python
+
+Install from PyPI:
+
+```bash
+python -m pip install -U rscopulas
+```
+
+For local development from this repository:
 
 From the repository root:
 
