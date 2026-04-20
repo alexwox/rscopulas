@@ -38,9 +38,10 @@ pub(crate) fn build_model_from_trees(
     truncation_level: Option<usize>,
 ) -> Result<VineCopula, CopulaError> {
     let dim = trees.len() + 1;
+    validate_tree_variables(&trees, dim)?;
     let (matrix, pair_matrix) = to_structure_matrices(&trees)?;
     let variable_order = matrix.diag().iter().rev().copied().collect::<Vec<_>>();
-    let normalized_matrix = normalize_matrix(&matrix, &variable_order);
+    let normalized_matrix = normalize_matrix(&matrix, &variable_order)?;
     let max_matrix = create_max_matrix(&normalized_matrix);
     let (cond_direct, cond_indirect) =
         needed_conditional_distributions(&normalized_matrix, &max_matrix);
@@ -50,7 +51,7 @@ pub(crate) fn build_model_from_trees(
         &cond_indirect,
         &pair_matrix,
         &variable_order,
-    );
+    )?;
     Ok(VineCopula {
         dim,
         structure: VineStructure {
@@ -75,7 +76,7 @@ pub(crate) fn compile_runtime(
     cond_indirect: &Array2<bool>,
     pair_matrix: &Array2<Option<PairCopulaSpec>>,
     variable_order: &[usize],
-) -> CompiledVineRuntime {
+) -> Result<CompiledVineRuntime, CopulaError> {
     let mat = revert_matrix(normalized_matrix);
     let maxmat = revert_matrix(max_matrix);
     let cindirect = revert_matrix(cond_indirect);
@@ -87,9 +88,9 @@ pub(crate) fn compile_runtime(
 
     for i in 1..d {
         for k in (0..i).rev() {
-            let spec = specs[(k, i)]
-                .clone()
-                .expect("compiled vine runtime requires all pair-copula specs to be present");
+            let spec = specs[(k, i)].clone().ok_or(FitError::Failed {
+                reason: "vine structure is missing pair-copula specs for one or more edges",
+            })?;
             all_gaussian &= matches!(
                 (spec.family, spec.rotation, &spec.params),
                 (
@@ -111,9 +112,9 @@ pub(crate) fn compile_runtime(
 
     for i in 1..d {
         for k in 0..i {
-            let spec = specs[(k, i)]
-                .clone()
-                .expect("compiled vine runtime requires all pair-copula specs to be present");
+            let spec = specs[(k, i)].clone().ok_or(FitError::Failed {
+                reason: "vine structure is missing pair-copula specs for one or more edges",
+            })?;
             eval_steps.push(CompiledEvalStep {
                 row: k,
                 col: i,
@@ -125,13 +126,13 @@ pub(crate) fn compile_runtime(
         }
     }
 
-    CompiledVineRuntime {
+    Ok(CompiledVineRuntime {
         dim: d,
         variable_order: variable_order.to_vec(),
         sample_steps,
         eval_steps,
         all_gaussian,
-    }
+    })
 }
 
 fn to_structure_matrices(
@@ -189,6 +190,23 @@ fn to_structure_matrices(
     Ok((matrix, pair_matrix))
 }
 
+fn validate_tree_variables(trees: &[VineTree], dim: usize) -> Result<(), CopulaError> {
+    for tree in trees {
+        for edge in &tree.edges {
+            if edge.conditioned.0 >= dim
+                || edge.conditioned.1 >= dim
+                || edge.conditioning.iter().any(|&value| value >= dim)
+            {
+                return Err(FitError::Failed {
+                    reason: "vine tree references variables outside the declared dimension",
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn create_max_matrix(matrix: &Array2<usize>) -> Array2<usize> {
     let mut max_matrix = matrix.clone();
     let n = max_matrix.nrows();
@@ -200,17 +218,25 @@ fn create_max_matrix(matrix: &Array2<usize>) -> Array2<usize> {
     max_matrix
 }
 
-fn normalize_matrix(matrix: &Array2<usize>, variable_order: &[usize]) -> Array2<usize> {
+fn normalize_matrix(
+    matrix: &Array2<usize>,
+    variable_order: &[usize],
+) -> Result<Array2<usize>, CopulaError> {
     let mut mapping = vec![0usize; variable_order.len()];
     for (idx, &value) in variable_order.iter().enumerate() {
-        mapping[value] = idx;
+        let entry = mapping.get_mut(value).ok_or(FitError::Failed {
+            reason: "vine structure matrix contains variables outside the declared order",
+        })?;
+        *entry = idx;
     }
 
     let mut normalized = Array2::zeros(matrix.raw_dim());
     for ((row, col), value) in matrix.indexed_iter() {
-        normalized[(row, col)] = mapping[*value];
+        normalized[(row, col)] = *mapping.get(*value).ok_or(FitError::Failed {
+            reason: "vine structure matrix contains variables outside the declared order",
+        })?;
     }
-    normalized
+    Ok(normalized)
 }
 
 fn needed_conditional_distributions(

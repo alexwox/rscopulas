@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::{
@@ -21,6 +23,7 @@ create_exception!(rscopulas, InvalidInputError, RscopulasError);
 create_exception!(rscopulas, ModelFitError, RscopulasError);
 create_exception!(rscopulas, NumericalError, RscopulasError);
 create_exception!(rscopulas, BackendError, RscopulasError);
+create_exception!(rscopulas, InternalError, RscopulasError);
 
 fn to_pyerr(error: CopulaError) -> PyErr {
     match error {
@@ -28,6 +31,29 @@ fn to_pyerr(error: CopulaError) -> PyErr {
         CopulaError::FitFailed(inner) => ModelFitError::new_err(inner.to_string()),
         CopulaError::Numerical(inner) => NumericalError::new_err(inner.to_string()),
         CopulaError::Backend(inner) => BackendError::new_err(inner.to_string()),
+    }
+}
+
+fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_string(),
+            Err(_) => "panic without message".to_string(),
+        },
+    }
+}
+
+fn catch_internal_panic<T, F>(f: F) -> PyResult<T>
+where
+    F: FnOnce() -> PyResult<T>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => Err(InternalError::new_err(format!(
+            "internal panic: {}",
+            panic_payload_message(payload)
+        ))),
     }
 }
 
@@ -582,15 +608,17 @@ impl PyGaussianCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let result =
-            GaussianCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let result =
+                GaussianCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[getter]
@@ -668,15 +696,17 @@ impl PyStudentTCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let result =
-            StudentTCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let result =
+                StudentTCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[getter]
@@ -756,15 +786,17 @@ impl PyClaytonCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let result =
-            ClaytonCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let result =
+                ClaytonCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[getter]
@@ -839,14 +871,17 @@ impl PyFrankCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let result = FrankCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let result =
+                FrankCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[getter]
@@ -921,15 +956,17 @@ impl PyGumbelCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let result =
-            GumbelHougaardCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let result = GumbelHougaardCopula::fit(&data, &fit_options(clip_eps, max_iter))
+                .map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[getter]
@@ -1248,23 +1285,25 @@ impl PyVineCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let options = vine_fit_options(
-            family_set,
-            include_rotations,
-            criterion,
-            truncation_level,
-            independence_threshold,
-            clip_eps,
-            max_iter,
-        )?;
-        let result = VineCopula::fit_c_vine(&data, &options).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let options = vine_fit_options(
+                family_set,
+                include_rotations,
+                criterion,
+                truncation_level,
+                independence_threshold,
+                clip_eps,
+                max_iter,
+            )?;
+            let result = VineCopula::fit_c_vine(&data, &options).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[staticmethod]
@@ -1280,23 +1319,25 @@ impl PyVineCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let options = vine_fit_options(
-            family_set,
-            include_rotations,
-            criterion,
-            truncation_level,
-            independence_threshold,
-            clip_eps,
-            max_iter,
-        )?;
-        let result = VineCopula::fit_d_vine(&data, &options).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let options = vine_fit_options(
+                family_set,
+                include_rotations,
+                criterion,
+                truncation_level,
+                independence_threshold,
+                clip_eps,
+                max_iter,
+            )?;
+            let result = VineCopula::fit_d_vine(&data, &options).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[staticmethod]
@@ -1312,23 +1353,25 @@ impl PyVineCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let options = vine_fit_options(
-            family_set,
-            include_rotations,
-            criterion,
-            truncation_level,
-            independence_threshold,
-            clip_eps,
-            max_iter,
-        )?;
-        let result = VineCopula::fit_r_vine(&data, &options).map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let options = vine_fit_options(
+                family_set,
+                include_rotations,
+                criterion,
+                truncation_level,
+                independence_threshold,
+                clip_eps,
+                max_iter,
+            )?;
+            let result = VineCopula::fit_r_vine(&data, &options).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[getter]
@@ -1453,31 +1496,33 @@ impl PyHierarchicalArchimedeanCopula {
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
-        let data = pseudo_obs_from_py(data)?;
-        let options = hac_fit_options(
-            family_set,
-            structure_method,
-            fit_method,
-            collapse_eps,
-            mc_samples,
-            allow_experimental,
-            clip_eps,
-            max_iter,
-        )?;
-        let result = match tree {
-            Some(tree) => {
-                let parsed_tree = hac_tree_from_py(tree)?;
-                HierarchicalArchimedeanCopula::fit_with_tree(&data, parsed_tree, &options)
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let options = hac_fit_options(
+                family_set,
+                structure_method,
+                fit_method,
+                collapse_eps,
+                mc_samples,
+                allow_experimental,
+                clip_eps,
+                max_iter,
+            )?;
+            let result = match tree {
+                Some(tree) => {
+                    let parsed_tree = hac_tree_from_py(tree)?;
+                    HierarchicalArchimedeanCopula::fit_with_tree(&data, parsed_tree, &options)
+                }
+                None => HierarchicalArchimedeanCopula::fit(&data, &options),
             }
-            None => HierarchicalArchimedeanCopula::fit(&data, &options),
-        }
-        .map_err(to_pyerr)?;
-        Ok((
-            Self {
-                inner: result.model,
-            },
-            result.diagnostics.into(),
-        ))
+            .map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
     }
 
     #[getter]
@@ -1578,6 +1623,7 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("ModelFitError", py.get_type::<ModelFitError>())?;
     module.add("NumericalError", py.get_type::<NumericalError>())?;
     module.add("BackendError", py.get_type::<BackendError>())?;
+    module.add("InternalError", py.get_type::<InternalError>())?;
 
     module.add_class::<PyFitDiagnostics>()?;
     module.add_class::<PyGaussianCopula>()?;

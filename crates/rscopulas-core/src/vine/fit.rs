@@ -64,6 +64,7 @@ impl Default for VineFitOptions {
 struct InternalEdgeFit {
     conditioned: (usize, usize),
     conditioning: Vec<usize>,
+    parent_endpoints: (usize, usize),
     cond_on_first: SharedSeries,
     cond_on_second: SharedSeries,
 }
@@ -77,6 +78,7 @@ struct InternalTree {
 struct GraphNode {
     conditioned_set: Vec<usize>,
     conditioning_set: Vec<usize>,
+    parent_endpoints: (usize, usize),
 }
 
 #[derive(Clone)]
@@ -85,6 +87,7 @@ struct GraphEdge {
     weight: f64,
     conditioned_set: (usize, usize),
     conditioning_set: Vec<usize>,
+    parent_endpoints: (usize, usize),
     left_data: SharedSeries,
     right_data: SharedSeries,
 }
@@ -157,21 +160,7 @@ impl VineCopula {
 
         for level in 1..data.dim() {
             let truncated = level > truncation_level;
-            let mst = match find_max_tree(&graph, VineStructureKind::R, truncated) {
-                Ok(tree) => tree,
-                Err(_err) if truncated => {
-                    graph = build_next_graph(
-                        &Graph {
-                            vertices: graph.vertices.clone(),
-                            edges: Vec::new(),
-                        },
-                        internal_trees.last(),
-                        true,
-                    )?;
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
+            let mst = find_max_tree(&graph, VineStructureKind::R, truncated)?;
 
             let fitted = if level == 1 {
                 fit_first_tree(&mst, options, truncated)?
@@ -198,6 +187,7 @@ impl VineCopula {
                     .map(|edge| InternalEdgeFit {
                         conditioned: edge.conditioned,
                         conditioning: edge.conditioning.clone(),
+                        parent_endpoints: edge.parent_endpoints,
                         cond_on_first: edge.cond_on_first.clone(),
                         cond_on_second: edge.cond_on_second.clone(),
                     })
@@ -207,6 +197,13 @@ impl VineCopula {
             if level < data.dim() - 1 {
                 graph = build_next_graph(&mst, internal_trees.last(), truncated)?;
             }
+        }
+
+        if public_trees.len() != data.dim() - 1 {
+            return Err(FitError::Failed {
+                reason: "R-vine fit produced fewer trees than dim - 1",
+            }
+            .into());
         }
 
         let model =
@@ -233,6 +230,7 @@ impl VineCopula {
 struct FittedGraphEdge {
     conditioned: (usize, usize),
     conditioning: Vec<usize>,
+    parent_endpoints: (usize, usize),
     spec: PairCopulaSpec,
     cond_on_first: SharedSeries,
     cond_on_second: SharedSeries,
@@ -299,6 +297,7 @@ fn fit_canonical_vine(
             fitted_edges.push(FittedGraphEdge {
                 conditioned: edge.conditioned,
                 conditioning: edge.conditioning.clone(),
+                parent_endpoints: edge.conditioned,
                 spec: fit.spec,
                 cond_on_first: Arc::from(fit.cond_on_first),
                 cond_on_second: Arc::from(fit.cond_on_second),
@@ -324,6 +323,7 @@ fn fit_canonical_vine(
                 .map(|edge| InternalEdgeFit {
                     conditioned: edge.conditioned,
                     conditioning: edge.conditioning.clone(),
+                    parent_endpoints: edge.parent_endpoints,
                     cond_on_first: edge.cond_on_first.clone(),
                     cond_on_second: edge.cond_on_second.clone(),
                 })
@@ -395,6 +395,7 @@ fn initialize_first_graph(
                 weight: tau[(left, right)].abs(),
                 conditioned_set: (left, right),
                 conditioning_set: Vec::new(),
+                parent_endpoints: (left, right),
                 left_data: columns[left].clone(),
                 right_data: columns[right].clone(),
             });
@@ -406,6 +407,7 @@ fn initialize_first_graph(
             .map(|idx| GraphNode {
                 conditioned_set: vec![idx],
                 conditioning_set: Vec::new(),
+                parent_endpoints: (idx, idx),
             })
             .collect(),
         edges,
@@ -576,6 +578,7 @@ fn fit_first_tree(
         Ok(FittedGraphEdge {
             conditioned: edge.conditioned_set,
             conditioning: edge.conditioning_set.clone(),
+            parent_endpoints: edge.parent_endpoints,
             spec: fit.spec,
             cond_on_first: Arc::from(fit.cond_on_first),
             cond_on_second: Arc::from(fit.cond_on_second),
@@ -609,6 +612,7 @@ fn fit_tree_from_graph(
         Ok(FittedGraphEdge {
             conditioned: edge.conditioned_set,
             conditioning: edge.conditioning_set.clone(),
+            parent_endpoints: edge.parent_endpoints,
             spec: fit.spec,
             cond_on_first: Arc::from(fit.cond_on_first),
             cond_on_second: Arc::from(fit.cond_on_second),
@@ -667,6 +671,7 @@ fn build_next_graph(
         .map(|edge| GraphNode {
             conditioned_set: vec![edge.conditioned.0, edge.conditioned.1],
             conditioning_set: edge.conditioning.clone(),
+            parent_endpoints: edge.parent_endpoints,
         })
         .collect::<Vec<_>>();
 
@@ -691,6 +696,9 @@ fn edge_info(
 ) -> Result<Option<GraphEdge>, CopulaError> {
     let left = &vertices[left_idx];
     let right = &vertices[right_idx];
+    let Some(shared) = shared_parent_endpoint(left.parent_endpoints, right.parent_endpoints) else {
+        return Ok(None);
+    };
     let l1 = left
         .conditioned_set
         .iter()
@@ -703,42 +711,32 @@ fn edge_info(
         .chain(right.conditioning_set.iter())
         .copied()
         .collect::<Vec<_>>();
-    let conditioned = (
-        *set_difference(&l1, &l2).first().ok_or(FitError::Failed {
-            reason: "proximity condition failed while building the next vine graph",
-        })?,
-        *set_difference(&l2, &l1).first().ok_or(FitError::Failed {
-            reason: "proximity condition failed while building the next vine graph",
-        })?,
-    );
+    let left_only = set_difference(&l1, &l2);
+    let right_only = set_difference(&l2, &l1);
+    if left_only.len() != 1 || right_only.len() != 1 {
+        return Ok(None);
+    }
+    let conditioned = (left_only[0], right_only[0]);
     let conditioning = set_intersection(&l1, &l2);
     if conditioned.0 == conditioned.1 {
         return Ok(None);
     }
 
-    let same = if left.conditioned_set[0] == right.conditioned_set[0]
-        || left.conditioned_set[1] == right.conditioned_set[0]
-    {
-        right.conditioned_set[0]
-    } else if left.conditioned_set[0] == right.conditioned_set[1]
-        || left.conditioned_set[1] == right.conditioned_set[1]
-    {
-        right.conditioned_set[1]
+    let left_edge = &previous.edges[left_idx];
+    let right_edge = &previous.edges[right_idx];
+    let left_data = if left.parent_endpoints.0 == shared {
+        left_edge.cond_on_second.clone()
+    } else if left.parent_endpoints.1 == shared {
+        left_edge.cond_on_first.clone()
     } else {
         return Ok(None);
     };
-
-    let left_edge = &previous.edges[left_idx];
-    let right_edge = &previous.edges[right_idx];
-    let left_data = if left_edge.conditioned.0 == same {
-        left_edge.cond_on_second.clone()
-    } else {
-        left_edge.cond_on_first.clone()
-    };
-    let right_data = if right_edge.conditioned.0 == same {
+    let right_data = if right.parent_endpoints.0 == shared {
         right_edge.cond_on_second.clone()
-    } else {
+    } else if right.parent_endpoints.1 == shared {
         right_edge.cond_on_first.clone()
+    } else {
+        return Ok(None);
     };
     let weight = if truncated {
         1.0
@@ -751,6 +749,7 @@ fn edge_info(
         weight,
         conditioned_set: conditioned,
         conditioning_set: conditioning,
+        parent_endpoints: (left_idx, right_idx),
         left_data,
         right_data,
     }))
@@ -768,6 +767,16 @@ fn set_intersection(left: &[usize], right: &[usize]) -> Vec<usize> {
         .copied()
         .filter(|value| right.contains(value))
         .collect()
+}
+
+fn shared_parent_endpoint(left: (usize, usize), right: (usize, usize)) -> Option<usize> {
+    if left.0 == right.0 || left.0 == right.1 {
+        Some(left.0)
+    } else if left.1 == right.0 || left.1 == right.1 {
+        Some(left.1)
+    } else {
+        None
+    }
 }
 
 fn c_vine_order(data: &PseudoObs, options: &VineFitOptions) -> Result<Vec<usize>, CopulaError> {

@@ -134,17 +134,17 @@ impl VineCopula {
         self.structure.truncation_level
     }
 
-    pub(crate) fn compiled_runtime(&self) -> RuntimeView<'_> {
+    pub(crate) fn compiled_runtime(&self) -> Result<RuntimeView<'_>, crate::errors::CopulaError> {
         if self.runtime.is_empty() {
-            RuntimeView::Owned(structure::compile_runtime(
+            Ok(RuntimeView::Owned(structure::compile_runtime(
                 &self.normalized_matrix,
                 &self.max_matrix,
                 &self.cond_indirect,
                 &self.pair_matrix,
                 &self.variable_order,
-            ))
+            )?))
         } else {
-            RuntimeView::Borrowed(&self.runtime)
+            Ok(RuntimeView::Borrowed(&self.runtime))
         }
     }
 }

@@ -143,6 +143,8 @@ A `VineCopula` model exposes the following properties:
 
 Each `VineTreeInfo` contains a list of `VineEdgeInfo` objects with `family`, `rotation`, `parameters`, `conditioned`, and `conditioning` fields.
 
+For every vine edge, `rotation` is always one of `"R0"`, `"R90"`, `"R180"`, or `"R270"`.
+
 ## Constructing a Gaussian vine from a correlation matrix
 
 If you already have a correlation matrix, you can build a Gaussian C-vine or D-vine directly without fitting:

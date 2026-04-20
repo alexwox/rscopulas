@@ -15,6 +15,7 @@ from ._models import (
 )
 from ._rscopulas import (
     BackendError,
+    InternalError,
     InvalidInputError,
     ModelFitError,
     NumericalError,
@@ -30,6 +31,7 @@ __all__ = [
     "GaussianCopula",
     "GumbelCopula",
     "HierarchicalArchimedeanCopula",
+    "InternalError",
     "InvalidInputError",
     "ModelFitError",
     "NumericalError",

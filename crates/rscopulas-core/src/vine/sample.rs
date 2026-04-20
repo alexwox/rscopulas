@@ -18,7 +18,7 @@ impl VineCopula {
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
         let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
-        let runtime = self.compiled_runtime();
+        let runtime = self.compiled_runtime()?;
         let d = runtime.dim;
         let clip_eps = 1e-12;
         let values = match strategy {

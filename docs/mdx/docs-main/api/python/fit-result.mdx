@@ -148,3 +148,4 @@ except ModelFitError as e:
 | `ModelFitError` | The optimization algorithm fails to find a valid solution, e.g. a singular correlation matrix. |
 | `NumericalError` | A numerical operation (log, inversion, etc.) produces an invalid result such as `NaN` or `Inf`. |
 | `BackendError` | An internal error in the Rust backend that does not fall into the categories above. |
+| `InternalError` | An internal Rust panic was caught at the Python boundary. This indicates a bug in `rscopulas` and should be reported upstream. |

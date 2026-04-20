@@ -31,7 +31,7 @@ impl VineCopula {
             .into());
         }
 
-        let runtime = self.compiled_runtime();
+        let runtime = self.compiled_runtime()?;
         let view = data.as_view();
         let strategy = resolve_strategy(exec, Operation::VineLogPdf, data.n_obs())?;
         let ctx = VineEvalContext {
