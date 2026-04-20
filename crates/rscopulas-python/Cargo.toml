@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 [dependencies]
 ndarray.workspace = true
 numpy = "0.28.0"
-pyo3 = { version = "0.28.3", features = ["extension-module"] }
+pyo3 = { version = "0.28.3", features = ["extension-module", "abi3-py310"] }
 rand.workspace = true
 rscopulas.workspace = true
 

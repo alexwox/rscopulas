@@ -19,6 +19,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
@@ -43,6 +45,7 @@ dev = [
 manifest-path = "crates/rscopulas-python/Cargo.toml"
 module-name = "rscopulas._rscopulas"
 python-source = "python"
+features = ["pyo3/extension-module", "pyo3/abi3-py310"]
 include = [
     { path = "PYPI.md", format = "sdist" },
     { path = "LICENSE", format = "sdist" },
