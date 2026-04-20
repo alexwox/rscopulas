@@ -187,6 +187,42 @@ pre {
   color: hsl(var(--foreground));
 }
 
+.topbar-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.5rem;
+  margin-left: 0.25rem;
+  border-left: 1px solid hsl(var(--border));
+}
+
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: hsl(var(--muted));
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.icon-link:hover {
+  background: hsl(var(--panel-soft));
+  color: hsl(var(--foreground));
+  text-decoration: none;
+}
+
+.icon-link:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.icon-link svg {
+  width: 18px;
+  height: 18px;
+}
+
 .theme-toggle {
   display: inline-flex;
   align-items: center;
