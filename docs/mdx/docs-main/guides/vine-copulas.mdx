@@ -135,7 +135,7 @@ A `VineCopula` model exposes the following properties:
 
 | Property | Type | Description |
 |---|---|---|
-| `structure_kind` | `str` | `"c_vine"`, `"d_vine"`, or `"r_vine"` |
+| `structure_kind` | `str` | `"c"`, `"d"`, or `"r"` (same values as `structure_info.kind`) |
 | `order` | `list[int]` | Variable ordering of the vine |
 | `pair_parameters` | `ndarray` | Flat array of all pair copula parameters |
 | `trees` | `list[VineTreeInfo]` | Tree-by-tree edge information (family, rotation, parameters) |
