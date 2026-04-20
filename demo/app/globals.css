@@ -147,9 +147,7 @@ pre {
 
 .brand-image {
   border-radius: 8px;
-  border: 1px solid hsl(var(--border));
-  background: white;
-  padding: 2px;
+  background: transparent;
 }
 
 .topbar-actions {

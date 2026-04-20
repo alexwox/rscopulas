@@ -8,7 +8,7 @@ import { formatDisplayTitle } from "@/lib/format-display-title";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { MobileNav } from "@/components/mobile-nav";
 
-const DEMO_LOGO_SRC = "/rscopulas-logo.png";
+const DEMO_LOGO_SRC = "/rscopulas-logo-no-bg.png";
 
 const EXTERNAL_LINKS = [
   {

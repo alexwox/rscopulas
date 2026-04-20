@@ -9,9 +9,9 @@ export const metadata: Metadata = {
   },
   description: "A simple Next.js docs site powered by docs/mdx content.",
   icons: {
-    icon: "/rscopulas-logo.png",
-    shortcut: "/rscopulas-logo.png",
-    apple: "/rscopulas-logo.png",
+    icon: "/rscopulas-logo-no-bg.png",
+    shortcut: "/rscopulas-logo-no-bg.png",
+    apple: "/rscopulas-logo-no-bg.png",
   },
 };
 
