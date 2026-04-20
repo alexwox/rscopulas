@@ -1,9 +1,9 @@
 ---
-title: "rscopulas: High-Performance Copula Modeling"
+title: "Rscopulas: High-Performance Copula Modeling"
 description: "rscopulas is a Python and Rust copula library with a shared Rust core. Fit, evaluate, and sample dependence structures up to ~100× faster than R's VineCopula."
 ---
 
-rscopulas gives you a NumPy-first Python API and a Rust library for fitting, evaluating, and sampling copula models on pseudo-observations. The Rust core powers both interfaces, delivering up to **~100× speedup** over R's `copula`/`VineCopula` stack on vine `log_pdf` workloads — without sacrificing ergonomics.
+Rscopulas gives you a NumPy-first Python API and a Rust library for fitting, evaluating, and sampling copula models on pseudo-observations. The Rust core powers both interfaces, delivering up to **~100× speedup** over R's `copula`/`VineCopula` stack on vine `log_pdf` workloads — without sacrificing ergonomics.
 
 <CardGroup cols={2}>
   <Card title="Python Quickstart" icon="python" href="/quickstart-python">
@@ -12,7 +12,11 @@ rscopulas gives you a NumPy-first Python API and a Rust library for fitting, eva
   <Card title="Rust Quickstart" icon="rust" href="/quickstart-rust">
     Add the crate and run the shipped examples from your workspace.
   </Card>
-  <Card title="Copula Families" icon="chart-scatter" href="/concepts/copula-families">
+  <Card
+    title="Copula Families"
+    icon="chart-scatter"
+    href="/concepts/copula-families"
+  >
     Explore Gaussian, Student t, Archimedean, vine, and HAC models.
   </Card>
   <Card title="API Reference" icon="code" href="/api/python/overview">
@@ -22,7 +26,7 @@ rscopulas gives you a NumPy-first Python API and a Rust library for fitting, eva
 
 ## What you can do with rscopulas
 
-rscopulas supports the full copula workflow: transform your raw data to pseudo-observations, choose a copula family, fit to data, evaluate log-density, and draw samples.
+Rscopulas supports the full copula workflow: transform your raw data to pseudo-observations, choose a copula family, fit to data, evaluate log-density, and draw samples.
 
 <CardGroup cols={2}>
   <Card title="Vine Copulas" icon="diagram-project" href="/guides/vine-copulas">
@@ -34,7 +38,11 @@ rscopulas supports the full copula workflow: transform your raw data to pseudo-o
   <Card title="Khoudraji Copulas" icon="sliders" href="/guides/khoudraji">
     Model asymmetric dependence with Khoudraji compositions.
   </Card>
-  <Card title="Hierarchical Archimedean" icon="sitemap" href="/guides/hierarchical-archimedean">
+  <Card
+    title="Hierarchical Archimedean"
+    icon="sitemap"
+    href="/guides/hierarchical-archimedean"
+  >
     Build and fit nested Archimedean copula trees.
   </Card>
 </CardGroup>
@@ -61,4 +69,5 @@ pip install rscopulas
 ```bash With visualization
 uv add "rscopulas[viz]"
 ```
+
 </CodeGroup>

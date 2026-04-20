@@ -1,23 +1,24 @@
 ---
-title: "rscopulas: Copula Modeling for Python and Rust"
+title: "Rscopulas: Copula Modeling for Python and Rust"
 description: "rscopulas fits, evaluates, and samples copula models on pseudo-observations using a shared Rust core — up to ~100× faster than R's VineCopula stack."
 ---
 
-rscopulas is a copula modeling library for scientists and researchers who need to model statistical dependence structures. It gives you a NumPy-first Python API and a native Rust library, both powered by the same Rust core. You supply pseudo-observations in the open unit hypercube `(0, 1)^d`, and rscopulas handles fitting, log-density evaluation, sampling, and diagnostics — with validated inputs and reference-tested results throughout.
+Rscopulas is a copula modeling library for scientists and researchers who need to model statistical dependence structures. It gives you a NumPy-first Python API and a native Rust library, both powered by the same Rust core. You supply pseudo-observations in the open unit hypercube `(0, 1)^d`, and rscopulas handles fitting, log-density evaluation, sampling, and diagnostics — with validated inputs and reference-tested results throughout.
 
 ## What is a pseudo-observation?
 
-A **pseudo-observation** is a data point that has already been transformed to the open unit interval `(0, 1)`. rscopulas works exclusively with pseudo-observations: it does not estimate marginal distributions for you.
+A **pseudo-observation** is a data point that has already been transformed to the open unit interval `(0, 1)`. Rscopulas works exclusively with pseudo-observations: it does not estimate marginal distributions for you.
 
 Before calling any rscopulas API, transform each margin of your raw data to uniforms — using a parametric fit, an empirical CDF, or rank-based scaling — then pass the result to the library. Every entry must satisfy `0 < u < 1` strictly; boundary values are rejected with a clear error.
 
 <Note>
-  The workflow is: raw data → transform each margin to uniforms → pass pseudo-observations to rscopulas → fit, evaluate, and sample.
+  The workflow is: raw data → transform each margin to uniforms → pass
+  pseudo-observations to rscopulas → fit, evaluate, and sample.
 </Note>
 
 ## Supported copula families
 
-rscopulas supports a broad range of dependence structures across both the Python and Rust APIs:
+Rscopulas supports a broad range of dependence structures across both the Python and Rust APIs:
 
 - **Elliptical:** Gaussian, Student t
 - **Archimedean:** Clayton, Frank, Gumbel–Hougaard
@@ -27,27 +28,28 @@ rscopulas supports a broad range of dependence structures across both the Python
 
 ## Two idiomatic APIs, one Rust core
 
-rscopulas ships two surfaces over the same compiled Rust library:
+Rscopulas ships two surfaces over the same compiled Rust library:
 
-| Surface | Description |
-|---------|-------------|
+| Surface                  | Description                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Python** (`rscopulas`) | NumPy-first API built with PyO3 and maturin. Includes an optional `viz` extra for density plots, scatter plots, and vine structure graphs. |
-| **Rust** (`rscopulas`) | Primary library crate with traits, `PseudoObs`, execution policy (`ExecPolicy` / `Device`), and accelerated paths. |
+| **Rust** (`rscopulas`)   | Primary library crate with traits, `PseudoObs`, execution policy (`ExecPolicy` / `Device`), and accelerated paths.                         |
 
 Python users keep a familiar NumPy interface without falling back to pure-Python orchestration on the hot path — the heavy work runs in Rust.
 
 ## Performance
 
-rscopulas is benchmarked against R's `copula` and `VineCopula` packages on a shared mixed R-vine harness. Representative results from a single development machine (2026-04-18):
+Rscopulas is benchmarked against R's `copula` and `VineCopula` packages on a shared mixed R-vine harness. Representative results from a single development machine (2026-04-18):
 
-| Workload | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
-|----------|----------:|------------:|-------------------------------|
-| **Fit** | **3.1×** | **3.4×** | 7.1 ms / 6.5 ms / 22.1 ms |
-| **Sample** | **4.0×** | **4.0×** | 28.4 ms / 27.9 ms / 112.9 ms |
-| **`log_pdf`** | **114×** | **111×** | 22.9 µs / 23.5 µs / 2.60 ms |
+| Workload      | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
+| ------------- | --------: | ----------: | ------------------------------ |
+| **Fit**       |  **3.1×** |    **3.4×** | 7.1 ms / 6.5 ms / 22.1 ms      |
+| **Sample**    |  **4.0×** |    **4.0×** | 28.4 ms / 27.9 ms / 112.9 ms   |
+| **`log_pdf`** |  **114×** |    **111×** | 22.9 µs / 23.5 µs / 2.60 ms    |
 
 <Tip>
-  You can reproduce these numbers locally with `python benchmarks/run.py` from the repository root. Results vary by CPU and R package version.
+  You can reproduce these numbers locally with `python benchmarks/run.py` from
+  the repository root. Results vary by CPU and R package version.
 </Tip>
 
 ## Fit diagnostics

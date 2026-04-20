@@ -4,7 +4,7 @@ sidebarTitle: "Python"
 description: "Install rscopulas from PyPI, prepare pseudo-observations, fit a Gaussian copula, inspect diagnostics, and draw samples — all in under five minutes."
 ---
 
-rscopulas is available on PyPI and requires Python 3.10 or later. This guide walks you through installation, preparing your data as pseudo-observations, fitting a copula model, reading the fit diagnostics, and drawing samples.
+Rscopulas is available on PyPI and requires Python 3.10 or later. This guide walks you through installation, preparing your data as pseudo-observations, fitting a copula model, reading the fit diagnostics, and drawing samples.
 
 ## Install
 
@@ -48,7 +48,7 @@ rscopulas is available on PyPI and requires Python 3.10 or later. This guide wal
 
 ## Prepare pseudo-observations
 
-rscopulas does not fit marginal distributions. You must supply data that is already in pseudo-observation form — a NumPy `float64` array with every entry strictly inside `(0, 1)`.
+Rscopulas does not fit marginal distributions. You must supply data that is already in pseudo-observation form — a NumPy `float64` array with every entry strictly inside `(0, 1)`.
 
 <Warning>
   Every value in your input array must satisfy `0 < u < 1` strictly. Boundary values (`0.0` or `1.0`) are rejected with an `InvalidInputError`. Transform your raw data to open-interval uniforms before calling any rscopulas function.
@@ -94,7 +94,7 @@ print("log_pdf:\n", model.log_pdf(samples))
 
 ## Available models
 
-rscopulas exposes the following model classes in its top-level namespace:
+Rscopulas exposes the following model classes in its top-level namespace:
 
 | Class | Family |
 |-------|--------|

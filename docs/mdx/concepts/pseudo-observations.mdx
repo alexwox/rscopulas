@@ -4,7 +4,7 @@ sidebarTitle: "Pseudo-Observations"
 description: "Learn what pseudo-observations are, why rscopulas requires them, and how to transform raw data into valid uniform inputs using rank-based or parametric methods."
 ---
 
-Before you can fit any copula model with rscopulas, you need to transform your raw data into **pseudo-observations** — values strictly in the open unit interval `(0, 1)`. rscopulas does not estimate marginal distributions for you; that step is your responsibility. This design keeps the library focused on dependence modeling and gives you full control over how each margin is handled.
+Before you can fit any copula model with rscopulas, you need to transform your raw data into **pseudo-observations** — values strictly in the open unit interval `(0, 1)`. Rscopulas does not estimate marginal distributions for you; that step is your responsibility. This design keeps the library focused on dependence modeling and gives you full control over how each margin is handled.
 
 ## What are pseudo-observations?
 
@@ -77,7 +77,7 @@ There are three standard approaches, depending on how much you know about your d
 
 ## Input requirements
 
-rscopulas enforces strict validation on all input arrays. Any violation raises an error immediately — no silent coercion or boundary clamping.
+Rscopulas enforces strict validation on all input arrays. Any violation raises an error immediately — no silent coercion or boundary clamping.
 
 <Steps>
   <Step title="Type: float64">

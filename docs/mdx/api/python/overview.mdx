@@ -1,5 +1,5 @@
 ---
-title: "rscopulas Python Package Overview and Imports"
+title: "Rscopulas Python Package Overview and Imports"
 sidebarTitle: "Overview"
 description: "Learn how the rscopulas Python package is structured, what it exports, and the data requirements for fitting and evaluating copula models."
 ---
@@ -10,10 +10,12 @@ The `rscopulas` Python package is a thin, type-safe wrapper around a compiled Ru
 
 <CardGroup cols={2}>
   <Card title="rscopulas" icon="python">
-    The public Python package. Import models, data classes, and errors from here.
+    The public Python package. Import models, data classes, and errors from
+    here.
   </Card>
   <Card title="rscopulas._rscopulas" icon="bolt">
-    The compiled Rust extension. All compute-intensive operations run here. You interact with it indirectly through the public classes.
+    The compiled Rust extension. All compute-intensive operations run here. You
+    interact with it indirectly through the public classes.
   </Card>
 </CardGroup>
 
@@ -35,51 +37,56 @@ from rscopulas import (
 
 ### Copula models
 
-| Class | Description |
-|---|---|
-| `GaussianCopula` | Elliptical copula with Gaussian correlation structure |
-| `StudentTCopula` | Elliptical copula with Student-t tails |
-| `ClaytonCopula` | Archimedean copula with lower-tail dependence |
-| `FrankCopula` | Archimedean copula with symmetric dependence |
-| `GumbelCopula` | Archimedean copula with upper-tail dependence |
-| `VineCopula` | Pair-copula construction in C-, D-, or R-vine structure |
-| `HierarchicalArchimedeanCopula` | Nested Archimedean copula with hierarchical structure |
-| `PairCopula` | Bivariate copula used as a building block in vine models |
+| Class                           | Description                                              |
+| ------------------------------- | -------------------------------------------------------- |
+| `GaussianCopula`                | Elliptical copula with Gaussian correlation structure    |
+| `StudentTCopula`                | Elliptical copula with Student-t tails                   |
+| `ClaytonCopula`                 | Archimedean copula with lower-tail dependence            |
+| `FrankCopula`                   | Archimedean copula with symmetric dependence             |
+| `GumbelCopula`                  | Archimedean copula with upper-tail dependence            |
+| `VineCopula`                    | Pair-copula construction in C-, D-, or R-vine structure  |
+| `HierarchicalArchimedeanCopula` | Nested Archimedean copula with hierarchical structure    |
+| `PairCopula`                    | Bivariate copula used as a building block in vine models |
 
 ### Data and result types
 
-| Class | Description |
-|---|---|
-| `FitResult` | Generic dataclass holding the fitted model and diagnostics |
-| `FitDiagnostics` | Log-likelihood, AIC, BIC, convergence status, and iteration count |
-| `VineEdgeInfo` | Data for a single edge in a vine tree |
-| `VineStructureInfo` | Vine kind, structure matrix, and truncation level |
-| `VineTreeInfo` | All edges at a given tree level |
+| Class               | Description                                                       |
+| ------------------- | ----------------------------------------------------------------- |
+| `FitResult`         | Generic dataclass holding the fitted model and diagnostics        |
+| `FitDiagnostics`    | Log-likelihood, AIC, BIC, convergence status, and iteration count |
+| `VineEdgeInfo`      | Data for a single edge in a vine tree                             |
+| `VineStructureInfo` | Vine kind, structure matrix, and truncation level                 |
+| `VineTreeInfo`      | All edges at a given tree level                                   |
 
 ### Error types
 
-| Exception | Description |
-|---|---|
-| `RscopulasError` | Base class for all library errors |
+| Exception           | Description                                                                      |
+| ------------------- | -------------------------------------------------------------------------------- |
+| `RscopulasError`    | Base class for all library errors                                                |
 | `InvalidInputError` | Raised when input data fails validation (wrong shape, out-of-range values, etc.) |
-| `ModelFitError` | Raised when the fitting algorithm fails to find a valid solution |
-| `NumericalError` | Raised when a numerical operation produces an invalid result |
-| `BackendError` | Raised for internal Rust backend failures |
+| `ModelFitError`     | Raised when the fitting algorithm fails to find a valid solution                 |
+| `NumericalError`    | Raised when a numerical operation produces an invalid result                     |
+| `BackendError`      | Raised for internal Rust backend failures                                        |
 
 ## Data requirements
 
 All copula models expect pseudo-observations as input: values that lie strictly in the open interval `(0, 1)`. Passing raw observations, probabilities outside that range, or exact 0 and 1 will raise an `InvalidInputError`.
 
 <Warning>
-Values equal to 0 or 1 are not valid inputs. Use the `clip_eps` parameter on `fit` and `log_pdf` to clip data away from the boundary during numerical evaluation.
+  Values equal to 0 or 1 are not valid inputs. Use the `clip_eps` parameter on
+  `fit` and `log_pdf` to clip data away from the boundary during numerical
+  evaluation.
 </Warning>
 
 <ResponseField name="dtype" type="numpy.float64" required>
-  All input arrays must have `dtype=numpy.float64`. Integer or other floating-point dtypes will be cast automatically by most constructors, but passing the correct dtype avoids an extra allocation.
+  All input arrays must have `dtype=numpy.float64`. Integer or other
+  floating-point dtypes will be cast automatically by most constructors, but
+  passing the correct dtype avoids an extra allocation.
 </ResponseField>
 
 <ResponseField name="shape" type="(n_samples, n_dims)" required>
-  Input arrays must be two-dimensional. Rows are observations; columns are variables.
+  Input arrays must be two-dimensional. Rows are observations; columns are
+  variables.
 </ResponseField>
 
 <ResponseField name="range" type="(0, 1) exclusive" required>

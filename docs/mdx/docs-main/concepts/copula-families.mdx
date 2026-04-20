@@ -4,7 +4,7 @@ sidebarTitle: "Copula Families"
 description: "Overview of every copula family in rscopulas: Gaussian, Student t, Archimedean, vine, HAC, and Khoudraji — with parameters, use cases, and shared interface."
 ---
 
-rscopulas supports a wide range of copula families, from simple single-parameter Archimedean models to flexible vine structures with mixed pair families. Every model shares the same three-method interface — `fit()`, `log_pdf()`, and `sample()` — so you can swap families without restructuring your code.
+Rscopulas supports a wide range of copula families, from simple single-parameter Archimedean models to flexible vine structures with mixed pair families. Every model shares the same three-method interface — `fit()`, `log_pdf()`, and `sample()` — so you can swap families without restructuring your code.
 
 ## Supported families
 
@@ -94,7 +94,7 @@ rscopulas supports a wide range of copula families, from simple single-parameter
 
 ## Vine copulas
 
-Vine copulas decompose a multivariate dependence structure into a cascade of bivariate pair copulas arranged in a tree sequence. This makes them highly flexible for high-dimensional data. rscopulas supports three vine structures, all using the `VineCopula` class.
+Vine copulas decompose a multivariate dependence structure into a cascade of bivariate pair copulas arranged in a tree sequence. This makes them highly flexible for high-dimensional data. Rscopulas supports three vine structures, all using the `VineCopula` class.
 
 <AccordionGroup>
   <Accordion title="C-vine (canonical vine)">
@@ -130,7 +130,7 @@ Vine copulas decompose a multivariate dependence structure into a cascade of biv
   </Accordion>
 
   <Accordion title="R-vine (regular vine)">
-    An R-vine allows any valid tree structure at each level, making it the most general option. rscopulas selects the structure that minimizes the chosen criterion (AIC by default). Use R-vine when you have no prior reason to prefer C- or D-vine and want the model to choose its own structure.
+    An R-vine allows any valid tree structure at each level, making it the most general option. Rscopulas selects the structure that minimizes the chosen criterion (AIC by default). Use R-vine when you have no prior reason to prefer C- or D-vine and want the model to choose its own structure.
 
     ```python
     result = VineCopula.fit_r(
@@ -146,7 +146,7 @@ Vine copulas decompose a multivariate dependence structure into a cascade of biv
 
 ### Rotations for vine pair edges
 
-Each bivariate pair copula in a vine can be rotated to capture different tail behavior. rscopulas supports four rotations:
+Each bivariate pair copula in a vine can be rotated to capture different tail behavior. Rscopulas supports four rotations:
 
 | Rotation | Effect |
 |----------|--------|

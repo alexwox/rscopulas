@@ -4,7 +4,7 @@ sidebarTitle: "HAC"
 description: "Build, fit, and evaluate nested Archimedean copula trees in rscopulas. Understand model structure, density evaluation paths, and sampling reliability."
 ---
 
-A hierarchical Archimedean copula (HAC) extends the standard multivariate Archimedean copula by allowing a tree of nested Archimedean nodes — each node carries its own family and parameter, and leaves represent individual variables. This lets you capture group-level dependence structures that a single flat Archimedean copula cannot represent. rscopulas exposes HACs through `HierarchicalArchimedeanCopula` in both Python and Rust.
+A hierarchical Archimedean copula (HAC) extends the standard multivariate Archimedean copula by allowing a tree of nested Archimedean nodes — each node carries its own family and parameter, and leaves represent individual variables. This lets you capture group-level dependence structures that a single flat Archimedean copula cannot represent. Rscopulas exposes HACs through `HierarchicalArchimedeanCopula` in both Python and Rust.
 
 ## Model structure
 
@@ -71,7 +71,7 @@ This creates a 4-dimensional HAC where variables 2 and 3 share a tighter inner G
 
 ## Density evaluation
 
-rscopulas uses two code paths for `log_pdf` depending on the tree shape:
+Rscopulas uses two code paths for `log_pdf` depending on the tree shape:
 
 - **Exchangeable fast path** — When the model is a single Archimedean node whose children are all leaves (a classical flat structure), density evaluation uses the same closed-form implementation as `ClaytonCopula`, `FrankCopula`, or `GumbelCopula`. This path is exact and fast.
 - **Composite evaluation** — For deeper nested trees, the implementation evaluates a composite expression built from pair-copula terms associated with the tree structure. This is the intended construction for general HAC estimation workflows.

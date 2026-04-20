@@ -8,7 +8,7 @@ Vine copulas let you model complex, high-dimensional dependence structures by br
 
 ## When to use each vine type
 
-rscopulas supports three vine structures:
+Rscopulas supports three vine structures:
 
 - **C-vine** — Use when one variable drives the dependence on all others. The root variable appears in every first-tree edge (star structure). Fit with `VineCopula.fit_c`.
 - **D-vine** — Use when variables have a natural chain ordering, such as time series or spatially ordered measurements. Each variable connects to its two neighbors in the first tree. Fit with `VineCopula.fit_d`.
