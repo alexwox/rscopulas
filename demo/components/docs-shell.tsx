@@ -79,7 +79,7 @@ export async function DocsShell({
         <Link
           key={tab.label}
           href={tab.href}
-          className={currentTab === tab.label ? "tab-link active" : "tab-link"}
+          className={currentSlug && currentTab === tab.label ? "tab-link active" : "tab-link"}
         >
           {tab.label}
         </Link>
