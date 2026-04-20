@@ -45,6 +45,7 @@ dev = [
 manifest-path = "crates/rscopulas-python/Cargo.toml"
 module-name = "rscopulas._rscopulas"
 python-source = "python"
+profile = "release"
 features = ["pyo3/extension-module", "pyo3/abi3-py310"]
 include = [
     { path = "PYPI.md", format = "sdist" },
