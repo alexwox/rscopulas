@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { getDocsConfig, getDocNavEntries, getPageNeighbors, getTabLinks } from "@/lib/docs";
 import { formatDisplayTitle } from "@/lib/format-display-title";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const DEMO_LOGO_SRC = "/rscopulas-logo.png";
 
@@ -50,20 +51,23 @@ export async function DocsShell({
             />
             <span>{config.name}</span>
           </Link>
-          <nav className="tab-links" aria-label="Top navigation">
-            <Link href="/" className={!currentSlug ? "tab-link active" : "tab-link"}>
-              Home
-            </Link>
-            {tabLinks.map((tab) => (
-              <Link
-                key={tab.label}
-                href={tab.href}
-                className={currentTab === tab.label ? "tab-link active" : "tab-link"}
-              >
-                {tab.label}
+          <div className="topbar-actions">
+            <nav className="tab-links" aria-label="Top navigation">
+              <Link href="/" className={!currentSlug ? "tab-link active" : "tab-link"}>
+                Home
               </Link>
-            ))}
-          </nav>
+              {tabLinks.map((tab) => (
+                <Link
+                  key={tab.label}
+                  href={tab.href}
+                  className={currentTab === tab.label ? "tab-link active" : "tab-link"}
+                >
+                  {tab.label}
+                </Link>
+              ))}
+            </nav>
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
