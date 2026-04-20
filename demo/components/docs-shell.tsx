@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 import { getDocsConfig, getDocNavEntries, getPageNeighbors, getTabLinks } from "@/lib/docs";
+import { formatDisplayTitle } from "@/lib/format-display-title";
 
 const DEMO_LOGO_SRC = "/rscopulas-logo.png";
 
@@ -74,7 +75,9 @@ export async function DocsShell({
               <ul>
                 {group.pages.map((pageSlug) => {
                   const entry = entries.find((item) => item.slug === pageSlug);
-                  const label = entry?.segments.at(-1)?.replace(/-/g, " ") ?? pageSlug;
+                  const label = formatDisplayTitle(
+                    entry?.segments.at(-1)?.replace(/-/g, " ") ?? pageSlug,
+                  );
 
                   return (
                     <li key={pageSlug}>
@@ -106,7 +109,12 @@ export async function DocsShell({
               {neighbors.previous ? (
                 <Link href={`/${neighbors.previous.slug}`} className="pager-link">
                   <span>Previous</span>
-                  <strong>{neighbors.previous.slug}</strong>
+                  <strong>
+                    {formatDisplayTitle(
+                      neighbors.previous.segments.at(-1)?.replace(/-/g, " ") ??
+                        neighbors.previous.slug,
+                    )}
+                  </strong>
                 </Link>
               ) : (
                 <div />
@@ -114,7 +122,12 @@ export async function DocsShell({
               {neighbors.next ? (
                 <Link href={`/${neighbors.next.slug}`} className="pager-link align-right">
                   <span>Next</span>
-                  <strong>{neighbors.next.slug}</strong>
+                  <strong>
+                    {formatDisplayTitle(
+                      neighbors.next.segments.at(-1)?.replace(/-/g, " ") ??
+                        neighbors.next.slug,
+                    )}
+                  </strong>
                 </Link>
               ) : null}
             </nav>

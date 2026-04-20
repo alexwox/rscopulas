@@ -6,6 +6,8 @@ import { cache } from "react";
 
 import matter from "gray-matter";
 
+import { formatDisplayTitle } from "@/lib/format-display-title";
+
 type LogoConfig =
   | string
   | {
@@ -134,7 +136,7 @@ export const getDocPage = cache(async (slug: string): Promise<DocPage> => {
     title:
       typeof data.title === "string"
         ? data.title
-        : entry.segments.at(-1)?.replace(/-/g, " ") ?? entry.slug,
+        : formatDisplayTitle(entry.segments.at(-1)?.replace(/-/g, " ") ?? entry.slug),
     sidebarTitle:
       typeof data.sidebarTitle === "string" ? data.sidebarTitle : undefined,
     description:
