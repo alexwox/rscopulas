@@ -55,6 +55,17 @@ All three fit methods accept a `&PseudoObs` and a `&VineFitOptions` and return `
 | `VineCopula::fit_d_vine` | D-vine | Path order chosen by greedy Kendall tau |
 | `VineCopula::fit_r_vine` | R-vine | Dissmann-style maximum spanning tree per level |
 
+### Fitting with an explicit order
+
+For exact conditional sampling you often want to pin the variable order so a specific column lands at the Rosenblatt anchor. Use:
+
+| Method | Signature |
+|--------|-----------|
+| `VineCopula::fit_c_vine_with_order` | `fn(data: &PseudoObs, order: &[usize], options: &VineFitOptions) -> Result<FitResult<Self>>` |
+| `VineCopula::fit_d_vine_with_order` | `fn(data: &PseudoObs, order: &[usize], options: &VineFitOptions) -> Result<FitResult<Self>>` |
+
+Place the conditioning column at `order.last()` — it becomes `variable_order()[0]`, the Rosenblatt anchor. See [Conditional sampling](/guides/vine-copulas#conditional-sampling) for the full workflow.
+
 ```rust
 use rscopulas::{PseudoObs, VineCopula, VineFitOptions};
 use ndarray::array;
@@ -152,6 +163,7 @@ Once you have a `VineCopula` (from a fit or a constructor), the following method
 | `.structure()` | `VineStructureKind` | `C`, `D`, or `R`. |
 | `.structure_info()` | `&VineStructure` | R-vine matrix, kind, and truncation level. |
 | `.order()` | `Vec<usize>` | Top-level variable order implied by the structure. |
+| `.variable_order()` | `&[usize]` | Diagonal ordering used by the Rosenblatt transform. Position `0` is the anchor. |
 | `.trees()` | `&[VineTree]` | All fitted tree levels in evaluation order. |
 | `.pair_parameters()` | `Vec<f64>` | Flattened first parameter from each edge copula. |
 | `.truncation_level()` | `Option<usize>` | Configured truncation level, if any. |
@@ -173,3 +185,30 @@ let log_densities = fit.model.log_pdf(&data, &EvalOptions::default())?;
 let mut rng = StdRng::seed_from_u64(42);
 let samples = fit.model.sample(100, &mut rng, &SampleOptions::default())?;
 ```
+
+## Rosenblatt transforms and conditional sampling
+
+`VineCopula` exposes the Rosenblatt transforms directly; both accept and return `(n, dim)` matrices indexed by the original variable label and round-trip up to `~1e-8`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `.rosenblatt(v, options)` | `fn(ArrayView2<f64>, &SampleOptions) -> Result<Array2<f64>>` | Forward transform `U = F(V)`. |
+| `.inverse_rosenblatt(u, options)` | `fn(ArrayView2<f64>, &SampleOptions) -> Result<Array2<f64>>` | Inverse transform `V = F^{-1}(U)`. `sample` is a thin wrapper over this. |
+| `.rosenblatt_prefix(v, col_limit, options)` | `fn(ArrayView2<f64>, usize, &SampleOptions) -> Result<Array2<f64>>` | Partial forward transform returning only the first `col_limit` columns, indexed by **diagonal position**. Backs the `k >= 2` path of the Python `sample_conditional` convenience. |
+
+```rust
+use rscopulas::{VineCopula, VineFitOptions, SampleOptions};
+
+let target = 2usize;
+let order = vec![0, 1, target];
+let vine = VineCopula::fit_c_vine_with_order(
+    &data, &order, &VineFitOptions::default(),
+)?.model;
+assert_eq!(vine.variable_order()[0], target);
+
+// Pin the known column at the anchor, fill the rest with fresh uniforms,
+// and call inverse_rosenblatt to get conditional samples.
+let v = vine.inverse_rosenblatt(u.view(), &SampleOptions::default())?;
+```
+
+See [Conditional sampling](/guides/vine-copulas#conditional-sampling) for the end-to-end workflow and the `variable_order` / `order` convention.

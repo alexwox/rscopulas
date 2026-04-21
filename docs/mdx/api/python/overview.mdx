@@ -62,12 +62,13 @@ from rscopulas import (
 
 | Exception           | Description                                                                      |
 | ------------------- | -------------------------------------------------------------------------------- |
-| `RscopulasError`    | Base class for all library errors                                                |
-| `InvalidInputError` | Raised when input data fails validation (wrong shape, out-of-range values, etc.) |
-| `ModelFitError`     | Raised when the fitting algorithm fails to find a valid solution                 |
-| `NumericalError`    | Raised when a numerical operation produces an invalid result                     |
-| `BackendError`      | Raised for internal Rust backend failures                                        |
-| `InternalError`     | Raised when an internal Rust panic is caught at the Python boundary              |
+| `RscopulasError`             | Base class for all library errors                                                |
+| `InvalidInputError`          | Raised when input data fails validation (wrong shape, out-of-range values, etc.) |
+| `NonPrefixConditioningError` | Subclass of `InvalidInputError`. Raised by `VineCopula.sample_conditional` when the known columns do not form a diagonal prefix of `variable_order`. |
+| `ModelFitError`              | Raised when the fitting algorithm fails to find a valid solution                 |
+| `NumericalError`             | Raised when a numerical operation produces an invalid result                     |
+| `BackendError`               | Raised for internal Rust backend failures                                        |
+| `InternalError`              | Raised when an internal Rust panic is caught at the Python boundary              |
 
 ## Data requirements
 

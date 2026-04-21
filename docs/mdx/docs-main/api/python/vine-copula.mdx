@@ -56,6 +56,10 @@ All three fitting methods accept identical keyword arguments:
   Maximum optimizer iterations per pair-copula.
 </ParamField>
 
+<ParamField body="order" type="Sequence[int] | None" default="None">
+  Only accepted by `fit_c` and `fit_d` (not `fit_r`). Pins the canonical variable order explicitly; the fitter skips its structure-selection heuristic. Use this to set up exact conditional sampling: place the column you want to condition on at the **end** of `order` so that it becomes `variable_order[0]` (the Rosenblatt anchor). See [Conditional sampling](/guides/vine-copulas#conditional-sampling).
+</ParamField>
+
 <ResponseField name="return" type="FitResult[VineCopula]">
   A [`FitResult`](/api/python/fit-result) with `.model` (the fitted `VineCopula`) and `.diagnostics`.
 </ResponseField>
@@ -207,7 +211,7 @@ Evaluate the vine log-density at each row of `data`.
 
 ### `sample(n, *, seed=None) → ndarray`
 
-Draw `n` pseudo-observations from the vine copula.
+Draw `n` pseudo-observations from the vine copula. Implemented as `inverse_rosenblatt(U)` over a freshly drawn uniform matrix.
 
 <ParamField body="n" type="int" required>
   Number of samples.
@@ -220,6 +224,54 @@ Draw `n` pseudo-observations from the vine copula.
 <ResponseField name="return" type="ndarray[float64]">
   A 2-D array of shape `(n, dim)` with values in `(0, 1)`.
 </ResponseField>
+
+### `rosenblatt(data) → ndarray`
+
+Forward Rosenblatt transform `U = F(V)`. Takes vine-distributed pseudo-observations and returns the associated independent uniforms. Input and output are both `(n, dim)` arrays indexed by the original variable label. `inverse_rosenblatt(rosenblatt(V)) == V` up to `~1e-8` drift.
+
+<ParamField body="data" type="ArrayLike" required>
+  A 2-D array of pseudo-observations matching the vine's dimension, with values in `(0, 1)`.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 2-D array of independent uniforms with the same shape and column layout as `data`.
+</ResponseField>
+
+### `inverse_rosenblatt(data) → ndarray`
+
+Inverse Rosenblatt transform `V = F^{-1}(U)`. Takes a matrix of independent uniforms and returns a vine-distributed sample. This is the primitive behind [`sample`](#sample-n-seed-none-ndarray) and [`sample_conditional`](#sample-conditional-known-n-seed-none-ndarray).
+
+<ParamField body="data" type="ArrayLike" required>
+  A 2-D array of independent uniforms with shape matching the vine's dimension.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 2-D array of vine-distributed samples with the same shape as `data`.
+</ResponseField>
+
+### `sample_conditional(known, n, *, seed=None) → ndarray`
+
+Draw `n` samples from the vine **conditional** on known values for a subset of columns. See [Conditional sampling](/guides/vine-copulas#conditional-sampling) for the full workflow, including the `variable_order` convention and how to set up the vine via `fit_c(order=...)` or `fit_d(order=...)`.
+
+<ParamField body="known" type="dict[int, ArrayLike]" required>
+  Mapping of column index to a 1-D array of length `n` with values in `(0, 1)`. The provided column indices must form a prefix of [`variable_order`](#variable-order-list-int).
+</ParamField>
+
+<ParamField body="n" type="int" required>
+  Number of samples.
+</ParamField>
+
+<ParamField body="seed" type="int | None" default="None">
+  Random seed controlling the non-conditioned columns.
+</ParamField>
+
+<ResponseField name="return" type="ndarray[float64]">
+  A 2-D array of shape `(n, dim)` in original variable-label order. The columns in `known` are filled with the supplied values (bit-exact when `k == 1` at the anchor; tight round-trip otherwise).
+</ResponseField>
+
+<Warning>
+Raises `rscopulas.NonPrefixConditioningError` when the keys of `known` are not equal to `set(variable_order[:k])`. The error message suggests a re-fit pattern.
+</Warning>
 
 ---
 
@@ -235,6 +287,10 @@ Draw `n` pseudo-observations from the vine copula.
 
 <ResponseField name="order" type="list[int]">
   The variable ordering used by the vine structure.
+</ResponseField>
+
+<ResponseField name="variable_order" type="list[int]">
+  Diagonal ordering used by the Rosenblatt transform. `variable_order[0]` is the Rosenblatt anchor (see [Conditional sampling](/guides/vine-copulas#conditional-sampling)). For canonical C- and D-vines, `variable_order[0] == order[-1]`.
 </ResponseField>
 
 <ResponseField name="pair_parameters" type="ndarray[float64]">

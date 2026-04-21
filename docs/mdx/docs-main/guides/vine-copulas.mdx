@@ -215,3 +215,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Use `VineCopula::fit_c_vine` and `VineCopula::fit_d_vine` for the other vine types. The Rust `VineFitOptions::default()` uses AIC, all classical families with rotations, and no truncation.
+
+## Conditional sampling
+
+A fitted vine is built from pair-copula h-functions and their inverses, which is exactly the machinery needed for **conditional simulation**. Given observed values on a subset of columns, rscopulas can draw the remaining columns from the vine's conditional distribution without importance reweighting or any approximation — the tail dependence encoded in each pair copula propagates through exactly.
+
+The primitives are the two Rosenblatt transforms: `rosenblatt(V) = U` turns vine-distributed data into independent uniforms, and `inverse_rosenblatt(U) = V` does the reverse. Unconditional sampling is just `inverse_rosenblatt` of a uniform matrix, and conditional sampling pins a prefix of the uniforms to match the known values.
+
+### The `variable_order` convention
+
+Every fitted vine has a diagonal order `variable_order` giving the sequence in which the Rosenblatt chain emits variables. `variable_order[0]` is the **Rosenblatt anchor**: its input uniform passes through unchanged, so `V[:, variable_order[0]]` equals the anchor uniform bit-for-bit.
+
+For canonical C- and D-vines the relationship to the user-supplied `order` is the same:
+
+```text
+variable_order[0] == order[-1]
+```
+
+So to pin column `X` at the anchor, place it at the **end** of `order`:
+
+```python
+fit = VineCopula.fit_c(u, order=[*other_cols, X])
+vine = fit.model
+assert vine.variable_order[0] == X
+```
+
+For a D-vine `variable_order` is exactly `list(reversed(order))`; for a C-vine the remaining positions are permuted by the structure-matrix construction, so inspect `vine.variable_order` after fitting if you care about positions beyond the anchor.
+
+<Note>
+R-vines (`fit_r`) pick their own structure and do not accept an `order=` argument. If you need conditional sampling, fit a C- or D-vine with an explicit `order`.
+</Note>
+
+### `sample_conditional`
+
+```python
+from rscopulas import VineCopula
+
+fit = VineCopula.fit_c(u, order=[*others, us10y_idx])
+vine = fit.model
+assert vine.variable_order[0] == us10y_idx
+
+scenarios = vine.sample_conditional(
+    known={us10y_idx: yield_uniforms},   # 1D array of length n, values in (0, 1)
+    n=10_000,
+    seed=2026,
+)
+```
+
+The returned `(n, dim)` matrix is in original variable-label order, with the conditioned column set to the supplied values. For the single-variable fast path (`k == 1`, matching the Rosenblatt anchor), the output column for the known variable is **bit-exact**. For `k >= 2` the returned values for the known columns match the input up to ~`1e-8` drift.
+
+<Warning>
+`known` must supply a *diagonal prefix* of `variable_order`: its keys must equal `set(variable_order[:k])` for some `k`. Otherwise `sample_conditional` raises `rscopulas.NonPrefixConditioningError`. The error message points at the `fit_c(order=...)` / `fit_d(order=...)` pattern needed to set up the right prefix.
+</Warning>
+
+### Rosenblatt transforms directly
+
+Both `rosenblatt` and `inverse_rosenblatt` take and return `(n, dim)` arrays indexed by the original variable label. They round-trip up to `~1e-8`:
+
+```python
+V = vine.sample(1_000, seed=42)
+U = vine.rosenblatt(V)                # independent uniforms, same column layout
+V_back = vine.inverse_rosenblatt(U)   # exact inverse
+```
+
+Use `rosenblatt` for goodness-of-fit diagnostics, copula-based PIT transforms, or any workflow that needs to turn vine-distributed data into IID uniforms.
+
+### Conditional sampling in Rust
+
+The same primitives are available on `VineCopula` in Rust:
+
+```rust
+use rscopulas::{VineCopula, VineFitOptions, SampleOptions};
+
+let target = 2usize;                          // column to condition on
+let order = vec![0, 1, target];
+let vine = VineCopula::fit_c_vine_with_order(
+    &data, &order, &VineFitOptions::default(),
+)?.model;
+assert_eq!(vine.variable_order()[0], target);
+
+// Build a U matrix with the known column pinned and the rest freshly drawn,
+// then call inverse_rosenblatt. The Python sample_conditional is a thin
+// convenience over this loop.
+let samples = vine.inverse_rosenblatt(u.view(), &SampleOptions::default())?;
+```
+
+`rosenblatt`, `rosenblatt_prefix`, and `variable_order` are the matching accessors.
