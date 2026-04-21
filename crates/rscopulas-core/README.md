@@ -6,7 +6,7 @@
 
 ```toml
 [dependencies]
-rscopulas = "0.2.3"
+rscopulas = "0.2.4"
 ```
 
 ## What it includes
