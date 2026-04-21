@@ -129,7 +129,7 @@ Do not compare harness wall times to Criterion reports directly; methodology dif
 
 - Single-family: Gaussian, Student t, Clayton, Frank, Gumbel–Hougaard.
 - Pair copulas: density, h-functions, inverses; rotations where supported; **Khoudraji** composition of two base pair kernels ([docs/khoudraji.md](docs/khoudraji.md)).
-- Vines: C-vine, D-vine, R-vine — construct, fit, `log_pdf`, sample ([docs/vines.md](docs/vines.md)).
+- Vines: C-vine, D-vine, R-vine — construct, fit, `log_pdf`, sample, and **exact conditional sampling** via the Rosenblatt transform ([docs/vines.md](docs/vines.md)).
 - HAC: hierarchical Archimedean construction and fitting — behavior and sampling caveats: [docs/hac.md](docs/hac.md) (Python/Rust API also in [docs/python.md](docs/python.md)).
 
 ## Workspace layout (for contributors)

@@ -87,6 +87,56 @@
 //! # }
 //! ```
 //!
+//! # Conditional sampling from a vine
+//!
+//! A fitted vine natively supports conditional simulation through the
+//! Rosenblatt transform. Pin the conditioning column at the Rosenblatt
+//! anchor position `variable_order[0]` by placing it at the end of `order`,
+//! then feed its uniforms into `inverse_rosenblatt` alongside fresh random
+//! uniforms for the free columns:
+//!
+//! ```no_run
+//! use ndarray::{Array2, Axis, s};
+//! use rand::{rngs::StdRng, Rng, SeedableRng};
+//! use rscopulas::{PseudoObs, SampleOptions, VineCopula, VineFitOptions};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let data = PseudoObs::new(ndarray::array![
+//! #     [0.12, 0.18, 0.21], [0.21, 0.25, 0.29], [0.27, 0.22, 0.31],
+//! #     [0.35, 0.42, 0.39], [0.48, 0.51, 0.46], [0.56, 0.49, 0.58],
+//! #     [0.68, 0.73, 0.69], [0.82, 0.79, 0.76],
+//! # ])?;
+//! let target = 2usize; // column to condition on
+//! let order = vec![0, 1, target];
+//! let vine = VineCopula::fit_c_vine_with_order(
+//!     &data, &order, &VineFitOptions::default(),
+//! )?.model;
+//! assert_eq!(vine.variable_order()[0], target);
+//!
+//! // Build U: known column at target, fresh uniforms elsewhere.
+//! let n = 1_000;
+//! let d = vine.variable_order().len();
+//! let known = Array2::<f64>::from_elem((n, 1), 0.9);
+//! let mut rng = StdRng::seed_from_u64(0);
+//! let mut u = Array2::<f64>::zeros((n, d));
+//! u.column_mut(target).assign(&known.index_axis(Axis(1), 0));
+//! for obs in 0..n {
+//!     for var in 0..d {
+//!         if var != target {
+//!             u[(obs, var)] = rng.random();
+//!         }
+//!     }
+//! }
+//! let v = vine.inverse_rosenblatt(u.view(), &SampleOptions::default())?;
+//! assert_eq!(v.shape(), &[n, d]);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The Python API ships a `VineCopula.sample_conditional(known, n, seed)`
+//! convenience that does this plumbing for you and also supports `k >= 2`
+//! known columns via a partial forward Rosenblatt pass.
+//!
 //! # Backend expectations
 //!
 //! The crate exposes explicit execution policy controls through [`ExecPolicy`]

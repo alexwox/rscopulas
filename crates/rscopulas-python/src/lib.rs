@@ -24,6 +24,7 @@ create_exception!(rscopulas, ModelFitError, RscopulasError);
 create_exception!(rscopulas, NumericalError, RscopulasError);
 create_exception!(rscopulas, BackendError, RscopulasError);
 create_exception!(rscopulas, InternalError, RscopulasError);
+create_exception!(rscopulas, NonPrefixConditioningError, InvalidInputError);
 
 fn to_pyerr(error: CopulaError) -> PyErr {
     match error {
@@ -1274,7 +1275,7 @@ impl PyVineCopula {
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None))]
     fn fit_c(
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
@@ -1284,6 +1285,7 @@ impl PyVineCopula {
         independence_threshold: Option<f64>,
         clip_eps: f64,
         max_iter: usize,
+        order: Option<Vec<usize>>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1296,7 +1298,11 @@ impl PyVineCopula {
                 clip_eps,
                 max_iter,
             )?;
-            let result = VineCopula::fit_c_vine(&data, &options).map_err(to_pyerr)?;
+            let result = match order {
+                Some(order) => VineCopula::fit_c_vine_with_order(&data, &order, &options),
+                None => VineCopula::fit_c_vine(&data, &options),
+            }
+            .map_err(to_pyerr)?;
             Ok((
                 Self {
                     inner: result.model,
@@ -1308,7 +1314,7 @@ impl PyVineCopula {
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None))]
     fn fit_d(
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
@@ -1318,6 +1324,7 @@ impl PyVineCopula {
         independence_threshold: Option<f64>,
         clip_eps: f64,
         max_iter: usize,
+        order: Option<Vec<usize>>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1330,7 +1337,11 @@ impl PyVineCopula {
                 clip_eps,
                 max_iter,
             )?;
-            let result = VineCopula::fit_d_vine(&data, &options).map_err(to_pyerr)?;
+            let result = match order {
+                Some(order) => VineCopula::fit_d_vine_with_order(&data, &order, &options),
+                None => VineCopula::fit_d_vine(&data, &options),
+            }
+            .map_err(to_pyerr)?;
             Ok((
                 Self {
                     inner: result.model,
@@ -1456,6 +1467,62 @@ impl PyVineCopula {
         let values = self
             .inner
             .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+
+    /// Diagonal ordering used by the Rosenblatt transform.
+    ///
+    /// `variable_order[0]` is the Rosenblatt anchor: its input uniform is
+    /// passed through unchanged.
+    fn variable_order(&self) -> Vec<usize> {
+        self.inner.variable_order().to_vec()
+    }
+
+    /// Rosenblatt transform `U = F(V)` indexed by original variable label.
+    fn rosenblatt<'py>(
+        &self,
+        py: Python<'py>,
+        data: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let view = data.as_array();
+        let values = self
+            .inner
+            .rosenblatt(view, &sample_options())
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+
+    /// Inverse Rosenblatt transform `V = F^{-1}(U)` indexed by original
+    /// variable label. This is the primitive behind `sample` and
+    /// `sample_conditional`.
+    fn inverse_rosenblatt<'py>(
+        &self,
+        py: Python<'py>,
+        data: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let view = data.as_array();
+        let values = self
+            .inner
+            .inverse_rosenblatt(view, &sample_options())
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+
+    /// Partial forward Rosenblatt that only emits the first `col_limit`
+    /// diagonal positions. The returned array has shape `(n, col_limit)`
+    /// and is indexed **by diagonal position**: column `idx` of the output
+    /// is the Rosenblatt uniform for variable `variable_order()[idx]`.
+    fn rosenblatt_prefix<'py>(
+        &self,
+        py: Python<'py>,
+        data: PyReadonlyArray2<'_, f64>,
+        col_limit: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let view = data.as_array();
+        let values = self
+            .inner
+            .rosenblatt_prefix(view, col_limit, &sample_options())
             .map_err(to_pyerr)?;
         Ok(values.into_pyarray(py))
     }
@@ -1624,6 +1691,10 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("NumericalError", py.get_type::<NumericalError>())?;
     module.add("BackendError", py.get_type::<BackendError>())?;
     module.add("InternalError", py.get_type::<InternalError>())?;
+    module.add(
+        "NonPrefixConditioningError",
+        py.get_type::<NonPrefixConditioningError>(),
+    )?;
 
     module.add_class::<PyFitDiagnostics>()?;
     module.add_class::<PyGaussianCopula>()?;

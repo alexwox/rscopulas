@@ -129,7 +129,22 @@ impl VineCopula {
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
         let order = c_vine_order(data, options)?;
-        let (trees, diagnostics) = fit_canonical_vine(data, &order, VineStructureKind::C, options)?;
+        Self::fit_c_vine_with_order(data, &order, options)
+    }
+
+    /// Fits a C-vine with an explicit variable order.
+    ///
+    /// The first element of `order` becomes the C-vine root, and the resulting
+    /// structure has that variable at the Rosenblatt anchor position. Use this
+    /// to set up exact conditional sampling via [`Self::inverse_rosenblatt`]:
+    /// variables intended to be conditioned on should occupy the leading
+    /// positions of `order`.
+    pub fn fit_c_vine_with_order(
+        data: &PseudoObs,
+        order: &[usize],
+        options: &VineFitOptions,
+    ) -> Result<FitResult<Self>, CopulaError> {
+        let (trees, diagnostics) = fit_canonical_vine(data, order, VineStructureKind::C, options)?;
         let model = build_model_from_trees(VineStructureKind::C, trees, options.truncation_level)?;
         Ok(FitResult { model, diagnostics })
     }
@@ -140,7 +155,20 @@ impl VineCopula {
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
         let order = d_vine_order(data, options)?;
-        let (trees, diagnostics) = fit_canonical_vine(data, &order, VineStructureKind::D, options)?;
+        Self::fit_d_vine_with_order(data, &order, options)
+    }
+
+    /// Fits a D-vine with an explicit variable order.
+    ///
+    /// `order` defines the D-vine path in order, so `order[0]` is again the
+    /// Rosenblatt anchor. Use this to pin conditioning variables to the
+    /// leading diagonal positions for exact conditional sampling.
+    pub fn fit_d_vine_with_order(
+        data: &PseudoObs,
+        order: &[usize],
+        options: &VineFitOptions,
+    ) -> Result<FitResult<Self>, CopulaError> {
+        let (trees, diagnostics) = fit_canonical_vine(data, order, VineStructureKind::D, options)?;
         let model = build_model_from_trees(VineStructureKind::D, trees, options.truncation_level)?;
         Ok(FitResult { model, diagnostics })
     }

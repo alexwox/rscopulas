@@ -20,6 +20,8 @@ Python bindings currently fix policy to `Auto`; see [python.md](python.md).
 
 - Construct: `VineCopula::gaussian_c_vine`, `gaussian_d_vine`, `from_trees`, etc.
 - Fit: `VineCopula::fit_c_vine`, `fit_d_vine`, `fit_r_vine` with `VineFitOptions` (family set, rotations, criterion, truncation, independence thresholds).
+- Fit with an explicit variable order: `VineCopula::fit_c_vine_with_order(data, order, options)` and `fit_d_vine_with_order(...)`. Place a variable at `order[-1]` to make it the Rosenblatt anchor (`variable_order[0]`).
+- Conditional sampling primitives: `VineCopula::rosenblatt`, `inverse_rosenblatt`, `rosenblatt_prefix`, `variable_order`. All operate on `ArrayView2<f64>` and round-trip up to `~1e-8`. Unconditional sampling is `inverse_rosenblatt(U)` applied to a freshly drawn uniform matrix; the existing `sample` entry point is a thin adapter over that path. See [docs/vines.md](vines.md#conditional-sampling) for the algorithm and API contract.
 
 Khoudraji is available as `PairCopulaFamily::Khoudraji` in the family set; fitting uses a bounded internal search (CPU).
 

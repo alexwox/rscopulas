@@ -23,6 +23,24 @@ family_set=["independence", "gaussian", "clayton", "frank", "gumbel", "khoudraji
 
 Rotations, criterion (`"aic"` / `"bic"`), and `truncation_level` map to the Rust `VineFitOptions`.
 
+`fit_c` and `fit_d` additionally accept `order=[...]` (integer column indices) to pin the canonical variable order explicitly. This is how you set up exact conditional sampling — see [vines.md](vines.md#conditional-sampling).
+
+## Conditional sampling from a vine
+
+Fitted `VineCopula` models expose the Rosenblatt transform and a
+`sample_conditional(known, n, seed=None)` convenience:
+
+```python
+vine = VineCopula.fit_c(u, order=[*others, US10Y_IDX]).model
+assert vine.variable_order[0] == US10Y_IDX
+scenarios = vine.sample_conditional({US10Y_IDX: yield_uniforms}, n=10_000, seed=0)
+```
+
+Inputs outside a diagonal prefix of `variable_order` raise
+`rscopulas.NonPrefixConditioningError`. Full semantics, the
+`variable_order == order[-1]` convention, and the forward/inverse Rosenblatt
+primitives are documented in [vines.md](vines.md#conditional-sampling).
+
 ## Hierarchical Archimedean copulas (HAC)
 
 `HierarchicalArchimedeanCopula.from_tree(...)` builds a nested Archimedean model from a nested dict (see tests for shape). **Density** uses an exact exchangeable path when the tree is a single Archimedean fan; nested trees use a composite pair-copula evaluation.

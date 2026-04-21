@@ -1,5 +1,6 @@
 mod eval;
 mod fit;
+mod rosenblatt;
 mod sample;
 mod structure;
 

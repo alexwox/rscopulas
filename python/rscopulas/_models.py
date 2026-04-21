@@ -563,7 +563,20 @@ class VineCopula(_BaseModel):
         independence_threshold: float | None = None,
         clip_eps: float = 1e-12,
         max_iter: int = 500,
+        order: Sequence[int] | None = None,
     ) -> FitResult["VineCopula"]:
+        """Fit a C-vine.
+
+        Pass ``order`` to pin the variable order explicitly. Pattern for exact
+        conditional sampling: place the column you intend to condition on at
+        the **end** of ``order`` (e.g. ``order=[..., US10Y_YIELD_IDX]``). That
+        column becomes ``variable_order[0]`` — the Rosenblatt anchor consumed
+        by :meth:`sample_conditional`. For k > 1 conditioning variables, put
+        them in the trailing positions in the order you want them to occupy
+        ``variable_order[0:k]``; inspect :attr:`variable_order` after fitting
+        to confirm the layout (the mapping from ``order`` to
+        ``variable_order`` is not a simple reversal for C-vines).
+        """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_c(
                 _as_float_matrix(data),
@@ -574,6 +587,7 @@ class VineCopula(_BaseModel):
                 independence_threshold=independence_threshold,
                 clip_eps=clip_eps,
                 max_iter=max_iter,
+                order=None if order is None else _as_order(order),
             )
         )
 
@@ -589,7 +603,16 @@ class VineCopula(_BaseModel):
         independence_threshold: float | None = None,
         clip_eps: float = 1e-12,
         max_iter: int = 500,
+        order: Sequence[int] | None = None,
     ) -> FitResult["VineCopula"]:
+        """Fit a D-vine.
+
+        Pass ``order`` to pin the variable path explicitly. For exact
+        conditional sampling place the columns you intend to condition on at
+        the **end** of ``order``: for a D-vine ``variable_order`` equals
+        ``list(reversed(order))``, so ``order[-1]`` is the Rosenblatt anchor,
+        ``order[-2]`` is the second Rosenblatt position, and so on.
+        """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_d(
                 _as_float_matrix(data),
@@ -600,6 +623,7 @@ class VineCopula(_BaseModel):
                 independence_threshold=independence_threshold,
                 clip_eps=clip_eps,
                 max_iter=max_iter,
+                order=None if order is None else _as_order(order),
             )
         )
 
@@ -643,6 +667,17 @@ class VineCopula(_BaseModel):
         return [int(value) for value in self._core.order()]
 
     @property
+    def variable_order(self) -> list[int]:
+        """Diagonal ordering used by the Rosenblatt transform.
+
+        ``variable_order[0]`` is the Rosenblatt anchor: the first variable
+        simulated when traversing the fitted vine. To enable exact conditional
+        sampling on a column X, fit the vine with ``fit_c(order=[X, ...])`` or
+        ``fit_d(order=[X, ...])`` so that ``variable_order[0] == X``.
+        """
+        return [int(value) for value in self._core.variable_order()]
+
+    @property
     def pair_parameters(self) -> npt.NDArray[np.float64]:
         return np.asarray(self._core.pair_parameters(), dtype=np.float64)
 
@@ -653,3 +688,114 @@ class VineCopula(_BaseModel):
     @property
     def trees(self) -> list[VineTreeInfo]:
         return [VineTreeInfo._from_core(tree) for tree in self._core.trees()]
+
+    def rosenblatt(self, data: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """Forward Rosenblatt transform ``U = F(V)``.
+
+        Takes a matrix ``V`` of vine-distributed pseudo-observations (shape
+        ``(n, d)``, indexed by original variable label) and returns the
+        associated independent uniforms ``U`` with the same layout. For any
+        fitted vine, ``inverse_rosenblatt(rosenblatt(V)) == V`` up to clip_eps.
+        """
+        return np.asarray(self._core.rosenblatt(_as_float_matrix(data)))
+
+    def inverse_rosenblatt(self, data: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """Inverse Rosenblatt transform ``V = F^{-1}(U)``.
+
+        Takes a matrix ``U`` of independent uniforms (shape ``(n, d)``,
+        indexed by original variable label) and returns a vine-distributed
+        sample ``V`` with the same layout. This is the primitive behind
+        :meth:`sample` and :meth:`sample_conditional`.
+        """
+        return np.asarray(self._core.inverse_rosenblatt(_as_float_matrix(data)))
+
+    def sample_conditional(
+        self,
+        known: dict[int, npt.ArrayLike],
+        n: int,
+        *,
+        seed: int | None = None,
+    ) -> npt.NDArray[np.float64]:
+        """Draw ``n`` samples from the vine conditional on known columns.
+
+        Parameters
+        ----------
+        known
+            Mapping ``{column_index: values}`` where ``values`` is a 1D array
+            of length ``n`` in ``(0, 1)``. The provided column indices must
+            form a prefix of :attr:`variable_order` — i.e. they must equal
+            ``variable_order[0:k]`` as a set for some ``k``. Pin a variable
+            there by fitting with ``fit_c(order=[X, ...])``.
+        n
+            Number of samples.
+        seed
+            RNG seed controlling the free (non-conditioned) columns.
+
+        Returns
+        -------
+        V : ndarray of shape ``(n, dim)``
+            Vine-distributed samples in original variable-label order, with
+            ``V[:, col] == np.clip(known[col], eps, 1 - eps)`` for every
+            supplied column.
+
+        Raises
+        ------
+        NonPrefixConditioningError
+            If the supplied known columns are not a diagonal prefix of
+            ``variable_order``.
+        """
+        eps = 1e-12
+        d = int(self._core.dim)
+        if n <= 0:
+            raise ValueError("n must be positive")
+
+        known_columns = {int(col): _as_float_vector(values) for col, values in known.items()}
+        if not known_columns:
+            raise ValueError("sample_conditional requires at least one known column")
+        for col, values in known_columns.items():
+            if values.shape[0] != n:
+                raise ValueError(
+                    f"known column {col} has length {values.shape[0]}, expected {n}"
+                )
+            if col < 0 or col >= d:
+                raise ValueError(f"known column {col} is out of range [0, {d})")
+
+        k = len(known_columns)
+        variable_order = self.variable_order
+        prefix = variable_order[:k]
+        if set(known_columns) != set(prefix):
+            from ._rscopulas import NonPrefixConditioningError
+
+            raise NonPrefixConditioningError(
+                f"sample_conditional requires the known columns to match a prefix of "
+                f"variable_order. Given known columns {sorted(known_columns)}, "
+                f"variable_order[:{k}] is {list(prefix)}. "
+                f"To fix, re-fit with fit_c(data, order=[..., *known_cols]) or "
+                f"fit_d(data, order=[..., *known_cols]) so the conditioning "
+                f"variables occupy the trailing positions of order and thus "
+                f"the leading positions of variable_order."
+            )
+
+        rng = np.random.default_rng(seed)
+
+        if k == 1:
+            col = next(iter(known_columns))
+            u = np.empty((n, d), dtype=np.float64)
+            u[:, col] = np.clip(known_columns[col], eps, 1.0 - eps)
+            free_mask = [var for var in range(d) if var != col]
+            u[:, free_mask] = rng.uniform(size=(n, d - 1))
+            return self.inverse_rosenblatt(u)
+
+        v_partial = np.full((n, d), 0.5, dtype=np.float64)
+        for col, values in known_columns.items():
+            v_partial[:, col] = np.clip(values, eps, 1.0 - eps)
+
+        u_fixed = np.asarray(self._core.rosenblatt_prefix(v_partial, int(k)))
+
+        u = np.empty((n, d), dtype=np.float64)
+        for idx, var in enumerate(variable_order):
+            if idx < k:
+                u[:, var] = u_fixed[:, idx]
+            else:
+                u[:, var] = rng.uniform(size=n)
+        return self.inverse_rosenblatt(u)

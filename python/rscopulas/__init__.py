@@ -18,6 +18,7 @@ from ._rscopulas import (
     InternalError,
     InvalidInputError,
     ModelFitError,
+    NonPrefixConditioningError,
     NumericalError,
     RscopulasError,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "InternalError",
     "InvalidInputError",
     "ModelFitError",
+    "NonPrefixConditioningError",
     "NumericalError",
     "PairCopula",
     "RscopulasError",

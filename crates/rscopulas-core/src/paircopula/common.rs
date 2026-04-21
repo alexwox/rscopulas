@@ -1049,6 +1049,20 @@ pub(crate) fn cond_first_given_second_batch_into(
     })
 }
 
+pub(crate) fn cond_second_given_first_batch_into(
+    spec: &PairCopulaSpec,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+    strategy: ExecutionStrategy,
+    out: &mut [f64],
+) -> Result<(), CopulaError> {
+    validate_batch_buffers(u1, u2, &[out.len()])?;
+    fill_unary_pair_batch(spec, u1, u2, strategy, out, |spec, left, right| {
+        spec.cond_second_given_first(left, right, clip_eps)
+    })
+}
+
 fn gaussian_pair_request<'a>(
     spec: &PairCopulaSpec,
     u1: &'a [f64],
