@@ -17,8 +17,10 @@ pub fn theta_from_tau(tau: f64) -> Result<f64, CopulaError> {
 // exp(-x) underflows to 0 so the naive log(1.0 - (-x).exp()) saturates to 0.
 // The piecewise form below keeps ~machine precision across the full range.
 fn log_one_minus_exp_neg(x: f64) -> f64 {
-    if !(x > 0.0) {
-        // 1 - exp(0) = 0; caller should avoid this.
+    // Reject NaN or non-positive inputs explicitly: at x = 0, 1 - exp(-x) = 0
+    // and the caller should avoid this; for NaN we propagate a sentinel
+    // `NEG_INFINITY` so downstream `logsumexp2` passes through correctly.
+    if x.is_nan() || x <= 0.0 {
         return f64::NEG_INFINITY;
     }
     if x > std::f64::consts::LN_2 {

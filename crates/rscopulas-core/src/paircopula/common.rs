@@ -482,12 +482,12 @@ impl PairCopulaSpec {
 // We rewrite the argument of the log in terms of (T1 + T2)/(1 - e^{-θ})
 // using the same identity employed by the density.
 fn frank_cdf_stable(u1: f64, u2: f64, theta: f64) -> f64 {
-    if !(theta > 0.0) || !theta.is_finite() {
+    if !theta.is_finite() || theta <= 0.0 {
         return u1 * u2;
     }
     // log(1 - e^{-x}) helper — inlined to avoid extra module boundary.
     let log_one_minus_exp_neg = |x: f64| -> f64 {
-        if !(x > 0.0) {
+        if x.is_nan() || x <= 0.0 {
             return f64::NEG_INFINITY;
         }
         if x > std::f64::consts::LN_2 {
