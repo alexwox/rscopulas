@@ -295,8 +295,7 @@ pub(crate) fn rosenblatt_block(
     let mut out = vec![0.0; n_rows * col_limit];
     for local_obs in 0..n_rows {
         for idx in 0..col_limit {
-            out[(local_obs * col_limit) + idx] =
-                vdirect[workspace_index(local_obs, idx, idx, d)];
+            out[(local_obs * col_limit) + idx] = vdirect[workspace_index(local_obs, idx, idx, d)];
         }
     }
     Ok(out)

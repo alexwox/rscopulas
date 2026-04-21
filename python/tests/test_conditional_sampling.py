@@ -210,7 +210,7 @@ def test_sample_conditional_narrow_band_preserves_conditional_distribution(
     This is a weak property but catches gross directional bugs (e.g. wiring
     the anchor uniform into the wrong column of the workspace).
     """
-    from scipy import stats
+    stats = pytest.importorskip("scipy.stats")
 
     vine, anchor = anchored_c_vine
     free_cols = [c for c in range(vine.dim) if c != anchor]
