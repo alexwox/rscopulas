@@ -4,8 +4,8 @@ use ndarray::Array2;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use rscopulas::{
-    CopulaModel, GaussianCopula, PairCopulaFamily, PseudoObs, SampleOptions, VineCopula,
-    VineFitOptions, VineStructureKind,
+    CopulaModel, GaussianCopula, PairCopulaFamily, PairCopulaSpec, PseudoObs, SampleOptions,
+    VineCopula, VineFitOptions, VineStructureKind,
 };
 
 fn base_options(truncation_level: Option<usize>) -> VineFitOptions {
@@ -130,6 +130,127 @@ fn fit_r_vine_never_panics_on_pathological_inputs() {
             }
         }
     }
+}
+
+#[test]
+fn fit_r_vine_on_strongly_dependent_pair_produces_finite_loglik() {
+    // Regression test for a bug where fit_r_vine with the broad family set
+    // (`Frank` in particular) on strongly-dependent pseudo-observations
+    // silently returned `loglik = +inf` (AIC = -inf), and the subsequent
+    // `sample()` produced non-uniform marginals with a pile of draws pinned
+    // at the upper boundary. Root cause: catastrophic cancellation in the
+    // legacy Frank log-density for large θ, which made the tainted candidate
+    // "win" AIC minimization. We now compute Frank's density/h-inverse in
+    // log space and reject any fit whose per-observation log-density is
+    // non-finite, so the selector never picks such a candidate.
+    let mut rng = StdRng::seed_from_u64(0xF3A1_BEEF);
+    // A 5-d dataset whose first two variables have Kendall τ ≈ 0.93 — the
+    // pathological regime for Frank in the 0.2.2 release.
+    let mut values = Array2::zeros((1024, 5));
+    for row in 0..1024 {
+        let u: f64 = rng.random::<f64>().clamp(1e-6, 1.0 - 1e-6);
+        let jitter: f64 = 1e-3 * rng.random::<f64>();
+        let shifted = (u + jitter - 0.5 * 1e-3).clamp(1e-6, 1.0 - 1e-6);
+        values[(row, 0)] = u;
+        values[(row, 1)] = shifted;
+        for col in 2..5 {
+            values[(row, col)] = rng.random::<f64>().clamp(1e-6, 1.0 - 1e-6);
+        }
+    }
+    let data = PseudoObs::new(values).expect("pseudo-obs should be valid");
+
+    let options = VineFitOptions {
+        family_set: vec![
+            PairCopulaFamily::Independence,
+            PairCopulaFamily::Gaussian,
+            PairCopulaFamily::StudentT,
+            PairCopulaFamily::Clayton,
+            PairCopulaFamily::Frank,
+            PairCopulaFamily::Gumbel,
+        ],
+        include_rotations: true,
+        truncation_level: Some(2),
+        ..VineFitOptions::default()
+    };
+
+    let fit = VineCopula::fit_r_vine(&data, &options).expect("R-vine fit should succeed");
+    assert!(
+        fit.diagnostics.loglik.is_finite(),
+        "loglik must be finite after the Frank stability fix; got {}",
+        fit.diagnostics.loglik
+    );
+    assert!(
+        fit.diagnostics.aic.is_finite(),
+        "aic must be finite; got {}",
+        fit.diagnostics.aic
+    );
+
+    // Sample from the fitted vine and confirm every marginal stays uniform.
+    let mut sample_rng = StdRng::seed_from_u64(12345);
+    let samples = fit
+        .model
+        .sample(20_000, &mut sample_rng, &SampleOptions::default())
+        .expect("sampling should succeed");
+    for col in 0..data.dim() {
+        let column = samples.column(col);
+        let mean = column.iter().sum::<f64>() / 20_000.0;
+        let above_999 = column.iter().filter(|&&v| v > 0.999).count();
+        let above_99 = column.iter().filter(|&&v| v > 0.99).count();
+        assert!(
+            (mean - 0.5).abs() < 0.02,
+            "marginal column {col} mean {mean} deviates from 0.5"
+        );
+        // Pinning manifests as ~2% of samples above 0.999, far more than the
+        // 0.1% expected under Uniform(0, 1). Use a generous cap to avoid
+        // flaky failures while still catching the pathology.
+        assert!(
+            (above_999 as f64) / 20_000.0 < 0.005,
+            "column {col}: {above_999} / 20000 samples above 0.999 — upper-boundary pile-up"
+        );
+        assert!(
+            (above_99 as f64 / 20_000.0 - 0.01).abs() < 0.005,
+            "column {col}: upper-tail mass P(U>0.99) = {} deviates too far from 0.01",
+            above_99 as f64 / 20_000.0
+        );
+    }
+}
+
+#[test]
+fn frank_pair_fit_is_rejected_when_log_density_overflows() {
+    // Direct regression at the pair-copula layer: with the stable formulas
+    // the Frank density is bounded for any θ and any u, v in (0, 1), so even
+    // at pathological parameters the fit returns finite diagnostics instead
+    // of the old `+∞` loglik.
+    let n = 1024usize;
+    let mut rng = StdRng::seed_from_u64(7);
+    let mut u1 = Vec::with_capacity(n);
+    let mut u2 = Vec::with_capacity(n);
+    for _ in 0..n {
+        let u: f64 = rng.random::<f64>().clamp(1e-10, 1.0 - 1e-10);
+        let jitter: f64 = 1e-4 * rng.random::<f64>();
+        u1.push(u);
+        u2.push((u + jitter).clamp(1e-10, 1.0 - 1e-10));
+    }
+
+    let options = VineFitOptions {
+        family_set: vec![PairCopulaFamily::Frank],
+        include_rotations: false,
+        truncation_level: None,
+        ..VineFitOptions::default()
+    };
+    let fit = rscopulas::paircopula::fit_pair_copula(&u1, &u2, &options)
+        .expect("frank pair fit should succeed on strongly dependent data");
+    let _: &PairCopulaSpec = &fit.spec;
+    assert!(
+        fit.loglik.is_finite(),
+        "frank pair loglik must be finite for large θ; got {}",
+        fit.loglik
+    );
+    assert!(
+        fit.aic.is_finite(),
+        "frank pair aic must be finite for large θ; got {}",
+        fit.aic
+    );
 }
 
 #[test]

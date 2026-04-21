@@ -457,10 +457,7 @@ impl PairCopulaSpec {
                 Ok(sum.max(0.0).powf(-1.0 / *theta).clamp(0.0, 1.0))
             }
             (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
-                let numerator = ((-*theta * u1).exp() - 1.0) * ((-*theta * u2).exp() - 1.0);
-                let denominator = (-*theta).exp() - 1.0;
-                let inner = 1.0 + numerator / denominator;
-                Ok((-(inner.ln()) / *theta).clamp(0.0, 1.0))
+                Ok(frank_cdf_stable(u1, u2, *theta).clamp(0.0, 1.0))
             }
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
                 let term = ((-u1.ln()).powf(*theta) + (-u2.ln()).powf(*theta)).powf(1.0 / *theta);
@@ -477,6 +474,43 @@ impl PairCopulaSpec {
             .into()),
         }
     }
+}
+
+// Numerically stable Frank bivariate CDF. The naive evaluation suffers the
+// same cancellation as the legacy density: for large θ and u, v away from 0
+// all exponentials underflow to 1, and the ratio of differences collapses.
+// We rewrite the argument of the log in terms of (T1 + T2)/(1 - e^{-θ})
+// using the same identity employed by the density.
+fn frank_cdf_stable(u1: f64, u2: f64, theta: f64) -> f64 {
+    if !(theta > 0.0) || !theta.is_finite() {
+        return u1 * u2;
+    }
+    // log(1 - e^{-x}) helper — inlined to avoid extra module boundary.
+    let log_one_minus_exp_neg = |x: f64| -> f64 {
+        if !(x > 0.0) {
+            return f64::NEG_INFINITY;
+        }
+        if x > std::f64::consts::LN_2 {
+            (-((-x).exp())).ln_1p()
+        } else {
+            (-((-x).exp_m1())).ln()
+        }
+    };
+    let logsumexp2 = |a: f64, b: f64| -> f64 {
+        if a == f64::NEG_INFINITY {
+            return b;
+        }
+        if b == f64::NEG_INFINITY {
+            return a;
+        }
+        let m = a.max(b);
+        m + ((a - m).exp() + (b - m).exp()).ln()
+    };
+    let log_t1 = -theta * u1 + log_one_minus_exp_neg(theta * u2);
+    let log_t2 = -theta * u2 + log_one_minus_exp_neg(theta * (1.0 - u2));
+    let log_den = logsumexp2(log_t1, log_t2);
+    let log_d = log_one_minus_exp_neg(theta);
+    (log_d - log_den) / theta
 }
 
 fn integrate_cdf_from_h(
@@ -577,15 +611,33 @@ fn finalize_pair_fit(
         options.base.clip_eps,
         options.base.exec,
     )?;
-    let loglik = batch.log_pdf.iter().sum::<f64>();
+
+    // If any per-observation log-density evaluates to a non-finite value
+    // (e.g. a floating-point overflow in a pair kernel at extreme
+    // parameters), the sum below would poison AIC/BIC to ±∞ and the
+    // argmin-based selector would deterministically pick this degenerate
+    // candidate. We instead score such candidates as the worst possible so
+    // they are never selected, while keeping the raw likelihood numerically
+    // meaningful (-∞ rather than +∞) for downstream diagnostics.
+    let any_non_finite = batch.log_pdf.iter().any(|value| !value.is_finite());
+    let loglik = if any_non_finite {
+        f64::NEG_INFINITY
+    } else {
+        batch.log_pdf.iter().sum::<f64>()
+    };
 
     let k = spec.parameter_count() as f64;
     let n = u1.len() as f64;
+    let (aic, bic) = if loglik.is_finite() {
+        (2.0 * k - 2.0 * loglik, k * n.ln() - 2.0 * loglik)
+    } else {
+        (f64::INFINITY, f64::INFINITY)
+    };
     Ok(PairFitResult {
         spec,
         loglik,
-        aic: 2.0 * k - 2.0 * loglik,
-        bic: k * n.ln() - 2.0 * loglik,
+        aic,
+        bic,
         cond_on_first: batch.cond_on_first,
         cond_on_second: batch.cond_on_second,
     })
@@ -863,11 +915,20 @@ fn pair_loglik(
     u2: &[f64],
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    u1.iter()
-        .zip(u2.iter())
-        .try_fold(0.0, |acc, (&left, &right)| {
-            Ok(acc + spec.log_pdf(left, right, clip_eps)?)
-        })
+    let mut total = 0.0;
+    for (&left, &right) in u1.iter().zip(u2.iter()) {
+        let value = spec.log_pdf(left, right, clip_eps)?;
+        // Any non-finite per-observation log-density indicates a parameter
+        // combination where the pair kernel overflows; treating the whole
+        // fit as having -∞ log-likelihood prevents inner optimizers (e.g.
+        // the Khoudraji shape search) from latching onto pathological
+        // extrema that would later poison AIC/BIC selection.
+        if !value.is_finite() {
+            return Ok(f64::NEG_INFINITY);
+        }
+        total += value;
+    }
+    Ok(total)
 }
 
 fn evaluate_pair_batch(
