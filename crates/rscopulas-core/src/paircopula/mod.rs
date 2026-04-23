@@ -11,6 +11,7 @@ mod joe;
 mod khoudraji;
 mod rotated;
 mod student_t;
+mod tawn;
 
 pub use common::{
     KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult, Rotation,

@@ -52,6 +52,11 @@ fn rotated_pair_families_match_vinecopula_fixtures() {
         "pair_bb8_rot90_case01.json",
         "pair_bb8_rot180_case01.json",
         "pair_bb8_rot270_case01.json",
+        // Tawn R90/R270: VineCopula's convention swaps Tawn1<->Tawn2 for
+        // those rotations, which is a labeling choice rather than a standard
+        // copula rotation. We only cross-validate R0 (unrotated) and R180.
+        "pair_tawn1_rot180_case01.json",
+        "pair_tawn2_rot180_case01.json",
     ] {
         let fixture: PairFixture = load_fixture(fixture_name);
         assert_eq!(fixture.metadata.source_package, "VineCopula");
@@ -145,14 +150,18 @@ fn fixture_spec(fixture: &PairFixture) -> PairCopulaSpec {
         PairCopulaFamily::Bb7
     } else if fixture.family.starts_with("bb8") {
         PairCopulaFamily::Bb8
+    } else if fixture.family.starts_with("tawn1") {
+        PairCopulaFamily::Tawn1
+    } else if fixture.family.starts_with("tawn2") {
+        PairCopulaFamily::Tawn2
     } else {
         panic!("unexpected rotated family fixture {}", fixture.family);
     };
 
     let rotation = match fixture.family_code {
-        23 | 24 | 26 | 27 | 28 | 29 | 30 => Rotation::R90,
-        13 | 14 | 16 | 17 | 18 | 19 | 20 => Rotation::R180,
-        33 | 34 | 36 | 37 | 38 | 39 | 40 => Rotation::R270,
+        23 | 24 | 26 | 27 | 28 | 29 | 30 | 124 | 224 => Rotation::R90,
+        13 | 14 | 16 | 17 | 18 | 19 | 20 | 114 | 214 => Rotation::R180,
+        33 | 34 | 36 | 37 | 38 | 39 | 40 | 134 | 234 => Rotation::R270,
         other => panic!("unexpected rotated family code {other}"),
     };
 
@@ -160,7 +169,9 @@ fn fixture_spec(fixture: &PairFixture) -> PairCopulaSpec {
         PairCopulaFamily::Bb1
         | PairCopulaFamily::Bb6
         | PairCopulaFamily::Bb7
-        | PairCopulaFamily::Bb8 => PairCopulaParams::Two(fixture.par, fixture.par2),
+        | PairCopulaFamily::Bb8
+        | PairCopulaFamily::Tawn1
+        | PairCopulaFamily::Tawn2 => PairCopulaParams::Two(fixture.par, fixture.par2),
         _ => PairCopulaParams::One(fixture.par),
     };
 

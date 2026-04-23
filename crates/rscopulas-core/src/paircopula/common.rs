@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    bb1, bb6, bb7, bb8, clayton, frank, gaussian, gumbel, joe, khoudraji, rotated, student_t,
+    bb1, bb6, bb7, bb8, clayton, frank, gaussian, gumbel, joe, khoudraji, rotated, student_t, tawn,
 };
 
 /// Supported bivariate pair-copula families for vine edges.
@@ -27,6 +27,8 @@ pub enum PairCopulaFamily {
     Bb6,
     Bb7,
     Bb8,
+    Tawn1,
+    Tawn2,
 }
 
 /// Rotation applied to a bivariate pair-copula kernel.
@@ -244,6 +246,12 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
                 bb8::log_pdf(x1, x2, *theta, *delta)?
             }
+            (PairCopulaFamily::Tawn1, PairCopulaParams::Two(theta, alpha)) => {
+                tawn::log_pdf(x1, x2, *theta, *alpha, 1.0)?
+            }
+            (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
+                tawn::log_pdf(x1, x2, *theta, 1.0, *beta)?
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::log_pdf(x1, x2, params, clip_eps)?
             }
@@ -373,6 +381,12 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
                 bb8::cond_first_given_second(u1, u2, *theta, *delta)
             }
+            (PairCopulaFamily::Tawn1, PairCopulaParams::Two(theta, alpha)) => {
+                tawn::cond_first_given_second(u1, u2, *theta, *alpha, 1.0)
+            }
+            (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
+                tawn::cond_first_given_second(u1, u2, *theta, 1.0, *beta)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_first_given_second(u1, u2, params, clip_eps)
             }
@@ -423,6 +437,12 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
                 bb8::cond_second_given_first(u1, u2, *theta, *delta)
             }
+            (PairCopulaFamily::Tawn1, PairCopulaParams::Two(theta, alpha)) => {
+                tawn::cond_second_given_first(u1, u2, *theta, *alpha, 1.0)
+            }
+            (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
+                tawn::cond_second_given_first(u1, u2, *theta, 1.0, *beta)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_second_given_first(u1, u2, params, clip_eps)
             }
@@ -470,6 +490,12 @@ impl PairCopulaSpec {
             }
             (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
                 bb8::inv_first_given_second(p, u2, *theta, *delta, clip_eps)
+            }
+            (PairCopulaFamily::Tawn1, PairCopulaParams::Two(theta, alpha)) => {
+                tawn::inv_first_given_second(p, u2, *theta, *alpha, 1.0, clip_eps)
+            }
+            (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
+                tawn::inv_first_given_second(p, u2, *theta, 1.0, *beta, clip_eps)
             }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_first_given_second(p, u2, params, clip_eps)
@@ -519,6 +545,12 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
                 bb8::inv_second_given_first(u1, p, *theta, *delta, clip_eps)
             }
+            (PairCopulaFamily::Tawn1, PairCopulaParams::Two(theta, alpha)) => {
+                tawn::inv_second_given_first(u1, p, *theta, *alpha, 1.0, clip_eps)
+            }
+            (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
+                tawn::inv_second_given_first(u1, p, *theta, 1.0, *beta, clip_eps)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_second_given_first(u1, p, params, clip_eps)
             }
@@ -563,6 +595,12 @@ impl PairCopulaSpec {
             }
             (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
                 bb8::cdf(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Tawn1, PairCopulaParams::Two(theta, alpha)) => {
+                tawn::cdf(u1, u2, *theta, *alpha, 1.0)
+            }
+            (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
+                tawn::cdf(u1, u2, *theta, 1.0, *beta)
             }
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(_))
             | (PairCopulaFamily::StudentT, PairCopulaParams::Two(_, _))
@@ -768,6 +806,8 @@ fn candidate_rotations(
         | Family::Bb6
         | Family::Bb7
         | Family::Bb8
+        | Family::Tawn1
+        | Family::Tawn2
         | Family::Khoudraji
             if include_rotations && tau >= 0.0 =>
         {
@@ -780,6 +820,8 @@ fn candidate_rotations(
         | Family::Bb6
         | Family::Bb7
         | Family::Bb8
+        | Family::Tawn1
+        | Family::Tawn2
         | Family::Khoudraji
             if include_rotations =>
         {
@@ -792,6 +834,8 @@ fn candidate_rotations(
         | Family::Bb6
         | Family::Bb7
         | Family::Bb8
+        | Family::Tawn1
+        | Family::Tawn2
         | Family::Khoudraji => &[Rot::R0],
     }
 }
@@ -1027,6 +1071,41 @@ fn fit_simple_family(
                 reason: "bb8 pair fit failed",
             })?;
             PairCopulaParams::Two(theta, delta)
+        }
+        PairCopulaFamily::Tawn1 | PairCopulaFamily::Tawn2 => {
+            // Tawn1 has β = 1 fixed; Tawn2 has α = 1 fixed. In both cases the
+            // free parameters are (θ, ψ) with θ ≥ 1 and ψ ∈ [0, 1]. Outer
+            // grid over ψ, inner MLE over θ — same pattern as BB6/7/8.
+            let is_tawn1 = matches!(family, PairCopulaFamily::Tawn1);
+            let mut best = None;
+            let mut best_loglik = f64::NEG_INFINITY;
+            for &psi in &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6] {
+                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
+                    x1.iter()
+                        .zip(x2.iter())
+                        .map(|(&u, &v)| {
+                            let (alpha, beta) = if is_tawn1 { (psi, 1.0) } else { (1.0, psi) };
+                            tawn::log_pdf(u, v, theta, alpha, beta).unwrap_or(f64::NEG_INFINITY)
+                        })
+                        .sum::<f64>()
+                });
+                let loglik = x1
+                    .iter()
+                    .zip(x2.iter())
+                    .map(|(&u, &v)| {
+                        let (alpha, beta) = if is_tawn1 { (psi, 1.0) } else { (1.0, psi) };
+                        tawn::log_pdf(u, v, theta, alpha, beta).unwrap_or(f64::NEG_INFINITY)
+                    })
+                    .sum::<f64>();
+                if loglik > best_loglik {
+                    best_loglik = loglik;
+                    best = Some((theta, psi));
+                }
+            }
+            let (theta, psi) = best.ok_or(FitError::Failed {
+                reason: "tawn pair fit failed",
+            })?;
+            PairCopulaParams::Two(theta, psi)
         }
         PairCopulaFamily::Khoudraji => {
             return Err(FitError::Failed {

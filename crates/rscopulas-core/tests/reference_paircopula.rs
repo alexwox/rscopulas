@@ -41,6 +41,8 @@ fn pair_families_match_vinecopula_fixtures() {
         "pair_bb6_case01.json",
         "pair_bb7_case01.json",
         "pair_bb8_case01.json",
+        "pair_tawn1_case01.json",
+        "pair_tawn2_case01.json",
     ] {
         let fixture: PairFixture = load_fixture(fixture_name);
         assert_eq!(fixture.metadata.source_package, "VineCopula");
@@ -131,6 +133,8 @@ fn fixture_spec(fixture: &PairFixture) -> PairCopulaSpec {
         "bb6" => PairCopulaFamily::Bb6,
         "bb7" => PairCopulaFamily::Bb7,
         "bb8" => PairCopulaFamily::Bb8,
+        "tawn1" => PairCopulaFamily::Tawn1,
+        "tawn2" => PairCopulaFamily::Tawn2,
         other => panic!("unexpected unrotated family fixture {other}"),
     };
 
@@ -139,7 +143,9 @@ fn fixture_spec(fixture: &PairFixture) -> PairCopulaSpec {
         | PairCopulaFamily::Bb1
         | PairCopulaFamily::Bb6
         | PairCopulaFamily::Bb7
-        | PairCopulaFamily::Bb8 => PairCopulaParams::Two(fixture.par, fixture.par2),
+        | PairCopulaFamily::Bb8
+        | PairCopulaFamily::Tawn1
+        | PairCopulaFamily::Tawn2 => PairCopulaParams::Two(fixture.par, fixture.par2),
         _ => PairCopulaParams::One(fixture.par),
     };
 

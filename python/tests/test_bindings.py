@@ -222,6 +222,8 @@ def test_bb1_pair_copula() -> None:
         ("bb6", (2.0, 1.5)),
         ("bb7", (1.5, 1.5)),
         ("bb8", (2.0, 0.8)),
+        ("tawn1", (2.0, 0.6)),
+        ("tawn2", (2.0, 0.6)),
     ],
 )
 def test_bb_pair_copulas_round_trip(family: str, params: tuple[float, float]) -> None:

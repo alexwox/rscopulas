@@ -105,9 +105,11 @@ fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
         "bb6" => Ok(PairCopulaFamily::Bb6),
         "bb7" => Ok(PairCopulaFamily::Bb7),
         "bb8" => Ok(PairCopulaFamily::Bb8),
+        "tawn1" | "tawn_1" | "tawn-1" => Ok(PairCopulaFamily::Tawn1),
+        "tawn2" | "tawn_2" | "tawn-2" => Ok(PairCopulaFamily::Tawn2),
         "khoudraji" => Ok(PairCopulaFamily::Khoudraji),
         other => Err(PyValueError::new_err(format!(
-            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, bb1, bb6, bb7, bb8, khoudraji"
+            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, bb1, bb6, bb7, bb8, tawn1, tawn2, khoudraji"
         ))),
     }
 }
@@ -139,7 +141,9 @@ fn pair_params_from_values(
         (PairCopulaFamily::Bb1, [theta, delta])
         | (PairCopulaFamily::Bb6, [theta, delta])
         | (PairCopulaFamily::Bb7, [theta, delta])
-        | (PairCopulaFamily::Bb8, [theta, delta]) => Ok(PairCopulaParams::Two(*theta, *delta)),
+        | (PairCopulaFamily::Bb8, [theta, delta])
+        | (PairCopulaFamily::Tawn1, [theta, delta])
+        | (PairCopulaFamily::Tawn2, [theta, delta]) => Ok(PairCopulaParams::Two(*theta, *delta)),
         (PairCopulaFamily::Khoudraji, _) => Err(PyValueError::new_err(
             "khoudraji pair copulas require structured base_copula_1/base_copula_2 and shape_1/shape_2 inputs",
         )),
@@ -158,6 +162,12 @@ fn pair_params_from_values(
             "BB pair copulas require exactly two parameters (theta, delta) (got {})",
             values.len()
         ))),
+        (PairCopulaFamily::Tawn1, values) | (PairCopulaFamily::Tawn2, values) => {
+            Err(PyValueError::new_err(format!(
+                "Tawn pair copulas require exactly two parameters (theta, psi) (got {})",
+                values.len()
+            )))
+        }
         (_, values) => Err(PyValueError::new_err(format!(
             "pair family requires exactly one parameter (got {})",
             values.len()
@@ -468,6 +478,8 @@ fn pair_family_name(family: PairCopulaFamily) -> &'static str {
         PairCopulaFamily::Bb6 => "bb6",
         PairCopulaFamily::Bb7 => "bb7",
         PairCopulaFamily::Bb8 => "bb8",
+        PairCopulaFamily::Tawn1 => "tawn1",
+        PairCopulaFamily::Tawn2 => "tawn2",
         PairCopulaFamily::Khoudraji => "khoudraji",
     }
 }
