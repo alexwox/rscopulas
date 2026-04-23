@@ -623,6 +623,10 @@ class VineCopula(_BaseModel):
         clip_eps: float = 1e-12,
         max_iter: int = 500,
         order: Sequence[int] | None = None,
+        tree_algorithm: str = "kruskal",
+        tree_criterion: str = "tau",
+        select_trunc_lvl: bool = False,
+        rng_seed: int | None = None,
     ) -> FitResult["VineCopula"]:
         """Fit a C-vine.
 
@@ -635,6 +639,12 @@ class VineCopula(_BaseModel):
         ``variable_order[0:k]``; inspect :attr:`variable_order` after fitting
         to confirm the layout (the mapping from ``order`` to
         ``variable_order`` is not a simple reversal for C-vines).
+
+        ``tree_algorithm`` is accepted only as ``"kruskal"`` for C-vines —
+        the star-tree shape is fixed by the vine family, so tree-search
+        choices do not apply. ``tree_criterion``, ``select_trunc_lvl``, and
+        ``rng_seed`` behave symmetrically with ``fit_r``; ``criterion`` can
+        be ``"mbicv"`` or ``"mbicv:<psi0>"`` to drive auto-truncation.
         """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_c(
@@ -647,6 +657,10 @@ class VineCopula(_BaseModel):
                 clip_eps=clip_eps,
                 max_iter=max_iter,
                 order=None if order is None else _as_order(order),
+                tree_algorithm=tree_algorithm,
+                tree_criterion=tree_criterion,
+                select_trunc_lvl=select_trunc_lvl,
+                rng_seed=rng_seed,
             )
         )
 
@@ -663,6 +677,10 @@ class VineCopula(_BaseModel):
         clip_eps: float = 1e-12,
         max_iter: int = 500,
         order: Sequence[int] | None = None,
+        tree_algorithm: str = "kruskal",
+        tree_criterion: str = "tau",
+        select_trunc_lvl: bool = False,
+        rng_seed: int | None = None,
     ) -> FitResult["VineCopula"]:
         """Fit a D-vine.
 
@@ -671,6 +689,9 @@ class VineCopula(_BaseModel):
         the **end** of ``order``: for a D-vine ``variable_order`` equals
         ``list(reversed(order))``, so ``order[-1]`` is the Rosenblatt anchor,
         ``order[-2]`` is the second Rosenblatt position, and so on.
+
+        ``tree_algorithm`` is accepted only as ``"kruskal"`` for D-vines
+        (path structure is fixed). Other new kwargs match ``fit_r``.
         """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_d(
@@ -683,6 +704,10 @@ class VineCopula(_BaseModel):
                 clip_eps=clip_eps,
                 max_iter=max_iter,
                 order=None if order is None else _as_order(order),
+                tree_algorithm=tree_algorithm,
+                tree_criterion=tree_criterion,
+                select_trunc_lvl=select_trunc_lvl,
+                rng_seed=rng_seed,
             )
         )
 
@@ -698,7 +723,37 @@ class VineCopula(_BaseModel):
         independence_threshold: float | None = None,
         clip_eps: float = 1e-12,
         max_iter: int = 500,
+        tree_algorithm: str = "kruskal",
+        tree_criterion: str = "tau",
+        select_trunc_lvl: bool = False,
+        rng_seed: int | None = None,
     ) -> FitResult["VineCopula"]:
+        """Fit an R-vine with Dissmann-style spanning-tree selection.
+
+        New options (all matching pyvinecopulib's ``FitControlsVinecop``):
+
+        ``criterion``
+            ``"aic"`` (default), ``"bic"``, or ``"mbicv"`` / ``"mbicv:<psi0>"``.
+            mBICV is Nagler, Bumann & Czado's modified vine-BIC — required
+            for ``select_trunc_lvl=True``.
+        ``tree_algorithm``
+            ``"kruskal"`` (default), ``"prim"``, ``"random_weighted"``, or
+            ``"random_unweighted"``. Wilson-based random algorithms use
+            ``rng_seed`` for reproducibility.
+        ``tree_criterion``
+            ``"tau"`` (default, Kendall's τ), ``"rho"`` (Spearman's ρ), or
+            ``"hoeffding"`` (Hoeffding's D — picks up non-monotone pair
+            dependence that the rank correlations miss).
+        ``select_trunc_lvl``
+            When ``True`` and ``criterion="mbicv"``, truncation depth is
+            chosen automatically by walking back from the full fit and
+            dropping trees whose mBICV contribution is positive. A manual
+            ``truncation_level`` becomes an upper cap on the auto-selected
+            depth (matching vinecopulib's semantics).
+        ``rng_seed``
+            Seed for stochastic tree algorithms. Ignored for ``kruskal`` /
+            ``prim``. ``None`` draws from the OS RNG.
+        """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_r(
                 _as_float_matrix(data),
@@ -709,6 +764,10 @@ class VineCopula(_BaseModel):
                 independence_threshold=independence_threshold,
                 clip_eps=clip_eps,
                 max_iter=max_iter,
+                tree_algorithm=tree_algorithm,
+                tree_criterion=tree_criterion,
+                select_trunc_lvl=select_trunc_lvl,
+                rng_seed=rng_seed,
             )
         )
 

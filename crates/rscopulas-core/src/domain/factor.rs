@@ -325,6 +325,7 @@ fn fit_basic_1f(
         criterion: options.criterion,
         truncation_level: None,
         independence_threshold: None,
+        ..VineFitOptions::default()
     };
 
     // Stage 1: pseudo-latent via normal-score projection.

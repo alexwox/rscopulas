@@ -82,12 +82,6 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
         }
         .into());
     }
-    if !matches!(method, TllOrder::Constant) {
-        return Err(FitError::Failed {
-            reason: "tll fit currently only supports TllOrder::Constant (linear/quadratic deferred)",
-        }
-        .into());
-    }
 
     let normal = standard_normal();
     let z1: Vec<f64> = u1
@@ -100,36 +94,185 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
         .collect();
 
     let n = z1.len() as f64;
-    // Silverman's rule of thumb for bivariate KDE: h = n^(-1/6), scaled by
-    // the average sample std of the z-transformed axes. Gaussian-transformed
-    // pseudo-observations are approximately unit-variance per axis, so the
-    // scale factor is near 1 — keeping it in the formula just makes the
-    // bandwidth robust to mis-scaled inputs.
     let sigma = 0.5 * (sample_std(&z1) + sample_std(&z2));
-    let bandwidth = sigma.max(1e-3) * n.powf(-1.0 / 6.0);
+    // Bandwidth: vinecopulib's rule is `1.5 · n^(−1/(2p+1))` for polynomial
+    // order p (TLL0 → p=0, TLL1 → p=1, TLL2 → p=2). We keep the sample-std
+    // rescaling so the bandwidth remains robust when the Φ⁻¹-transformed
+    // inputs drift from unit variance.
+    let exponent = match method {
+        TllOrder::Constant => -1.0 / 6.0, // classic Silverman 1.0·n^{-1/6} (p=0 in our convention)
+        TllOrder::Linear => -1.0 / 3.0,   // p=1, so -1/(2p+1) = -1/3
+        TllOrder::Quadratic => -1.0 / 5.0, // p=2, so -1/5
+    };
+    let scale = match method {
+        TllOrder::Constant => 1.0,
+        // vinecopulib's `1.5` multiplier for local-polynomial orders; keeps
+        // enough smoothing to counter the extra bias-variance that higher-
+        // order corrections would otherwise introduce.
+        TllOrder::Linear | TllOrder::Quadratic => 1.5,
+    };
+    let bandwidth = scale * sigma.max(1e-3) * n.powf(exponent);
 
     let step = (GRID_MAX - GRID_MIN) / (GRID_SIZE - 1) as f64;
+
+    // Vinecopulib's closed-form local-polynomial density estimator — direct
+    // port of `tll.ipp:85-148`. At each grid point `z_k` the estimator runs
+    // the data through `irB = B^{-1/2}` to get decorrelated shifts `zz`,
+    // computes the Gaussian kernel `K` at those shifts, forms weighted
+    // moments `f0 = mean(K)` (premultiplied by `det_irB`) and, for the
+    // polynomial orders, a *second* application of `irB` to get `zz_tilde =
+    // irB · zz`. The linear estimator then uses `exp(−½ · bᵀ · B · b)` with
+    // `S = B` (its scope-level default). The quadratic estimator additionally
+    // rebuilds `S` from the kernel-weighted covariance of `zz_tilde` and
+    // multiplies by `sqrt(det S) / det_irB`.
+    //
+    // For isotropic `B = h² · I` the Cholesky root is `irB = (1/h) · I` with
+    // `det_irB = 1/h²`. Specialising on this keeps the 2×2 matrix algebra
+    // inline and avoids a generic linalg dependency.
+    let inv_h = 1.0 / bandwidth;
+    let det_irb = inv_h * inv_h;
+    let b_mat = [[bandwidth * bandwidth, 0.0], [0.0, bandwidth * bandwidth]];
+
     let mut log_density = Array2::<f64>::zeros((GRID_SIZE, GRID_SIZE));
     for i in 0..GRID_SIZE {
         let gx = GRID_MIN + i as f64 * step;
         for j in 0..GRID_SIZE {
             let gy = GRID_MIN + j as f64 * step;
-            let mut sum = 0.0;
+
+            // `zz` is already once-decorrelated: `(z_data - z_grid) / h`.
+            // Kernel weights evaluated here include the `det_irB` factor
+            // from vinecopulib's `kernels = gaussian_kernel_2d(zz) * det_irB`.
+            let mut k_sum = 0.0_f64;
+            // `zz_tilde = irB · zz = zz / h` for isotropic B — i.e. the data
+            // *twice*-decorrelated. Accumulated weighted moments use this
+            // second decorrelation, matching the `zz = (irB * zz.transpose())
+            // .transpose()` step inside vinecopulib's `if != "constant"`.
+            let mut zt_k_sum = [0.0_f64; 2];
+            let mut zt_outer_k_sum = [[0.0_f64; 2]; 2];
             for k in 0..z1.len() {
-                let dx = (gx - z1[k]) / bandwidth;
-                let dy = (gy - z2[k]) / bandwidth;
-                sum += normal_pdf(dx) * normal_pdf(dy);
+                let zz = [(z1[k] - gx) * inv_h, (z2[k] - gy) * inv_h];
+                let weight = normal_pdf(zz[0]) * normal_pdf(zz[1]) * det_irb;
+                k_sum += weight;
+                let zt = [zz[0] * inv_h, zz[1] * inv_h];
+                zt_k_sum[0] += zt[0] * weight;
+                zt_k_sum[1] += zt[1] * weight;
+                zt_outer_k_sum[0][0] += zt[0] * zt[0] * weight;
+                zt_outer_k_sum[0][1] += zt[0] * zt[1] * weight;
+                zt_outer_k_sum[1][0] += zt[1] * zt[0] * weight;
+                zt_outer_k_sum[1][1] += zt[1] * zt[1] * weight;
             }
-            let density = sum / (n * bandwidth * bandwidth);
-            log_density[[i, j]] = density.max(1e-300).ln();
+            // `f0` already carries `det_irB`, so the bare-log-density is
+            // `log f0` — no separate `+ log det_irB` additive is needed.
+            let f0 = k_sum / n;
+            if f0 <= 0.0 || !f0.is_finite() {
+                log_density[[i, j]] = (1e-300_f64).ln();
+                continue;
+            }
+
+            let mut res_log = f0.ln();
+            let f1 = [zt_k_sum[0] / n, zt_k_sum[1] / n];
+            let b_decorr = [f1[0] / f0, f1[1] / f0];
+
+            match method {
+                TllOrder::Constant => {}
+                TllOrder::Linear => {
+                    // S defaults to B at function scope in vinecopulib — so
+                    // for the linear estimator `bᵀ·S·b` evaluates as
+                    // `bᵀ·B·b = h² · (b[0]² + b[1]²)` (isotropic B).
+                    let quad = b_mat[0][0] * b_decorr[0] * b_decorr[0]
+                        + b_mat[1][1] * b_decorr[1] * b_decorr[1];
+                    res_log -= 0.5 * quad;
+                }
+                TllOrder::Quadratic => {
+                    // `zz2 = zz_tilde · K / (f0 · n)` ⇒ `zz.T · zz2` equals
+                    // `zt_outer_k_sum / (f0 · n)` pointwise.
+                    let denom = f0 * n;
+                    let mut zz_cov = [[0.0_f64; 2]; 2];
+                    for a in 0..2 {
+                        for b in 0..2 {
+                            zz_cov[a][b] = zt_outer_k_sum[a][b] / denom;
+                        }
+                    }
+                    // `b = B · b` — remap into original-parameter scale.
+                    let b_prime = [
+                        b_mat[0][0] * b_decorr[0],
+                        b_mat[1][1] * b_decorr[1],
+                    ];
+                    // S_inv = B · zz_cov · B − b' · b'ᵀ.
+                    let mut s_inv = [[0.0_f64; 2]; 2];
+                    for a in 0..2 {
+                        for b in 0..2 {
+                            s_inv[a][b] = b_mat[a][a] * zz_cov[a][b] * b_mat[b][b]
+                                - b_prime[a] * b_prime[b];
+                        }
+                    }
+                    let fallback_to_linear = |res_log: f64| -> f64 {
+                        let quad = b_mat[0][0] * b_decorr[0] * b_decorr[0]
+                            + b_mat[1][1] * b_decorr[1] * b_decorr[1];
+                        res_log - 0.5 * quad
+                    };
+                    let Some((s_mat, det_s_inv)) = invert_2x2(&s_inv) else {
+                        log_density[[i, j]] = fallback_to_linear(res_log).max(1e-300_f64.ln());
+                        continue;
+                    };
+                    if det_s_inv <= 0.0 || !det_s_inv.is_finite() {
+                        log_density[[i, j]] = fallback_to_linear(res_log).max(1e-300_f64.ln());
+                        continue;
+                    }
+                    // `res(k) *= sqrt(det S) / det_irB` (vinecopulib). Since
+                    // `det S = 1 / det S_inv`, use the reciprocal identity:
+                    // `0.5 · ln(det S) = −0.5 · ln(det S_inv)`.
+                    let det_s = 1.0 / det_s_inv;
+                    res_log += 0.5 * det_s.ln() - det_irb.ln();
+                    // `exp(−½ · bᵀ·S·b)` with the remapped b.
+                    let sb = [
+                        s_mat[0][0] * b_prime[0] + s_mat[0][1] * b_prime[1],
+                        s_mat[1][0] * b_prime[0] + s_mat[1][1] * b_prime[1],
+                    ];
+                    let quad = b_prime[0] * sb[0] + b_prime[1] * sb[1];
+                    res_log -= 0.5 * quad;
+                }
+            }
+            log_density[[i, j]] = res_log.max(1e-300_f64.ln());
         }
     }
 
-    // Effective degrees of freedom: a rough analogue for BIC scoring. For
-    // Gaussian KDE with bandwidth h on n points, tr(S) ≈ 1/(2·√π·h) per axis
-    // under the product kernel. We cap at n to keep BIC finite for small
-    // samples.
-    let effective_df = ((1.0 / (2.0 * std::f64::consts::PI.sqrt() * bandwidth)).powi(2)).min(n);
+    // Effective degrees of freedom. We use vinecopulib's trace-of-hat-matrix
+    // definition: per-grid-point influence `infl(z_k) = K(0) · det_irB ·
+    // [M⁻¹]_{0,0} · 1/n` where `M` is the local Gram matrix over the
+    // polynomial basis evaluated under Gaussian kernel weights — 1×1 for
+    // TLL0 (just `f0`), 3×3 for TLL1, 6×6 for TLL2. The reported
+    // `effective_df` is the sum of influence values interpolated at each
+    // data point, clipped to `[−0.2, 1.3]` (vinecopulib's safety band) and
+    // floored at 1.0.
+    let mut infl_grid = Array2::<f64>::zeros((GRID_SIZE, GRID_SIZE));
+    let kernel_zero = normal_pdf(0.0) * normal_pdf(0.0);
+    for i in 0..GRID_SIZE {
+        let gx = GRID_MIN + i as f64 * step;
+        for j in 0..GRID_SIZE {
+            let gy = GRID_MIN + j as f64 * step;
+            let m_inv_00 = local_gram_m_inv_00(gx, gy, &z1, &z2, bandwidth, method);
+            let infl = kernel_zero * det_irb * m_inv_00 / n;
+            infl_grid[[i, j]] = infl.clamp(-0.2, 1.3);
+        }
+    }
+    let mut infl_sum = 0.0_f64;
+    let infl_params = TllParams {
+        method: TllOrder::Constant,
+        grid_min: GRID_MIN,
+        grid_max: GRID_MAX,
+        log_density: infl_grid.mapv(f64::ln),
+        bandwidth,
+        effective_df: 0.0,
+    };
+    for k in 0..z1.len() {
+        // Re-use the bilinear log-density helper against the (already
+        // log-transformed) influence grid; exponentiating undoes the ln so
+        // we sum in the original influence units.
+        let interp = bilinear_log_density(&infl_params, z1[k], z2[k]).exp();
+        infl_sum += interp;
+    }
+    let effective_df = infl_sum.max(1.0).min(n);
 
     Ok(TllParams {
         method,
@@ -139,6 +282,172 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
         bandwidth,
         effective_df,
     })
+}
+
+/// Returns the `(0, 0)` entry of the inverse of the local Gram matrix `M`
+/// built from kernel-weighted polynomial basis evaluations at grid point
+/// `(gx, gy)`. The basis size matches the TLL order: 1 for `Constant` (→
+/// `M⁻¹[0,0] = 1/f0`), 3 for `Linear`, 6 for `Quadratic`.
+fn local_gram_m_inv_00(
+    gx: f64,
+    gy: f64,
+    z1: &[f64],
+    z2: &[f64],
+    bandwidth: f64,
+    method: TllOrder,
+) -> f64 {
+    let n = z1.len() as f64;
+    let basis_size = match method {
+        TllOrder::Constant => 1,
+        TllOrder::Linear => 3,
+        TllOrder::Quadratic => 6,
+    };
+    let mut m = vec![0.0_f64; basis_size * basis_size];
+    let inv_h = 1.0 / bandwidth;
+    let det_irb = inv_h * inv_h;
+
+    for k in 0..z1.len() {
+        let u = (z1[k] - gx) * inv_h;
+        let v = (z2[k] - gy) * inv_h;
+        // Match vinecopulib: the kernel vector that builds `M` already
+        // carries the `det_irB` factor (same premultiplication as `kernels`
+        // in the density loop). Omitting it here leaves `[M⁻¹]_{0,0}` too
+        // large and drives the influence formula past the `1.3` clamp for
+        // every TLL1 grid point.
+        let w = normal_pdf(u) * normal_pdf(v) * det_irb;
+        let phi: [f64; 6] = [1.0, u, v, u * u, v * v, u * v];
+        for a in 0..basis_size {
+            for b in 0..basis_size {
+                m[a * basis_size + b] += w * phi[a] * phi[b] / n;
+            }
+        }
+    }
+
+    if basis_size == 1 {
+        if m[0] > 1e-300 { 1.0 / m[0] } else { 1e-300 }
+    } else {
+        // Invert the small dense matrix and return [M⁻¹]_{0,0}. If
+        // inversion fails (rare — requires degenerate local windows in the
+        // tails), fall back to the TLL0 equivalent `1/f0` so BIC scoring
+        // stays finite.
+        let mut b = vec![0.0_f64; basis_size];
+        b[0] = 1.0;
+        match solve_symmetric(&mut m.clone(), &mut b, basis_size) {
+            Some(sol) => sol[0].max(0.0),
+            None => {
+                if m[0] > 1e-300 { 1.0 / m[0] } else { 1e-300 }
+            }
+        }
+    }
+}
+
+fn invert_2x2(mat: &[[f64; 2]; 2]) -> Option<([[f64; 2]; 2], f64)> {
+    let det = mat[0][0] * mat[1][1] - mat[0][1] * mat[1][0];
+    if det.abs() < 1e-300 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let inv = [
+        [mat[1][1] * inv_det, -mat[0][1] * inv_det],
+        [-mat[1][0] * inv_det, mat[0][0] * inv_det],
+    ];
+    Some((inv, det))
+}
+
+/// Gauss-Jordan elimination with partial pivoting for a small dense matrix.
+/// Kept for the `local_gram_m_inv_00` helper; TLL1/TLL2 density evaluation
+/// uses `invert_2x2` directly.
+#[allow(dead_code)]
+fn fit_local_polynomial_at(
+    gx: f64,
+    gy: f64,
+    z1: &[f64],
+    z2: &[f64],
+    y: &[f64],
+    bandwidth: f64,
+    basis_size: usize,
+) -> Option<f64> {
+    let mut xtwx = vec![0.0_f64; basis_size * basis_size];
+    let mut xtwy = vec![0.0_f64; basis_size];
+    let mut effective_n = 0.0_f64;
+
+    for k in 0..z1.len() {
+        let u = (z1[k] - gx) / bandwidth;
+        let v = (z2[k] - gy) / bandwidth;
+        let w = normal_pdf(u) * normal_pdf(v);
+        // Skip points whose contribution is below round-off. Without this
+        // guard, far-tail grid nodes would accumulate tiny-but-nonzero
+        // weights that make the design matrix numerically singular.
+        if w < 1e-30 {
+            continue;
+        }
+        effective_n += w;
+        let phi = match basis_size {
+            3 => vec![1.0, u, v],
+            6 => vec![1.0, u, v, u * u, v * v, u * v],
+            _ => unreachable!(),
+        };
+        for a in 0..basis_size {
+            xtwy[a] += w * phi[a] * y[k];
+            for b in 0..basis_size {
+                xtwx[a * basis_size + b] += w * phi[a] * phi[b];
+            }
+        }
+    }
+
+    // Demand at least `basis_size + 1` effective observations (rough rule:
+    // more points than basis columns) so the regression is well-posed.
+    if effective_n < basis_size as f64 + 1.0 {
+        return None;
+    }
+    let solution = solve_symmetric(&mut xtwx, &mut xtwy, basis_size)?;
+    Some(solution[0])
+}
+
+/// Gauss-Jordan elimination with partial pivoting for a small dense
+/// `basis_size × basis_size` system. Small enough that the standard
+/// row-ops implementation is the right tool; ndarray's `solve` isn't wired
+/// for this crate.
+fn solve_symmetric(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec<f64>> {
+    for pivot in 0..n {
+        let mut max_row = pivot;
+        let mut max_val = a[pivot * n + pivot].abs();
+        for row in (pivot + 1)..n {
+            let value = a[row * n + pivot].abs();
+            if value > max_val {
+                max_val = value;
+                max_row = row;
+            }
+        }
+        if max_val < 1e-14 {
+            return None;
+        }
+        if max_row != pivot {
+            for col in 0..n {
+                a.swap(pivot * n + col, max_row * n + col);
+            }
+            b.swap(pivot, max_row);
+        }
+        let diag = a[pivot * n + pivot];
+        for col in 0..n {
+            a[pivot * n + col] /= diag;
+        }
+        b[pivot] /= diag;
+        for row in 0..n {
+            if row == pivot {
+                continue;
+            }
+            let factor = a[row * n + pivot];
+            if factor == 0.0 {
+                continue;
+            }
+            for col in 0..n {
+                a[row * n + col] -= factor * a[pivot * n + col];
+            }
+            b[row] -= factor * b[pivot];
+        }
+    }
+    Some(b.to_vec())
 }
 
 /// Bilinear interpolation of the stored log-density at a point on the

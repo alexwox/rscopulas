@@ -815,7 +815,10 @@ fn finalize_pair_fit(
 fn criterion_value(fit: &PairFitResult, criterion: SelectionCriterion) -> f64 {
     match criterion {
         SelectionCriterion::Aic => fit.aic,
-        SelectionCriterion::Bic => fit.bic,
+        // mBICV is a *tree-level* penalty, not defined per edge. Fall back
+        // to BIC for the pair-copula family comparison, matching vinecopulib's
+        // behaviour (`tools_select.ipp` uses BIC inside `select_bicop`).
+        SelectionCriterion::Bic | SelectionCriterion::Mbicv { .. } => fit.bic,
     }
 }
 

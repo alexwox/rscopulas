@@ -17,6 +17,6 @@ pub use hac::{
     HierarchicalArchimedeanCopula,
 };
 pub use vine::{
-    SelectionCriterion, VineCopula, VineEdge, VineFitOptions, VineStructure, VineStructureKind,
-    VineTree,
+    SelectionCriterion, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge, VineFitOptions,
+    VineStructure, VineStructureKind, VineTree,
 };

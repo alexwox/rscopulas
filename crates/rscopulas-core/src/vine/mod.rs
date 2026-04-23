@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::paircopula::{PairCopulaFamily, PairCopulaSpec};
 
-pub use fit::{SelectionCriterion, VineFitOptions};
+pub use fit::{SelectionCriterion, TreeAlgorithm, TreeCriterion, VineFitOptions};
 
 /// Supported vine structure families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

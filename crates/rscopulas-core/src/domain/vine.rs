@@ -2,8 +2,8 @@ use ndarray::Array2;
 use rand::Rng;
 
 pub use crate::vine::{
-    SelectionCriterion, VineCopula, VineEdge, VineFitOptions, VineStructure, VineStructureKind,
-    VineTree,
+    SelectionCriterion, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge, VineFitOptions,
+    VineStructure, VineStructureKind, VineTree,
 };
 
 use crate::{data::PseudoObs, errors::CopulaError};

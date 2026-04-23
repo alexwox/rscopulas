@@ -11,6 +11,8 @@ pub(crate) enum Operation {
     PairBatchEval,
     PairFitScoring,
     KendallTauMatrix,
+    SpearmanRhoMatrix,
+    HoeffdingDMatrix,
     Sample,
 }
 
@@ -75,7 +77,11 @@ fn resolve_accelerated_device(
         // still use the forced GPU backend for supported Gaussian kernels.
         Operation::PairFitScoring => return Ok(cpu_strategy(operation, batch_len)),
         Operation::PairBatchEval | Operation::VineLogPdf => {}
-        Operation::DensityEval | Operation::KendallTauMatrix | Operation::Sample => {
+        Operation::DensityEval
+        | Operation::KendallTauMatrix
+        | Operation::SpearmanRhoMatrix
+        | Operation::HoeffdingDMatrix
+        | Operation::Sample => {
             let backend = backend_name(device);
             return Err(BackendError::Unsupported { backend }.into());
         }
@@ -102,6 +108,8 @@ fn cpu_parallel_supported(operation: Operation) -> bool {
             | Operation::PairBatchEval
             | Operation::PairFitScoring
             | Operation::KendallTauMatrix
+            | Operation::SpearmanRhoMatrix
+            | Operation::HoeffdingDMatrix
             | Operation::Sample
     )
 }
@@ -119,6 +127,12 @@ fn parallel_threshold(operation: Operation) -> usize {
         Operation::DensityEval | Operation::VineLogPdf | Operation::PairBatchEval => 128,
         Operation::PairFitScoring => 2,
         Operation::KendallTauMatrix => 4,
+        // Spearman's ρ is O(n log n) per pair (same as Kendall's τ's merge-
+        // sort). Use the same small threshold so d ≥ 4 goes parallel.
+        Operation::SpearmanRhoMatrix => 4,
+        // Hoeffding's D is O(n²) per pair because of the bivariate-midrank
+        // loop; parallelise earlier.
+        Operation::HoeffdingDMatrix => 2,
         Operation::Sample => 128,
     }
 }

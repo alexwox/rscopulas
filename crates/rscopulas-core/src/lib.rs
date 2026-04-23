@@ -167,8 +167,8 @@ pub use domain::{
     FactorCopula, FactorFitOptions, FactorFitResult, FactorLayout, FitDiagnostics, FitOptions,
     FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions,
     HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, SampleOptions,
-    SelectionCriterion, StudentTCopula, VineCopula, VineEdge, VineFitOptions, VineStructure,
-    VineStructureKind, VineTree,
+    SelectionCriterion, StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge,
+    VineFitOptions, VineStructure, VineStructureKind, VineTree,
 };
 pub use errors::{BackendError, CopulaError, FitError, InputError, NumericalError};
 pub use paircopula::{

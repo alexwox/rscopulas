@@ -14,8 +14,8 @@ use rscopulas::{
     FactorFitOptions, FactorFitResult, FactorLayout, FitDiagnostics, FitOptions, FrankCopula,
     GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions, HacNode,
     HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams, PairCopulaFamily,
-    PairCopulaParams, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, VineCopula,
-    VineEdge, VineFitOptions, VineStructureKind, VineTree,
+    PairCopulaParams, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, TreeAlgorithm,
+    TreeCriterion, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -277,15 +277,65 @@ fn paired_vectors_from_py(
 }
 
 fn criterion_from_name(name: &str) -> PyResult<SelectionCriterion> {
-    match name.trim().to_ascii_lowercase().as_str() {
+    let lower = name.trim().to_ascii_lowercase();
+    // Accept either plain "mbicv" (defaults ψ₀ = 0.9, matching vinecopulib)
+    // or "mbicv:0.95" to pin a custom prior. Splitting on ':' keeps the
+    // string API tidy while giving power users a knob.
+    if let Some(rest) = lower.strip_prefix("mbicv") {
+        let psi0 = if rest.is_empty() {
+            0.9
+        } else {
+            rest.strip_prefix(':')
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "unsupported selection criterion '{lower}'; expected 'mbicv' or 'mbicv:<psi0>'"
+                    ))
+                })?
+                .parse::<f64>()
+                .map_err(|err| {
+                    PyValueError::new_err(format!("invalid psi0 in mbicv criterion: {err}"))
+                })?
+        };
+        if !(0.0 < psi0 && psi0 < 1.0) {
+            return Err(PyValueError::new_err(format!(
+                "mbicv psi0 must lie in (0, 1), got {psi0}"
+            )));
+        }
+        return Ok(SelectionCriterion::Mbicv { psi0 });
+    }
+    match lower.as_str() {
         "aic" => Ok(SelectionCriterion::Aic),
         "bic" => Ok(SelectionCriterion::Bic),
         other => Err(PyValueError::new_err(format!(
-            "unsupported selection criterion '{other}'; expected 'aic' or 'bic'"
+            "unsupported selection criterion '{other}'; expected 'aic', 'bic', 'mbicv', or 'mbicv:<psi0>'"
         ))),
     }
 }
 
+fn tree_algorithm_from_name(name: &str) -> PyResult<TreeAlgorithm> {
+    match name.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "kruskal" | "mst" | "mst_kruskal" => Ok(TreeAlgorithm::Kruskal),
+        "prim" | "mst_prim" => Ok(TreeAlgorithm::Prim),
+        "random_weighted" | "weighted" => Ok(TreeAlgorithm::RandomWeighted),
+        "random_unweighted" | "unweighted" | "wilson" => Ok(TreeAlgorithm::RandomUnweighted),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported tree_algorithm '{other}'; expected 'kruskal', 'prim', 'random_weighted', or 'random_unweighted'"
+        ))),
+    }
+}
+
+fn tree_criterion_from_name(name: &str) -> PyResult<TreeCriterion> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "tau" | "kendall" => Ok(TreeCriterion::Tau),
+        "rho" | "spearman" => Ok(TreeCriterion::Rho),
+        "hoeffd" | "hoeffding" | "d" => Ok(TreeCriterion::Hoeffding),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported tree_criterion '{other}'; expected 'tau', 'rho', or 'hoeffding'"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn vine_fit_options(
     family_set: Option<Vec<String>>,
     include_rotations: bool,
@@ -294,6 +344,10 @@ fn vine_fit_options(
     independence_threshold: Option<f64>,
     clip_eps: f64,
     max_iter: usize,
+    tree_algorithm: &str,
+    tree_criterion: &str,
+    select_trunc_lvl: bool,
+    rng_seed: Option<u64>,
 ) -> PyResult<VineFitOptions> {
     let mut options = VineFitOptions {
         base: fit_options(clip_eps, max_iter),
@@ -301,6 +355,10 @@ fn vine_fit_options(
         criterion: criterion_from_name(criterion)?,
         truncation_level,
         independence_threshold,
+        tree_algorithm: tree_algorithm_from_name(tree_algorithm)?,
+        tree_criterion: tree_criterion_from_name(tree_criterion)?,
+        select_trunc_lvl,
+        rng_seed,
         ..VineFitOptions::default()
     };
     if let Some(families) = family_set {
@@ -1366,7 +1424,7 @@ impl PyVineCopula {
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
     fn fit_c(
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
@@ -1377,6 +1435,10 @@ impl PyVineCopula {
         clip_eps: f64,
         max_iter: usize,
         order: Option<Vec<usize>>,
+        tree_algorithm: &str,
+        tree_criterion: &str,
+        select_trunc_lvl: bool,
+        rng_seed: Option<u64>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1388,6 +1450,10 @@ impl PyVineCopula {
                 independence_threshold,
                 clip_eps,
                 max_iter,
+                tree_algorithm,
+                tree_criterion,
+                select_trunc_lvl,
+                rng_seed,
             )?;
             let result = match order {
                 Some(order) => VineCopula::fit_c_vine_with_order(&data, &order, &options),
@@ -1405,7 +1471,7 @@ impl PyVineCopula {
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
     fn fit_d(
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
@@ -1416,6 +1482,10 @@ impl PyVineCopula {
         clip_eps: f64,
         max_iter: usize,
         order: Option<Vec<usize>>,
+        tree_algorithm: &str,
+        tree_criterion: &str,
+        select_trunc_lvl: bool,
+        rng_seed: Option<u64>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1427,6 +1497,10 @@ impl PyVineCopula {
                 independence_threshold,
                 clip_eps,
                 max_iter,
+                tree_algorithm,
+                tree_criterion,
+                select_trunc_lvl,
+                rng_seed,
             )?;
             let result = match order {
                 Some(order) => VineCopula::fit_d_vine_with_order(&data, &order, &options),
@@ -1444,7 +1518,7 @@ impl PyVineCopula {
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
     fn fit_r(
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
@@ -1454,6 +1528,10 @@ impl PyVineCopula {
         independence_threshold: Option<f64>,
         clip_eps: f64,
         max_iter: usize,
+        tree_algorithm: &str,
+        tree_criterion: &str,
+        select_trunc_lvl: bool,
+        rng_seed: Option<u64>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1465,6 +1543,10 @@ impl PyVineCopula {
                 independence_threshold,
                 clip_eps,
                 max_iter,
+                tree_algorithm,
+                tree_criterion,
+                select_trunc_lvl,
+                rng_seed,
             )?;
             let result = VineCopula::fit_r_vine(&data, &options).map_err(to_pyerr)?;
             Ok((
