@@ -12,11 +12,19 @@ mod khoudraji;
 mod rotated;
 mod student_t;
 mod tawn;
+mod tll;
 
 pub use common::{
     KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult, Rotation,
-    fit_pair_copula,
+    TllOrder, TllParams, fit_pair_copula,
 };
+
+/// Fit a nonparametric TLL pair copula directly from pseudo-observations.
+/// Thin wrapper around the `tll::fit` module-internal function so callers can
+/// build a TLL state without needing a `VineFitOptions`.
+pub fn tll_fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, crate::errors::CopulaError> {
+    tll::fit(u1, u2, method)
+}
 
 pub(crate) use common::{
     PairBatchBuffers, cond_first_given_second_batch_into, cond_second_given_first_batch_into,

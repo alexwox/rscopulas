@@ -246,6 +246,28 @@ class PairCopula:
         )
 
     @classmethod
+    def fit_tll(
+        cls,
+        u1: npt.ArrayLike,
+        u2: npt.ArrayLike,
+        *,
+        method: str = "constant",
+    ) -> "PairCopula":
+        """Fit a nonparametric TLL (Transformation Local Likelihood) pair
+        copula from pseudo-observations. The current implementation supports
+        ``method='constant'`` only (Gaussian-kernel density estimation on
+        Φ⁻¹-transformed inputs); ``'linear'`` and ``'quadratic'`` are reserved
+        for future local-polynomial orders and currently raise an error.
+        """
+        return cls(
+            _rscopulas._PairCopula.fit_tll(
+                _as_float_vector(u1),
+                _as_float_vector(u2),
+                method=str(method),
+            )
+        )
+
+    @classmethod
     def from_khoudraji(
         cls,
         first_family: str,

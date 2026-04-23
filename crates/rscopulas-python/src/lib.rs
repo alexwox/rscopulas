@@ -107,9 +107,10 @@ fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
         "bb8" => Ok(PairCopulaFamily::Bb8),
         "tawn1" | "tawn_1" | "tawn-1" => Ok(PairCopulaFamily::Tawn1),
         "tawn2" | "tawn_2" | "tawn-2" => Ok(PairCopulaFamily::Tawn2),
+        "tll" => Ok(PairCopulaFamily::Tll),
         "khoudraji" => Ok(PairCopulaFamily::Khoudraji),
         other => Err(PyValueError::new_err(format!(
-            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, bb1, bb6, bb7, bb8, tawn1, tawn2, khoudraji"
+            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, bb1, bb6, bb7, bb8, tawn1, tawn2, tll, khoudraji"
         ))),
     }
 }
@@ -168,6 +169,9 @@ fn pair_params_from_values(
                 values.len()
             )))
         }
+        (PairCopulaFamily::Tll, _) => Err(PyValueError::new_err(
+            "tll pair copulas are nonparametric; use PairCopula.fit_tll(u1, u2) to fit from data",
+        )),
         (_, values) => Err(PyValueError::new_err(format!(
             "pair family requires exactly one parameter (got {})",
             values.len()
@@ -480,6 +484,7 @@ fn pair_family_name(family: PairCopulaFamily) -> &'static str {
         PairCopulaFamily::Bb8 => "bb8",
         PairCopulaFamily::Tawn1 => "tawn1",
         PairCopulaFamily::Tawn2 => "tawn2",
+        PairCopulaFamily::Tll => "tll",
         PairCopulaFamily::Khoudraji => "khoudraji",
     }
 }
@@ -499,6 +504,10 @@ fn params_to_vec(params: &PairCopulaParams) -> Vec<f64> {
         PairCopulaParams::One(value) => vec![*value],
         PairCopulaParams::Two(first, second) => vec![*first, *second],
         PairCopulaParams::Khoudraji(params) => params.flat_values(),
+        // TLL's state is a full interpolation grid; the only scalar summary
+        // worth flattening at the Python surface is the effective dof used
+        // for BIC scoring.
+        PairCopulaParams::Tll(params) => vec![params.effective_df],
     }
 }
 
@@ -1098,6 +1107,38 @@ impl PyPairCopula {
         }
         Ok(Self {
             inner: pair_spec_from_values(family, rotation, parameters.unwrap_or_default())?,
+        })
+    }
+
+    /// Fit a nonparametric TLL (Transformation Local Likelihood) pair
+    /// copula from pseudo-observations. Only `method="constant"` is
+    /// supported in this phase; linear and quadratic local-polynomial
+    /// orders are reserved for future work.
+    #[staticmethod]
+    #[pyo3(signature = (u1, u2, method="constant"))]
+    fn fit_tll(
+        u1: PyReadonlyArray1<'_, f64>,
+        u2: PyReadonlyArray1<'_, f64>,
+        method: &str,
+    ) -> PyResult<Self> {
+        let order = match method.trim().to_ascii_lowercase().as_str() {
+            "constant" | "tll0" => rscopulas::TllOrder::Constant,
+            "linear" | "tll1" => rscopulas::TllOrder::Linear,
+            "quadratic" | "tll2" => rscopulas::TllOrder::Quadratic,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unsupported tll method '{other}'; expected one of constant, linear, quadratic"
+                )));
+            }
+        };
+        let (u1_values, u2_values) = paired_vectors_from_py(u1, u2, "u1", "u2")?;
+        let tll_params = rscopulas::tll_fit(&u1_values, &u2_values, order).map_err(to_pyerr)?;
+        Ok(Self {
+            inner: rscopulas::PairCopulaSpec {
+                family: PairCopulaFamily::Tll,
+                rotation: Rotation::R0,
+                params: PairCopulaParams::Tll(tll_params),
+            },
         })
     }
 

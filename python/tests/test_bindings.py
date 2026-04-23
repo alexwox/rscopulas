@@ -251,6 +251,43 @@ def test_bb_pair_copulas_round_trip(family: str, params: tuple[float, float]) ->
         assert np.all((arr > 0.0) & (arr < 1.0))
 
 
+def test_tll_pair_copula_fits_from_gaussian_sample() -> None:
+    # TLL is nonparametric — fit on a Gaussian copula sample with ρ=0.5 and
+    # verify the estimated density at the centre is roughly 1/sqrt(1-ρ²) ≈
+    # 1.1547. Also verify h-functions stay in (0, 1) and are monotone.
+    rho = 0.5
+    correlation = np.array([[1.0, rho], [rho, 1.0]])
+    gauss_model = GaussianCopula.from_params(correlation)
+    samples = gauss_model.sample(2000, seed=7)
+    u1, u2 = samples[:, 0], samples[:, 1]
+
+    model = PairCopula.fit_tll(u1, u2, method="constant")
+    assert model.family == "tll"
+    assert model.rotation == "R0"
+    # `parameters` exposes the effective dof summary.
+    assert len(model.parameters) == 1
+    assert model.parameters[0] > 0.0
+
+    # Density at the centre should be close to Gaussian copula density.
+    log_pdf = model.log_pdf(np.array([0.5]), np.array([0.5]))
+    density = float(np.exp(log_pdf[0]))
+    target = 1.0 / np.sqrt(1.0 - rho ** 2)
+    assert abs(density - target) / target < 0.2, (
+        f"tll density {density} should be within 20% of target {target}"
+    )
+
+    # h-function sanity: h_{1|2} should stay in (0, 1) and be monotone.
+    u_grid = np.array([0.2, 0.4, 0.6, 0.8])
+    v_fixed = np.full_like(u_grid, 0.4)
+    h_vals = model.cond_first_given_second(u_grid, v_fixed)
+    assert np.all((h_vals > 0.0) & (h_vals < 1.0))
+    assert np.all(np.diff(h_vals) >= -1e-9), f"h values should be non-decreasing: {h_vals}"
+
+    # Direct-params spec should raise a clear error (TLL is fit-only).
+    with pytest.raises(Exception, match="tll"):
+        PairCopula.from_spec("tll", [2.0])
+
+
 def test_khoudraji_pair_wrapper_round_trips_structured_spec() -> None:
     model = PairCopula.from_khoudraji(
         "gaussian",

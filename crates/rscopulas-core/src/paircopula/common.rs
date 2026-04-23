@@ -10,7 +10,9 @@ use crate::{
 
 use super::{
     bb1, bb6, bb7, bb8, clayton, frank, gaussian, gumbel, joe, khoudraji, rotated, student_t, tawn,
+    tll,
 };
+pub use super::tll::{TllOrder, TllParams};
 
 /// Supported bivariate pair-copula families for vine edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +31,7 @@ pub enum PairCopulaFamily {
     Bb8,
     Tawn1,
     Tawn2,
+    Tll,
 }
 
 /// Rotation applied to a bivariate pair-copula kernel.
@@ -98,6 +101,7 @@ pub enum PairCopulaParams {
     One(f64),
     Two(f64, f64),
     Khoudraji(KhoudrajiParams),
+    Tll(TllParams),
 }
 
 impl PairCopulaParams {
@@ -107,6 +111,11 @@ impl PairCopulaParams {
             Self::One(value) => vec![*value],
             Self::Two(first, second) => vec![*first, *second],
             Self::Khoudraji(params) => params.flat_values(),
+            // Tll's parameter state is a grid, not scalar values — we report
+            // the stored effective degrees of freedom so BIC-style scoring
+            // still sees a meaningful number of parameters. Serde round-trips
+            // the full TllParams payload independently.
+            Self::Tll(params) => vec![params.effective_df],
         }
     }
 }
@@ -189,6 +198,9 @@ impl PairCopulaSpec {
             PairCopulaParams::One(_) => 1,
             PairCopulaParams::Two(_, _) => 2,
             PairCopulaParams::Khoudraji(params) => params.parameter_count(),
+            // Nonparametric fit — report the effective degrees of freedom
+            // estimated at fit time, rounded up to the nearest integer.
+            PairCopulaParams::Tll(params) => params.effective_df.ceil().max(1.0) as usize,
         }
     }
 
@@ -251,6 +263,9 @@ impl PairCopulaSpec {
             }
             (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
                 tawn::log_pdf(x1, x2, *theta, 1.0, *beta)?
+            }
+            (PairCopulaFamily::Tll, PairCopulaParams::Tll(params)) => {
+                tll::log_pdf(x1, x2, params)?
             }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::log_pdf(x1, x2, params, clip_eps)?
@@ -387,6 +402,9 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
                 tawn::cond_first_given_second(u1, u2, *theta, 1.0, *beta)
             }
+            (PairCopulaFamily::Tll, PairCopulaParams::Tll(params)) => {
+                tll::cond_first_given_second(u1, u2, params)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_first_given_second(u1, u2, params, clip_eps)
             }
@@ -443,6 +461,9 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
                 tawn::cond_second_given_first(u1, u2, *theta, 1.0, *beta)
             }
+            (PairCopulaFamily::Tll, PairCopulaParams::Tll(params)) => {
+                tll::cond_second_given_first(u1, u2, params)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_second_given_first(u1, u2, params, clip_eps)
             }
@@ -496,6 +517,9 @@ impl PairCopulaSpec {
             }
             (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
                 tawn::inv_first_given_second(p, u2, *theta, 1.0, *beta, clip_eps)
+            }
+            (PairCopulaFamily::Tll, PairCopulaParams::Tll(params)) => {
+                tll::inv_first_given_second(p, u2, params, clip_eps)
             }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_first_given_second(p, u2, params, clip_eps)
@@ -551,6 +575,9 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
                 tawn::inv_second_given_first(u1, p, *theta, 1.0, *beta, clip_eps)
             }
+            (PairCopulaFamily::Tll, PairCopulaParams::Tll(params)) => {
+                tll::inv_second_given_first(u1, p, params, clip_eps)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_second_given_first(u1, p, params, clip_eps)
             }
@@ -601,6 +628,9 @@ impl PairCopulaSpec {
             }
             (PairCopulaFamily::Tawn2, PairCopulaParams::Two(theta, beta)) => {
                 tawn::cdf(u1, u2, *theta, 1.0, *beta)
+            }
+            (PairCopulaFamily::Tll, PairCopulaParams::Tll(params)) => {
+                tll::cdf(u1, u2, params)
             }
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(_))
             | (PairCopulaFamily::StudentT, PairCopulaParams::Two(_, _))
@@ -798,7 +828,11 @@ fn candidate_rotations(
     use Rotation as Rot;
 
     match family {
-        Family::Independence | Family::Gaussian | Family::StudentT | Family::Frank => &[Rot::R0],
+        Family::Independence
+        | Family::Gaussian
+        | Family::StudentT
+        | Family::Frank
+        | Family::Tll => &[Rot::R0],
         Family::Clayton
         | Family::Gumbel
         | Family::Joe
@@ -1071,6 +1105,13 @@ fn fit_simple_family(
                 reason: "bb8 pair fit failed",
             })?;
             PairCopulaParams::Two(theta, delta)
+        }
+        PairCopulaFamily::Tll => {
+            // Nonparametric — no scalar optimisation. Fit directly from the
+            // (already rotation-transformed but since Tll is rotationless
+            // that's the identity) sample.
+            let params = tll::fit(x1, x2, tll::TllOrder::Constant)?;
+            PairCopulaParams::Tll(params)
         }
         PairCopulaFamily::Tawn1 | PairCopulaFamily::Tawn2 => {
             // Tawn1 has β = 1 fixed; Tawn2 has α = 1 fixed. In both cases the

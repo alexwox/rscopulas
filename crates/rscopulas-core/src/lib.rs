@@ -171,5 +171,6 @@ pub use domain::{
 };
 pub use errors::{BackendError, CopulaError, FitError, InputError, NumericalError};
 pub use paircopula::{
-    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation,
+    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, TllOrder,
+    TllParams, tll_fit,
 };

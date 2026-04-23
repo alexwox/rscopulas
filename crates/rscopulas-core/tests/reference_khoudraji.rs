@@ -248,6 +248,7 @@ fn khoudraji_fit_tracks_r_fixture_for_indep_clayton_case() {
         PairCopulaParams::One(value) => *value,
         PairCopulaParams::Two(first, _) => *first,
         PairCopulaParams::Khoudraji(_) => unreachable!("nested khoudraji should not be fitted"),
+        PairCopulaParams::Tll(_) => unreachable!("tll inner khoudraji base is not fitted"),
     };
     assert!(representative.is_finite());
     assert!((representative - fixture.expected_theta).abs() < 5.0);
