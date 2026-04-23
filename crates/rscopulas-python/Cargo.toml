@@ -19,4 +19,5 @@ numpy = "0.28.0"
 pyo3 = { version = "0.28.3", features = ["extension-module", "abi3-py310"] }
 rand.workspace = true
 rscopulas.workspace = true
+serde_json.workspace = true
 

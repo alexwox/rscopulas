@@ -1,5 +1,6 @@
 from ._models import (
     ClaytonCopula,
+    FactorCopula,
     FitDiagnostics,
     FitResult,
     FrankCopula,
@@ -26,6 +27,7 @@ from ._rscopulas import (
 __all__ = [
     "BackendError",
     "ClaytonCopula",
+    "FactorCopula",
     "FitDiagnostics",
     "FitResult",
     "FrankCopula",

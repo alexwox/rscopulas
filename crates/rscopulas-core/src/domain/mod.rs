@@ -1,6 +1,7 @@
 mod archimedean;
 mod common;
 mod elliptical;
+mod factor;
 mod hac;
 mod vine;
 
@@ -10,6 +11,7 @@ pub use common::{
     SampleOptions,
 };
 pub use elliptical::{GaussianCopula, StudentTCopula};
+pub use factor::{FactorCopula, FactorFitOptions, FactorLayout};
 pub use hac::{
     HacFamily, HacFitMethod, HacFitOptions, HacNode, HacStructureMethod, HacTree,
     HierarchicalArchimedeanCopula,

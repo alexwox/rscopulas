@@ -821,3 +821,144 @@ class VineCopula(_BaseModel):
             else:
                 u[:, var] = rng.uniform(size=n)
         return self.inverse_rosenblatt(u)
+
+
+class FactorCopula(_BaseModel):
+    """Krupskii–Joe factor copula (single-factor ``Basic1F`` layout).
+
+    The model joins ``d`` observed variables through a single latent factor
+    ``V ~ U(0, 1)``. Each observed-to-factor link is an arbitrary bivariate
+    pair-copula, so every family in :mod:`rscopulas.PairCopula`
+    (Gaussian, Clayton, Frank, Gumbel, Joe, BB1/6/7/8, Tawn1/2, TLL,
+    Khoudraji) can be used as a link.
+
+    The log-density is evaluated via an ``n``-point Gauss–Legendre rule on
+    ``[0, 1]`` (default ``n = 25``, matching Joe's ``CopulaModel`` R package).
+    Fitting uses a two-stage sequential MLE: a normal-score projection
+    supplies a pseudo-latent, each link is fit against it, then
+    ``refine_iterations`` passes of EM-style refinement (posterior mean of
+    ``V | U`` under the current fit → rank-normalise → refit) polish the
+    estimates. For a strict joint MLE (higher accuracy at the cost of a
+    multi-dim optimiser dependency) see the follow-up in the phase-5 plan.
+
+    Example
+    -------
+    >>> from rscopulas import FactorCopula
+    >>> fit = FactorCopula.fit(data, family_set=["gaussian", "clayton"])
+    >>> log_density = fit.model.log_pdf(data)
+    >>> sample = fit.model.sample(1000, seed=0)
+    """
+
+    @classmethod
+    def from_links(
+        cls,
+        links: Sequence[dict[str, Any]],
+        *,
+        quadrature_nodes: int = 25,
+    ) -> "FactorCopula":
+        """Build a factor copula directly from pre-specified link dicts.
+
+        Each entry in ``links`` follows the same schema as
+        :class:`VineEdgeInfo` / :class:`PairCopula` specs:
+        ``{"family": str, "rotation": str, "parameters": [floats]}``.
+        Khoudraji links require the usual ``base_copula_1 / shape_1 / …``
+        keys; see the PairCopula documentation for the full shape.
+        """
+        payload = [_serialize_pair_spec(dict(link)) for link in links]
+        return cls(
+            _rscopulas._FactorCopula.from_links(payload, int(quadrature_nodes))
+        )
+
+    @classmethod
+    def fit(
+        cls,
+        data: npt.ArrayLike,
+        *,
+        family_set: Sequence[str] | None = None,
+        include_rotations: bool = True,
+        criterion: str = "aic",
+        quadrature_nodes: int = 25,
+        refine_iterations: int = 2,
+        layout: str = "basic_1f",
+        clip_eps: float = 1e-12,
+        max_iter: int = 500,
+    ) -> FitResult["FactorCopula"]:
+        """Fit a factor copula to pseudo-observations.
+
+        Parameters
+        ----------
+        data
+            Pseudo-observation matrix of shape ``(n, d)`` with entries in
+            ``(0, 1)``.
+        family_set
+            Candidate link families. Defaults to a conservative set
+            (Independence, Gaussian, Clayton, Frank, Gumbel). Opt into BB*,
+            Tawn*, TLL, or Khoudraji by naming them explicitly.
+        include_rotations
+            Whether rotated Archimedean links may be selected (R180 for
+            positive-dependent lower-tail data, R90/R270 for negative tau).
+        criterion
+            ``"aic"`` or ``"bic"`` — used to pick between candidate link
+            families at each observed variable.
+        quadrature_nodes
+            Number of Gauss–Legendre nodes used for the latent integral.
+            Twenty-five is the ``CopulaModel`` default and is accurate to
+            ~1e-14 for well-behaved link families.
+        refine_iterations
+            EM-style refinement passes after the initial sequential MLE.
+            Two is the default and usually enough to correct the warm-start
+            attenuation bias.
+        layout
+            Factor layout. Only ``"basic_1f"`` is supported today.
+        """
+        return cls._fit_result(
+            _rscopulas._FactorCopula.fit(
+                _as_float_matrix(data),
+                family_set=_family_set(family_set),
+                include_rotations=include_rotations,
+                criterion=criterion,
+                quadrature_nodes=int(quadrature_nodes),
+                refine_iterations=int(refine_iterations),
+                layout=layout,
+                clip_eps=clip_eps,
+                max_iter=max_iter,
+            )
+        )
+
+    @classmethod
+    def from_json(cls, payload: str) -> "FactorCopula":
+        """Rehydrate a previously-serialized factor copula. Pair with
+        :meth:`to_json` for round-trip persistence.
+        """
+        return cls(_rscopulas._FactorCopula.from_json(str(payload)))
+
+    def to_json(self) -> str:
+        """JSON serialisation of the fitted model. Cross-version comparison
+        is supported only across matching rscopulas minor versions.
+        """
+        return str(self._core.to_json())
+
+    @property
+    def num_factors(self) -> int:
+        """Number of latent factors. Always 1 for the ``Basic1F`` layout."""
+        return int(self._core.num_factors)
+
+    @property
+    def quadrature_nodes(self) -> int:
+        """Gauss–Legendre quadrature size used for log-density evaluation."""
+        return int(self._core.quadrature_nodes)
+
+    @property
+    def layout(self) -> str:
+        """Factor layout name, e.g. ``"basic_1f"``."""
+        return str(self._core.layout)
+
+    @property
+    def links(self) -> list[dict[str, Any]]:
+        """Per-variable link specifications as plain dictionaries.
+
+        One entry per observed variable, in input-column order. Use these to
+        inspect which families were selected, their rotations, and fitted
+        parameters.
+        """
+        return [dict(link) for link in self._core.links()]

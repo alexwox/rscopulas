@@ -10,12 +10,12 @@ use pyo3::{
 };
 use rand::{SeedableRng, random, rngs::StdRng};
 use rscopulas::{
-    ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FitDiagnostics,
-    FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod,
-    HacFitOptions, HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula,
-    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions,
-    SelectionCriterion, StudentTCopula, VineCopula, VineEdge, VineFitOptions, VineStructureKind,
-    VineTree,
+    ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FactorCopula,
+    FactorFitOptions, FactorLayout, FitDiagnostics, FitOptions, FrankCopula, GaussianCopula,
+    GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions, HacNode, HacStructureMethod,
+    HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams, PairCopulaFamily, PairCopulaParams,
+    Rotation, SampleOptions, SelectionCriterion, StudentTCopula, VineCopula, VineEdge,
+    VineFitOptions, VineStructureKind, VineTree,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -321,6 +321,22 @@ fn family_name(family: CopulaFamily) -> &'static str {
         CopulaFamily::Gumbel => "gumbel",
         CopulaFamily::HierarchicalArchimedean => "hierarchical_archimedean",
         CopulaFamily::Vine => "vine",
+        CopulaFamily::Factor => "factor",
+    }
+}
+
+fn factor_layout_name(layout: FactorLayout) -> &'static str {
+    match layout {
+        FactorLayout::Basic1F => "basic_1f",
+    }
+}
+
+fn factor_layout_from_name(name: &str) -> PyResult<FactorLayout> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "basic_1f" | "basic1f" | "basic-1f" | "basic" => Ok(FactorLayout::Basic1F),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported factor layout '{other}'; expected 'basic_1f'"
+        ))),
     }
 }
 
@@ -1758,6 +1774,170 @@ impl PyHierarchicalArchimedeanCopula {
     }
 }
 
+#[pyclass(
+    skip_from_py_object,
+    module = "rscopulas._rscopulas",
+    name = "_FactorCopula"
+)]
+#[derive(Clone)]
+struct PyFactorCopula {
+    inner: FactorCopula,
+}
+
+#[pymethods]
+impl PyFactorCopula {
+    /// Construct a `Basic1F` factor copula from a list of link dictionaries.
+    /// Each dict follows the same schema used elsewhere in the Python API —
+    /// `{"family": str, "rotation": str, "parameters": [floats]}` — so users
+    /// can hand-build a model for simulation studies or unit tests.
+    #[staticmethod]
+    #[pyo3(signature = (links, quadrature_nodes=25))]
+    fn from_links(links: &Bound<'_, PyList>, quadrature_nodes: usize) -> PyResult<Self> {
+        let specs: Vec<rscopulas::PairCopulaSpec> = links
+            .iter()
+            .map(|item| pair_spec_from_py_dict(item.cast::<PyDict>()?))
+            .collect::<PyResult<Vec<_>>>()?;
+        FactorCopula::basic_1f(specs, quadrature_nodes)
+            .map(|inner| Self { inner })
+            .map_err(to_pyerr)
+    }
+
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        data,
+        family_set=None,
+        include_rotations=true,
+        criterion="aic",
+        quadrature_nodes=25,
+        refine_iterations=2,
+        layout="basic_1f",
+        clip_eps=1e-12,
+        max_iter=500
+    ))]
+    fn fit(
+        data: PyReadonlyArray2<'_, f64>,
+        family_set: Option<Vec<String>>,
+        include_rotations: bool,
+        criterion: &str,
+        quadrature_nodes: usize,
+        refine_iterations: usize,
+        layout: &str,
+        clip_eps: f64,
+        max_iter: usize,
+    ) -> PyResult<(Self, PyFitDiagnostics)> {
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let mut options = FactorFitOptions {
+                base: fit_options(clip_eps, max_iter),
+                layout: factor_layout_from_name(layout)?,
+                include_rotations,
+                criterion: criterion_from_name(criterion)?,
+                quadrature_nodes,
+                refine_iterations,
+                ..FactorFitOptions::default()
+            };
+            if let Some(families) = family_set {
+                options.family_set = families
+                    .iter()
+                    .map(|family| pair_family_from_name(family))
+                    .collect::<PyResult<Vec<_>>>()?;
+            }
+            let result = FactorCopula::fit(&data, &options).map_err(to_pyerr)?;
+            Ok((
+                Self {
+                    inner: result.model,
+                },
+                result.diagnostics.into(),
+            ))
+        })
+    }
+
+    /// Round-trip via JSON. The serialized form is exactly what `serde_json`
+    /// produces for the underlying `FactorCopula` struct — stable enough for
+    /// cross-version comparison provided both sides are on matching rscopulas
+    /// minor versions.
+    fn to_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.inner).map_err(|err| {
+            PyValueError::new_err(format!("failed to serialize factor copula: {err}"))
+        })
+    }
+
+    #[staticmethod]
+    fn from_json(payload: &str) -> PyResult<Self> {
+        let inner: FactorCopula = serde_json::from_str(payload).map_err(|err| {
+            PyValueError::new_err(format!("failed to deserialize factor copula: {err}"))
+        })?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    #[getter]
+    fn family(&self) -> &'static str {
+        family_name(self.inner.family())
+    }
+
+    #[getter]
+    fn num_factors(&self) -> usize {
+        self.inner.num_factors()
+    }
+
+    #[getter]
+    fn quadrature_nodes(&self) -> usize {
+        self.inner.quadrature_nodes()
+    }
+
+    #[getter]
+    fn layout(&self) -> &'static str {
+        factor_layout_name(self.inner.layout())
+    }
+
+    /// Returns the per-variable link specifications as a list of dictionaries.
+    /// Layout matches the vine/HAC conventions so downstream tooling can share
+    /// serialization code.
+    fn links<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let list = PyList::empty(py);
+        for link in self.inner.links() {
+            list.append(pair_spec_to_py(py, link)?)?;
+        }
+        Ok(list)
+    }
+
+    #[pyo3(signature = (data, clip_eps=1e-12))]
+    fn log_pdf<'py>(
+        &self,
+        py: Python<'py>,
+        data: PyReadonlyArray2<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let data = pseudo_obs_from_py(data)?;
+        let values = self
+            .inner
+            .log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+
+    #[pyo3(signature = (n, seed=None))]
+    fn sample<'py>(
+        &self,
+        py: Python<'py>,
+        n: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let mut rng = rng_from_seed(seed);
+        let values = self
+            .inner
+            .sample(n, &mut rng, &sample_options())
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+}
+
 #[pymodule]
 fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RscopulasError", py.get_type::<RscopulasError>())?;
@@ -1780,5 +1960,6 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyPairCopula>()?;
     module.add_class::<PyVineCopula>()?;
     module.add_class::<PyHierarchicalArchimedeanCopula>()?;
+    module.add_class::<PyFactorCopula>()?;
     Ok(())
 }

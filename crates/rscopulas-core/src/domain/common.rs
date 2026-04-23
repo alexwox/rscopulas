@@ -114,6 +114,9 @@ pub enum CopulaFamily {
     Gumbel,
     HierarchicalArchimedean,
     Vine,
+    /// Krupskii–Joe factor copula (single latent factor, observed-to-factor
+    /// links are arbitrary bivariate copulas). See `domain/factor.rs`.
+    Factor,
 }
 
 /// Shared interface implemented by all fitted copula models.
@@ -147,4 +150,5 @@ pub enum Copula {
     Gumbel(super::GumbelHougaardCopula),
     HierarchicalArchimedean(super::HierarchicalArchimedeanCopula),
     Vine(super::VineCopula),
+    Factor(super::FactorCopula),
 }
