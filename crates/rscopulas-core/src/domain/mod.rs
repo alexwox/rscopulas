@@ -11,7 +11,7 @@ pub use common::{
     SampleOptions,
 };
 pub use elliptical::{GaussianCopula, StudentTCopula};
-pub use factor::{FactorCopula, FactorFitOptions, FactorLayout};
+pub use factor::{FactorCopula, FactorFitOptions, FactorFitResult, FactorLayout};
 pub use hac::{
     HacFamily, HacFitMethod, HacFitOptions, HacNode, HacStructureMethod, HacTree,
     HierarchicalArchimedeanCopula,

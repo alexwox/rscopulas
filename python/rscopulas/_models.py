@@ -141,6 +141,43 @@ class FitResult(Generic[ModelT]):
 
 
 @dataclass(frozen=True, slots=True)
+class FactorFitDiagnostics:
+    """Diagnostics returned by :meth:`FactorCopula.fit`.
+
+    Extends :class:`FitDiagnostics` with delta-method standard errors for
+    every polished link parameter. Entries are in the flat parameter layout
+    produced by walking the fitted links in input-column order and
+    concatenating their free parameters (skipping Independence, TLL,
+    Khoudraji, and the ν block of Student-t, which are held fixed during
+    the polish).
+    """
+
+    loglik: float
+    aic: float
+    bic: float
+    converged: bool
+    n_iter: int
+    std_errors: tuple[float, ...]
+
+    @classmethod
+    def _build(cls, diagnostics: Any, std_errors: Any) -> "FactorFitDiagnostics":
+        return cls(
+            loglik=float(diagnostics.loglik),
+            aic=float(diagnostics.aic),
+            bic=float(diagnostics.bic),
+            converged=bool(diagnostics.converged),
+            n_iter=int(diagnostics.n_iter),
+            std_errors=tuple(float(value) for value in std_errors),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FactorFitResult:
+    model: "FactorCopula"
+    diagnostics: FactorFitDiagnostics
+
+
+@dataclass(frozen=True, slots=True)
 class VineStructureInfo:
     kind: str
     matrix: npt.NDArray[np.int_]
@@ -879,10 +916,12 @@ class FactorCopula(_BaseModel):
         criterion: str = "aic",
         quadrature_nodes: int = 25,
         refine_iterations: int = 2,
+        joint_polish_cycles: int = 5,
+        joint_polish_rel_tol: float = 1e-6,
         layout: str = "basic_1f",
         clip_eps: float = 1e-12,
         max_iter: int = 500,
-    ) -> FitResult["FactorCopula"]:
+    ) -> FactorFitResult:
         """Fit a factor copula to pseudo-observations.
 
         Parameters
@@ -908,21 +947,42 @@ class FactorCopula(_BaseModel):
             EM-style refinement passes after the initial sequential MLE.
             Two is the default and usually enough to correct the warm-start
             attenuation bias.
+        joint_polish_cycles
+            Coordinate-ascent sweeps of the final joint-MLE polish. Each
+            sweep optimises every link's free parameters jointly against
+            the true quadrature-integrated factor log-likelihood. Set to
+            ``0`` to disable the polish (reproduces the pre-polish fit for
+            benchmarking). Default ``5`` is enough to converge for
+            warm-started d ≤ 20 problems.
+        joint_polish_rel_tol
+            Relative-tolerance stop criterion for the polish sweep: any
+            sweep that improves the log-likelihood by less than
+            ``joint_polish_rel_tol * |loglik|`` ends the polish early.
         layout
             Factor layout. Only ``"basic_1f"`` is supported today.
+
+        Returns
+        -------
+        FactorFitResult
+            The fitted model plus factor-specific diagnostics (including
+            delta-method standard errors for every polished parameter).
         """
-        return cls._fit_result(
-            _rscopulas._FactorCopula.fit(
-                _as_float_matrix(data),
-                family_set=_family_set(family_set),
-                include_rotations=include_rotations,
-                criterion=criterion,
-                quadrature_nodes=int(quadrature_nodes),
-                refine_iterations=int(refine_iterations),
-                layout=layout,
-                clip_eps=clip_eps,
-                max_iter=max_iter,
-            )
+        core_model, diagnostics, std_errors = _rscopulas._FactorCopula.fit(
+            _as_float_matrix(data),
+            family_set=_family_set(family_set),
+            include_rotations=include_rotations,
+            criterion=criterion,
+            quadrature_nodes=int(quadrature_nodes),
+            refine_iterations=int(refine_iterations),
+            joint_polish_cycles=int(joint_polish_cycles),
+            joint_polish_rel_tol=float(joint_polish_rel_tol),
+            layout=layout,
+            clip_eps=clip_eps,
+            max_iter=max_iter,
+        )
+        return FactorFitResult(
+            model=cls(core_model),
+            diagnostics=FactorFitDiagnostics._build(diagnostics, std_errors),
         )
 
     @classmethod

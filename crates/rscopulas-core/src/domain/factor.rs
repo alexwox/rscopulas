@@ -25,13 +25,32 @@ use statrs::distribution::{ContinuousCDF, Normal};
 use crate::{
     data::PseudoObs,
     errors::{CopulaError, FitError},
-    fit::FitResult,
-    math::gauss_legendre_01,
-    paircopula::{PairCopulaFamily, PairCopulaSpec, fit_pair_copula},
+    math::{coord_ascent_maximise, gauss_legendre_01, inverse, numerical_hessian},
+    paircopula::{
+        PairCopulaFamily, PairCopulaSpec, decode_params, encode_brackets, encode_jacobian,
+        encode_params, fit_pair_copula,
+    },
     vine::{SelectionCriterion, VineFitOptions},
 };
 
 use super::{CopulaFamily, CopulaModel, EvalOptions, FitDiagnostics, FitOptions, SampleOptions};
+
+/// Result of fitting a [`FactorCopula`], including the delta-method standard
+/// errors for every polished link parameter.
+///
+/// `std_errors` has one entry per free parameter returned by the polish stage,
+/// in the flat layout produced by concatenating `encode_params` across the
+/// fitted links. Entries for skipped families (Independence, TLL, Khoudraji,
+/// and Student-t's ν block) are absent — those parameters do not participate
+/// in the joint-MLE polish. If the numerical Hessian at the MLE was not
+/// positive-definite (typical when the polish stage bailed out) every entry
+/// is `f64::NAN` so callers can distinguish "uninformative" from a zero SE.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactorFitResult {
+    pub model: FactorCopula,
+    pub diagnostics: FitDiagnostics,
+    pub std_errors: Vec<f64>,
+}
 
 /// Topology of latent factors and link copulas.
 ///
@@ -66,6 +85,18 @@ pub struct FactorFitOptions {
     /// link. One pass fixes most of the warm-start attenuation bias; more
     /// give diminishing returns.
     pub refine_iterations: usize,
+    /// Number of full coordinate-ascent sweeps over all link parameters in
+    /// the final joint-MLE polish. Set to `0` to disable the polish (e.g.
+    /// when reproducing the pre-polish fit for benchmarking). Each sweep
+    /// cycles every link's unconstrained parameter through a golden-section
+    /// step against the true quadrature-integrated factor log-likelihood.
+    pub joint_polish_cycles: usize,
+    /// Relative-tolerance stop criterion for the joint-MLE polish: a sweep
+    /// that improves the log-likelihood by less than `rel_tol * |loglik|`
+    /// (absolute when the loglik is near zero) is treated as convergence
+    /// and ends the polish early. Matches the resolution of the golden-
+    /// section inner steps.
+    pub joint_polish_rel_tol: f64,
 }
 
 impl Default for FactorFitOptions {
@@ -90,6 +121,11 @@ impl Default for FactorFitOptions {
             // matches the default used by Joe's `CopulaModel` R package.
             quadrature_nodes: 25,
             refine_iterations: 2,
+            // Five sweeps is enough to reach the joint MLE from a sequential-
+            // MLE warm start on realistic d ≤ 20 problems; each sweep is
+            // bracketed by a bail-out guard so runaway cost is not a risk.
+            joint_polish_cycles: 5,
+            joint_polish_rel_tol: 1e-6,
         }
     }
 }
@@ -146,7 +182,7 @@ impl FactorCopula {
     pub fn fit(
         data: &PseudoObs,
         options: &FactorFitOptions,
-    ) -> Result<FitResult<Self>, CopulaError> {
+    ) -> Result<FactorFitResult, CopulaError> {
         match options.layout {
             FactorLayout::Basic1F => fit_basic_1f(data, options),
         }
@@ -264,7 +300,7 @@ impl CopulaModel for FactorCopula {
 fn fit_basic_1f(
     data: &PseudoObs,
     options: &FactorFitOptions,
-) -> Result<FitResult<FactorCopula>, CopulaError> {
+) -> Result<FactorFitResult, CopulaError> {
     let view = data.as_view();
     let n = view.nrows();
     let dim = view.ncols();
@@ -356,12 +392,40 @@ fn fit_basic_1f(
         }
     }
 
+    // Stage 4: joint-MLE polish.
+    //
+    // The sequential+EM stages above never optimise the full quadrature-
+    // integrated factor log-likelihood — each link is fit against a rank-
+    // normalised pseudo-latent. For tail-asymmetric families (Clayton, Joe,
+    // BB*) this leaves real money on the table: Joe's own `CopulaModel`
+    // reference package always runs a joint-MLE polish via `nlm` after the
+    // two-stage warm start. We do the same here with coordinate ascent over
+    // unconstrained-space reparametrisations of each link's free params.
+    //
+    // The bail-out guard mirrors the EM pattern above: accept the polished
+    // fit only if it strictly improves the log-likelihood, never worse.
+    let mut polished_loglik = best_loglik;
+    if options.joint_polish_cycles > 0 {
+        let (candidate_model, candidate_loglik) = polish_factor_model(
+            &model,
+            data,
+            options.base.clip_eps,
+            options.joint_polish_rel_tol,
+            options.joint_polish_cycles,
+        )?;
+        if candidate_loglik > polished_loglik {
+            polished_loglik = candidate_loglik;
+            model = candidate_model;
+            links = model.links.clone();
+        }
+    }
+
     let total_parameters: usize = links.iter().map(|link| link.parameter_count()).sum();
 
     // Final diagnostics use the true factor-copula log-likelihood (not the
     // per-link pseudo-likelihood sum), so AIC/BIC are comparable with other
     // domain-level models in the crate.
-    let loglik = best_loglik;
+    let loglik = polished_loglik;
     let k = total_parameters as f64;
     let n_f = n as f64;
     let (aic, bic) = if loglik.is_finite() {
@@ -370,15 +434,24 @@ fn fit_basic_1f(
         (f64::INFINITY, f64::INFINITY)
     };
 
-    Ok(FitResult {
+    // Delta-method standard errors from the numerical Hessian of the factor
+    // log-likelihood at the polished MLE. When the polish was disabled or
+    // bailed out, the Hessian is computed at the pre-polish parameters, and
+    // callers should interpret the SEs as only approximately valid — the
+    // point is still a stationary point along each coordinate from the EM
+    // refinement's perspective, though not necessarily jointly.
+    let std_errors = factor_standard_errors(&model, data, options.base.clip_eps);
+
+    Ok(FactorFitResult {
         model,
         diagnostics: FitDiagnostics {
             loglik,
             aic,
             bic,
             converged: true,
-            n_iter: 1 + options.refine_iterations,
+            n_iter: 1 + options.refine_iterations + options.joint_polish_cycles,
         },
+        std_errors,
     })
 }
 
@@ -461,6 +534,154 @@ fn posterior_latent_mean(
         out.push(posterior.clamp(clip, 1.0 - clip));
     }
     Ok(out)
+}
+
+/// Joint-MLE polish: coordinate ascent over the unconstrained-space
+/// reparametrisations of every link's free parameters against the factor-
+/// copula log-likelihood. Returns the polished model plus its final loglik.
+///
+/// The polish holds skipped families (Independence, TLL, Khoudraji, plus the
+/// ν block of Student-t) fixed at the sequential-MLE values; only parameters
+/// that `encode_params` reports are updated. When no link has polishable
+/// parameters the input model is returned unchanged.
+fn polish_factor_model(
+    model: &FactorCopula,
+    data: &PseudoObs,
+    clip_eps: f64,
+    rel_tol: f64,
+    max_cycles: usize,
+) -> Result<(FactorCopula, f64), CopulaError> {
+    let per_link_counts: Vec<usize> =
+        model.links.iter().map(|link| encode_params(link).len()).collect();
+    let total_polishable: usize = per_link_counts.iter().sum();
+    if total_polishable == 0 {
+        let loglik = factor_log_likelihood(model, data, clip_eps)?;
+        return Ok((model.clone(), loglik));
+    }
+
+    let mut x0 = Vec::with_capacity(total_polishable);
+    let mut brackets = Vec::with_capacity(total_polishable);
+    for link in &model.links {
+        x0.extend(encode_params(link));
+        brackets.extend(encode_brackets(link.family));
+    }
+
+    let template_links = model.links.clone();
+    let quadrature_nodes = model.quadrature_nodes;
+    let counts = per_link_counts.clone();
+
+    let evaluate = |x: &[f64]| -> f64 {
+        match build_model_from_flat(&template_links, &counts, quadrature_nodes, x) {
+            Ok(candidate) => {
+                factor_log_likelihood(&candidate, data, clip_eps).unwrap_or(f64::NEG_INFINITY)
+            }
+            Err(_) => f64::NEG_INFINITY,
+        }
+    };
+
+    let (x_polished, polished_loglik) =
+        coord_ascent_maximise(&x0, &brackets, rel_tol, max_cycles, 60, evaluate);
+
+    let polished_model =
+        build_model_from_flat(&template_links, &per_link_counts, quadrature_nodes, &x_polished)?;
+    Ok((polished_model, polished_loglik))
+}
+
+/// Delta-method standard errors for every polished link parameter.
+///
+/// Computes the numerical Hessian `H` of the factor log-likelihood at the
+/// fitted MLE in unconstrained space, inverts `-H` (observed Fisher
+/// information) for the covariance, and maps back to natural-parameter
+/// standard errors through `|dθ/dx|` supplied by `encode_jacobian`:
+///
+/// ```text
+///     SE(θ_k) = |dθ_k / dx_k| · sqrt([(-H)⁻¹]_{kk}).
+/// ```
+///
+/// Returns one entry per *polished* parameter, matching the concatenation of
+/// `encode_params` across links. When the inverse of `-H` is not positive-
+/// definite — typical when the polish bailed out or when the MLE sits at a
+/// bound — every entry is `f64::NAN` so callers can distinguish a well-
+/// identified parameter from an uninformative one.
+fn factor_standard_errors(model: &FactorCopula, data: &PseudoObs, clip_eps: f64) -> Vec<f64> {
+    let mut x_star = Vec::new();
+    let mut jacobians = Vec::new();
+    let mut per_link_counts = Vec::new();
+    for link in &model.links {
+        let encoded = encode_params(link);
+        per_link_counts.push(encoded.len());
+        jacobians.extend(encode_jacobian(link));
+        x_star.extend(encoded);
+    }
+    let p = x_star.len();
+    if p == 0 {
+        return Vec::new();
+    }
+
+    let template_links = model.links.clone();
+    let quadrature_nodes = model.quadrature_nodes;
+    let counts = per_link_counts.clone();
+    let evaluate = |x: &[f64]| -> f64 {
+        match build_model_from_flat(&template_links, &counts, quadrature_nodes, x) {
+            Ok(candidate) => {
+                factor_log_likelihood(&candidate, data, clip_eps).unwrap_or(f64::NEG_INFINITY)
+            }
+            Err(_) => f64::NEG_INFINITY,
+        }
+    };
+
+    // Step size 1e-4 is a robust default for 2nd-order central differences on
+    // a loglik objective scaled by n — the relative truncation error is
+    // O(h²) ~ 1e-8 and the relative roundoff is ~ε·|f|/h² ~ ε·n·1e8 which is
+    // below 1e-5 for typical n. Users with unusual scales can adjust via the
+    // options struct in a future patch.
+    let hess = numerical_hessian(&x_star, 1e-4, evaluate);
+    // Observed Fisher information is the Hessian of the *negative* log-
+    // likelihood; since `hess` is the Hessian of the (unnegated) log-
+    // likelihood, the Fisher information matrix is `-hess`.
+    let mut neg_hess = ndarray::Array2::<f64>::zeros((p, p));
+    for i in 0..p {
+        for j in 0..p {
+            neg_hess[(i, j)] = -hess[(i, j)];
+        }
+    }
+    match inverse(&neg_hess) {
+        Ok(cov) => (0..p)
+            .map(|k| {
+                let var = cov[(k, k)];
+                if var > 0.0 && var.is_finite() {
+                    jacobians[k].abs() * var.sqrt()
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect(),
+        Err(_) => vec![f64::NAN; p],
+    }
+}
+
+/// Rebuilds a [`FactorCopula`] from a flat vector of unconstrained parameters
+/// by slicing per link and decoding each slice against the link template. A
+/// shared helper between the polish's inner loop and the Hessian evaluator
+/// so both are guaranteed to agree on the encoding convention.
+fn build_model_from_flat(
+    template_links: &[PairCopulaSpec],
+    per_link_counts: &[usize],
+    quadrature_nodes: usize,
+    x: &[f64],
+) -> Result<FactorCopula, CopulaError> {
+    let mut links = Vec::with_capacity(template_links.len());
+    let mut cursor = 0;
+    for (template, count) in template_links.iter().zip(per_link_counts.iter()) {
+        let slice = &x[cursor..cursor + *count];
+        cursor += *count;
+        links.push(if *count == 0 {
+            template.clone()
+        } else {
+            decode_params(template, slice)
+        });
+    }
+    FactorCopula::basic_1f(links, quadrature_nodes)
 }
 
 /// Maps a vector of arbitrary real-valued scores onto uniform pseudo-

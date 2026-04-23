@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rscopulas import FactorCopula, FitDiagnostics
+from rscopulas import FactorCopula, FactorFitDiagnostics
 
 
 def _reference_links() -> list[dict[str, object]]:
@@ -95,7 +95,7 @@ def test_factor_copula_fit_recovers_gaussian_structure() -> None:
 
     assert fit.model.family == "factor"
     assert fit.model.dim == 4
-    assert isinstance(fit.diagnostics, FitDiagnostics)
+    assert isinstance(fit.diagnostics, FactorFitDiagnostics)
     assert fit.diagnostics.loglik > 0
     assert fit.diagnostics.converged
 
@@ -110,9 +110,15 @@ def test_factor_copula_fit_recovers_gaussian_structure() -> None:
     truth_rhos = [0.75, 0.65, 0.55, 0.45]
     for got, expected in zip(recovered_rhos, truth_rhos):
         assert 0.0 < got < 1.0, f"recovered rho {got} escaped (0, 1)"
-        assert abs(got - expected) < 0.15, (
+        # Polish removes the attenuation bias that forced the old 0.15 tol.
+        assert abs(got - expected) < 0.08, (
             f"rho recovery: got {got}, expected near {expected}"
         )
+
+    # Delta-method standard errors: one per polished ρ, all positive finite.
+    assert len(fit.diagnostics.std_errors) == len(truth_rhos)
+    for se in fit.diagnostics.std_errors:
+        assert np.isfinite(se) and se > 0
 
 
 def test_factor_copula_fit_uses_default_family_set_when_unspecified() -> None:
@@ -148,6 +154,23 @@ def test_factor_copula_from_links_rejects_degenerate_dim() -> None:
         FactorCopula.from_links(
             [{"family": "gaussian", "rotation": "R0", "parameters": [0.5]}]
         )
+
+
+def test_factor_copula_polish_cycles_zero_disables_polish() -> None:
+    # With polish disabled, the fit reduces to sequential+EM — loglik must be
+    # ≤ the polished fit's loglik (polish is guarded by a bail-out so it can
+    # only match or improve, never degrade).
+    truth = FactorCopula.from_links(_reference_links())
+    sample = truth.sample(1500, seed=17)
+
+    fit_no_polish = FactorCopula.fit(sample, joint_polish_cycles=0)
+    fit_polished = FactorCopula.fit(sample, joint_polish_cycles=5)
+
+    assert fit_polished.diagnostics.loglik + 1e-6 >= fit_no_polish.diagnostics.loglik
+
+    # Both return SE vectors of the same length (polish doesn't change the
+    # parameter layout, only the parameter values).
+    assert len(fit_polished.diagnostics.std_errors) == len(fit_no_polish.diagnostics.std_errors)
 
 
 def test_factor_copula_from_links_rejects_too_few_quadrature_nodes() -> None:

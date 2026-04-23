@@ -11,11 +11,11 @@ use pyo3::{
 use rand::{SeedableRng, random, rngs::StdRng};
 use rscopulas::{
     ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FactorCopula,
-    FactorFitOptions, FactorLayout, FitDiagnostics, FitOptions, FrankCopula, GaussianCopula,
-    GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions, HacNode, HacStructureMethod,
-    HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams, PairCopulaFamily, PairCopulaParams,
-    Rotation, SampleOptions, SelectionCriterion, StudentTCopula, VineCopula, VineEdge,
-    VineFitOptions, VineStructureKind, VineTree,
+    FactorFitOptions, FactorFitResult, FactorLayout, FitDiagnostics, FitOptions, FrankCopula,
+    GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions, HacNode,
+    HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams, PairCopulaFamily,
+    PairCopulaParams, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, VineCopula,
+    VineEdge, VineFitOptions, VineStructureKind, VineTree,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -1811,6 +1811,8 @@ impl PyFactorCopula {
         criterion="aic",
         quadrature_nodes=25,
         refine_iterations=2,
+        joint_polish_cycles=5,
+        joint_polish_rel_tol=1e-6,
         layout="basic_1f",
         clip_eps=1e-12,
         max_iter=500
@@ -1822,10 +1824,12 @@ impl PyFactorCopula {
         criterion: &str,
         quadrature_nodes: usize,
         refine_iterations: usize,
+        joint_polish_cycles: usize,
+        joint_polish_rel_tol: f64,
         layout: &str,
         clip_eps: f64,
         max_iter: usize,
-    ) -> PyResult<(Self, PyFitDiagnostics)> {
+    ) -> PyResult<(Self, PyFitDiagnostics, Vec<f64>)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
             let mut options = FactorFitOptions {
@@ -1835,6 +1839,8 @@ impl PyFactorCopula {
                 criterion: criterion_from_name(criterion)?,
                 quadrature_nodes,
                 refine_iterations,
+                joint_polish_cycles,
+                joint_polish_rel_tol,
                 ..FactorFitOptions::default()
             };
             if let Some(families) = family_set {
@@ -1843,13 +1849,12 @@ impl PyFactorCopula {
                     .map(|family| pair_family_from_name(family))
                     .collect::<PyResult<Vec<_>>>()?;
             }
-            let result = FactorCopula::fit(&data, &options).map_err(to_pyerr)?;
-            Ok((
-                Self {
-                    inner: result.model,
-                },
-                result.diagnostics.into(),
-            ))
+            let FactorFitResult {
+                model,
+                diagnostics,
+                std_errors,
+            } = FactorCopula::fit(&data, &options).map_err(to_pyerr)?;
+            Ok((Self { inner: model }, diagnostics.into(), std_errors))
         })
     }
 

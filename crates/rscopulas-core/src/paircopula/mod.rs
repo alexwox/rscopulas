@@ -9,6 +9,7 @@ mod gaussian;
 mod gumbel;
 mod joe;
 mod khoudraji;
+mod polish;
 mod rotated;
 mod student_t;
 mod tawn;
@@ -30,3 +31,4 @@ pub(crate) use common::{
     PairBatchBuffers, cond_first_given_second_batch_into, cond_second_given_first_batch_into,
     evaluate_pair_batch_into, inverse_second_given_first_batch_into,
 };
+pub(crate) use polish::{decode_params, encode_brackets, encode_jacobian, encode_params};

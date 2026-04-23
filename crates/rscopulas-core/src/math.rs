@@ -287,9 +287,9 @@ fn legendre_p_and_p_prime(n: usize, x: f64) -> (f64, f64) {
     (p_cur, p_prime)
 }
 
-pub fn maximize_scalar<F>(mut low: f64, mut high: f64, iterations: usize, f: F) -> f64
+pub fn maximize_scalar<F>(mut low: f64, mut high: f64, iterations: usize, mut f: F) -> f64
 where
-    F: Fn(f64) -> f64,
+    F: FnMut(f64) -> f64,
 {
     let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
     let resphi = 2.0 - phi;
@@ -317,12 +317,145 @@ where
     if f1 > f2 { x1 } else { x2 }
 }
 
+/// Coordinate-ascent maximisation of `f: Rᵖ → R` using the crate's golden-
+/// section step along each axis. One "cycle" sweeps every coordinate once.
+///
+/// This is the multi-dim polish used by [`FactorCopula::fit`] after its
+/// sequential/EM warm start. We deliberately avoid a full quasi-Newton scheme:
+/// the inputs arrive close to the optimum, and the factor log-likelihood is
+/// near-separable across links once Joe-style bounded-to-unconstrained
+/// reparametrisations are applied, so coordinate ascent reaches a stationary
+/// point in a handful of cycles without any curvature safeguarding.
+///
+/// The sweep stops early when a full cycle improves the objective by less than
+/// `rel_tol` (measured relative to `|f|`, or absolutely when `f` is near zero).
+/// If `x0` is empty or `brackets` is empty the starting point is returned as-is.
+pub fn coord_ascent_maximise<F>(
+    x0: &[f64],
+    brackets: &[(f64, f64)],
+    rel_tol: f64,
+    max_cycles: usize,
+    iters_per_coord: usize,
+    f: F,
+) -> (Vec<f64>, f64)
+where
+    F: Fn(&[f64]) -> f64,
+{
+    assert_eq!(
+        x0.len(),
+        brackets.len(),
+        "coord_ascent_maximise: starting point and brackets must have matching length"
+    );
+
+    let mut x = x0.to_vec();
+    if x.is_empty() {
+        return (x, f64::NEG_INFINITY);
+    }
+    let mut best = f(&x);
+
+    let mut scratch = x.clone();
+    for _ in 0..max_cycles {
+        let prev = best;
+        for k in 0..x.len() {
+            let (low, high) = brackets[k];
+            // Clamp the starting coordinate into the bracket so the golden-
+            // section endpoints stay valid; warm starts can sit right on a
+            // bound (e.g. Frank θ near zero maps to identity near zero and
+            // may slide past the configured bracket during the previous EM
+            // refinement).
+            x[k] = x[k].clamp(low, high);
+            scratch.copy_from_slice(&x);
+            let x_star = maximize_scalar(low, high, iters_per_coord, |value| {
+                scratch[k] = value;
+                f(&scratch)
+            });
+            x[k] = x_star;
+            scratch[k] = x_star;
+            best = f(&x);
+        }
+
+        let denom = prev.abs().max(1.0);
+        if (best - prev).abs() <= rel_tol * denom {
+            break;
+        }
+    }
+
+    (x, best)
+}
+
+/// Numerical Hessian via central differences.
+///
+/// Computes
+///     H_{ii} = (f(x + h e_i) + f(x − h e_i) − 2 f(x)) / h²,
+///     H_{ij} = (f(x + h e_i + h e_j) − f(x + h e_i − h e_j)
+///              − f(x − h e_i + h e_j) + f(x − h e_i − h e_j)) / (4 h²).
+///
+/// `f` should return a smooth scalar in a neighbourhood of `x`; callers that
+/// pass a quadrature-integrated log-likelihood should use the *same* quadrature
+/// rule as the optimiser so `f` is deterministic and continuous.
+///
+/// Cost: `O(p²)` evaluations of `f`. With `p ≤ 20` (the realistic factor-
+/// copula case) and the factor-loglik cost this is at most a few hundred
+/// calls — negligible next to the polish stage itself.
+pub fn numerical_hessian<F>(x: &[f64], h: f64, f: F) -> Array2<f64>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let p = x.len();
+    let mut hess = Array2::<f64>::zeros((p, p));
+    if p == 0 {
+        return hess;
+    }
+
+    let f_x = f(x);
+    let mut scratch = x.to_vec();
+
+    // Diagonal.
+    for i in 0..p {
+        let orig = scratch[i];
+        scratch[i] = orig + h;
+        let f_plus = f(&scratch);
+        scratch[i] = orig - h;
+        let f_minus = f(&scratch);
+        scratch[i] = orig;
+        hess[(i, i)] = (f_plus - 2.0 * f_x + f_minus) / (h * h);
+    }
+
+    // Off-diagonal.
+    for i in 0..p {
+        for j in (i + 1)..p {
+            let oi = scratch[i];
+            let oj = scratch[j];
+
+            scratch[i] = oi + h;
+            scratch[j] = oj + h;
+            let f_pp = f(&scratch);
+            scratch[j] = oj - h;
+            let f_pm = f(&scratch);
+            scratch[i] = oi - h;
+            let f_mm = f(&scratch);
+            scratch[j] = oj + h;
+            let f_mp = f(&scratch);
+
+            scratch[i] = oi;
+            scratch[j] = oj;
+
+            let value = (f_pp - f_pm - f_mp + f_mm) / (4.0 * h * h);
+            hess[(i, j)] = value;
+            hess[(j, i)] = value;
+        }
+    }
+
+    hess
+}
+
 #[cfg(test)]
 mod tests {
     use ndarray::array;
 
     use super::{
-        cholesky, gauss_legendre_01, log_determinant_from_cholesky, quadratic_form_from_cholesky,
+        cholesky, coord_ascent_maximise, gauss_legendre_01, log_determinant_from_cholesky,
+        numerical_hessian, quadratic_form_from_cholesky,
     };
 
     #[test]
@@ -386,5 +519,43 @@ mod tests {
 
         let quad = quadratic_form_from_cholesky(&lower, &[1.0, -1.0]).expect("solve should work");
         assert!(quad > 0.0);
+    }
+
+    #[test]
+    fn coord_ascent_finds_quadratic_maximum() {
+        // f(x, y) = -((x - 1.5)^2 + 2 (y + 0.5)^2); argmax at (1.5, -0.5), f* = 0.
+        let f = |x: &[f64]| -((x[0] - 1.5).powi(2) + 2.0 * (x[1] + 0.5).powi(2));
+        let (x, best) = coord_ascent_maximise(
+            &[0.0, 0.0],
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            1e-10,
+            20,
+            80,
+            f,
+        );
+        assert!((x[0] - 1.5).abs() < 1e-6, "x[0] = {}", x[0]);
+        assert!((x[1] - (-0.5)).abs() < 1e-6, "x[1] = {}", x[1]);
+        assert!(best.abs() < 1e-10, "best = {best}");
+    }
+
+    #[test]
+    fn coord_ascent_terminates_early_on_stationary_start() {
+        let f = |x: &[f64]| -(x[0].powi(2) + x[1].powi(2));
+        let (x, best) = coord_ascent_maximise(&[0.0, 0.0], &[(-1.0, 1.0), (-1.0, 1.0)], 1e-10, 5, 40, f);
+        assert!(x[0].abs() < 1e-8);
+        assert!(x[1].abs() < 1e-8);
+        assert!(best.abs() < 1e-10);
+    }
+
+    #[test]
+    fn numerical_hessian_matches_analytic_on_quadratic() {
+        // f(x, y) = -((x - 1)^2 + 3 (y + 2)^2 + 0.5 x y).
+        // Analytic Hessian = [[-2, -0.5], [-0.5, -6]].
+        let f = |x: &[f64]| -((x[0] - 1.0).powi(2) + 3.0 * (x[1] + 2.0).powi(2) + 0.5 * x[0] * x[1]);
+        let h = numerical_hessian(&[1.0, -2.0], 1e-4, f);
+        assert!((h[(0, 0)] - (-2.0)).abs() < 1e-4);
+        assert!((h[(1, 1)] - (-6.0)).abs() < 1e-4);
+        assert!((h[(0, 1)] - (-0.5)).abs() < 1e-4);
+        assert!((h[(1, 0)] - h[(0, 1)]).abs() < 1e-12);
     }
 }

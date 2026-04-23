@@ -17,6 +17,14 @@ use rscopulas::{
     PairCopulaParams, PairCopulaSpec, PseudoObs, Rotation,
 };
 
+fn frank_link(theta: f64) -> PairCopulaSpec {
+    PairCopulaSpec {
+        family: PairCopulaFamily::Frank,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(theta),
+    }
+}
+
 fn gaussian_link(rho: f64) -> PairCopulaSpec {
     PairCopulaSpec {
         family: PairCopulaFamily::Gaussian,
@@ -205,10 +213,10 @@ fn factor_copula_fit_recovers_gaussian_correlations() {
         assert_eq!(link.family, PairCopulaFamily::Gaussian);
     }
 
-    // Recovered rhos should be close to truth. The pseudo-latent we use for
-    // the warm start induces an attenuation bias — recovered |rho| is a bit
-    // smaller than truth — so we compare against slack bounds rather than a
-    // tight tolerance. The ordering across links is what matters most.
+    // With the joint-MLE polish the sequential warm-start attenuation bias is
+    // removed; recovered |ρ| should sit within standard-error-sized distance
+    // of the truth. Tolerance 0.08 is comfortably above the n⁻¹ᐟ² noise at
+    // n=2000 but tight enough to catch the old attenuation-biased fitter.
     let rhos: Vec<f64> = fit
         .model
         .links()
@@ -225,33 +233,121 @@ fn factor_copula_fit_recovers_gaussian_correlations() {
             "recovered rho {got} outside (0, 1)"
         );
         assert!(
-            (got - expected).abs() < 0.15,
+            (got - expected).abs() < 0.08,
             "rho recovery: got {got}, expected near {expected}"
         );
     }
 
-    // Diagnostics should be finite.
+    // Diagnostics should be finite, and the polish should report one
+    // standard error per Gaussian ρ.
     assert!(fit.diagnostics.loglik.is_finite());
     assert!(fit.diagnostics.aic.is_finite());
     assert!(fit.diagnostics.bic.is_finite());
     assert!(fit.diagnostics.converged);
+    assert_eq!(fit.std_errors.len(), truth_rhos.len());
+    for se in &fit.std_errors {
+        assert!(se.is_finite() && *se > 0.0, "std error {se} invalid");
+    }
 }
 
 #[test]
-fn factor_copula_fit_handles_archimedean_dgp_with_strong_dependence() {
-    // With a Clayton-linked DGP, sequential MLE (the scheme we ship in this
-    // phase) doesn't guarantee exact family recovery — aggregating Clayton-
-    // dependent columns into a pseudo-latent smooths lower-tail asymmetry
-    // enough that Gaussian links become competitive on AIC. This matches
-    // Joe's own observation in `CopulaModel` that the sequential warm start
-    // needs a joint-MLE polish for tail-asymmetric families (see the plan's
-    // "Joint MLE" follow-up).
-    //
-    // What the sequential fitter *should* still deliver:
-    //   (i)   no link collapses to Independence,
-    //   (ii)  the fit log-likelihood dominates the independence baseline,
-    //   (iii) samples from the refitted model preserve the strong pairwise
-    //         Kendall tau of the true DGP.
+fn factor_copula_fit_recovers_clayton_parameters() {
+    // Clayton DGP with a Clayton-only family set: the polish stage can focus
+    // purely on parameter recovery, which is where it decisively beats the
+    // sequential warm-start alone. (A mixed family set with Gumbel-R180
+    // available is a different test — the joint polish as implemented here
+    // holds the family selection from the EM stage fixed, and R0 Clayton vs
+    // R180 Gumbel is an AIC toss-up for lower-tail-dependent data. The
+    // family-selection dynamic is covered indirectly by the τ-preservation
+    // tail of this test.)
+    let truth = FactorCopula::basic_1f(
+        vec![
+            clayton_link(2.5),
+            clayton_link(2.5),
+            clayton_link(3.0),
+            clayton_link(3.0),
+        ],
+        25,
+    )
+    .expect("reference model should be valid");
+
+    let mut rng = StdRng::seed_from_u64(101);
+    let sample = truth
+        .sample(2000, &mut rng, &Default::default())
+        .expect("sampling should succeed");
+    let data = PseudoObs::new(sample).expect("sample should yield valid pseudo-observations");
+    let truth_tau = rscopulas::stats::kendall_tau_matrix(&data);
+
+    let options = FactorFitOptions {
+        family_set: vec![PairCopulaFamily::Clayton],
+        include_rotations: false,
+        ..FactorFitOptions::default()
+    };
+    let fit = FactorCopula::fit(&data, &options).expect("fit should succeed");
+
+    for (idx, link) in fit.model.links().iter().enumerate() {
+        assert_eq!(
+            link.family,
+            PairCopulaFamily::Clayton,
+            "link {idx} selected {:?}, expected Clayton",
+            link.family
+        );
+        assert_eq!(link.rotation, Rotation::R0);
+    }
+
+    // Parameter recovery: θ should be within 0.3 of truth at n=2000 — that's
+    // roughly 2× the asymptotic SE at θ ∈ {2.5, 3.0}, comfortably above the
+    // noise but tight enough to catch the old attenuation-biased fitter.
+    let truth_thetas = [2.5, 2.5, 3.0, 3.0];
+    for (link, expected) in fit.model.links().iter().zip(truth_thetas.iter()) {
+        let theta = match link.params {
+            PairCopulaParams::One(value) => value,
+            _ => panic!("expected single-parameter Clayton link"),
+        };
+        assert!(
+            (theta - expected).abs() < 0.3,
+            "theta recovery: got {theta}, expected near {expected}"
+        );
+    }
+
+    assert!(
+        fit.diagnostics.loglik > 300.0,
+        "expected strong positive log-likelihood, got {}",
+        fit.diagnostics.loglik
+    );
+    assert_eq!(fit.std_errors.len(), truth_thetas.len());
+    for se in &fit.std_errors {
+        assert!(se.is_finite() && *se > 0.0, "std error {se} invalid");
+    }
+
+    // Sanity: resampling from the refitted model preserves pairwise τ.
+    let mut rng2 = StdRng::seed_from_u64(202);
+    let refit_sample = fit
+        .model
+        .sample(2000, &mut rng2, &Default::default())
+        .expect("refitted model should sample");
+    let refit_data = PseudoObs::new(refit_sample).expect("refit sample should be valid");
+    let refit_tau = rscopulas::stats::kendall_tau_matrix(&refit_data);
+    for i in 0..4 {
+        for j in (i + 1)..4 {
+            let gap = (refit_tau[(i, j)] - truth_tau[(i, j)]).abs();
+            assert!(
+                gap < 0.08,
+                "pairwise tau diverged at ({i},{j}): truth={}, refit={}, gap={gap}",
+                truth_tau[(i, j)],
+                refit_tau[(i, j)]
+            );
+        }
+    }
+}
+
+#[test]
+fn factor_copula_fit_mixed_family_preserves_tail_behaviour() {
+    // Mixed-family DGP with a rich candidate set. We don't assert exact
+    // family recovery per link (Clayton R0 and Gumbel R180 are legitimate
+    // AIC-equivalent choices for lower-tail dependence); instead we require
+    // that (i) no link collapses to Independence, (ii) pairwise Kendall τ
+    // is preserved under a refit-resample round trip within 0.1.
     let truth = FactorCopula::basic_1f(
         vec![
             clayton_link(2.5),
@@ -282,23 +378,15 @@ fn factor_copula_fit_handles_archimedean_dgp_with_strong_dependence() {
     };
     let fit = FactorCopula::fit(&data, &options).expect("fit should succeed");
 
-    // (i) No link went to independence — every observed variable is bound to
-    //     the latent by at least one free parameter.
     for link in fit.model.links() {
         assert_ne!(link.family, PairCopulaFamily::Independence);
     }
-
-    // (ii) Log-likelihood is strongly positive (independence baseline is 0).
     assert!(
         fit.diagnostics.loglik > 300.0,
         "expected strong positive log-likelihood, got {}",
         fit.diagnostics.loglik
     );
 
-    // (iii) Resampling from the fitted model should produce matrices with
-    //       pairwise Kendall tau close to the truth. Clayton dependence is
-    //       predominantly lower-tail, but pairwise tau should be within 0.1
-    //       of truth across every pair.
     let mut rng2 = StdRng::seed_from_u64(202);
     let refit_sample = fit
         .model
@@ -310,12 +398,140 @@ fn factor_copula_fit_handles_archimedean_dgp_with_strong_dependence() {
         for j in (i + 1)..4 {
             let gap = (refit_tau[(i, j)] - truth_tau[(i, j)]).abs();
             assert!(
-                gap < 0.12,
+                gap < 0.1,
                 "pairwise tau diverged at ({i},{j}): truth={}, refit={}, gap={gap}",
                 truth_tau[(i, j)],
                 refit_tau[(i, j)]
             );
         }
+    }
+}
+
+#[test]
+fn factor_copula_fit_recovers_frank_parameters() {
+    // Frank is symmetric (no tail dependence), so the sequential warm start
+    // is already close — but the polish should still not degrade the fit,
+    // and parameter recovery should be within Fisher-info-sized SEs.
+    let truth = FactorCopula::basic_1f(
+        vec![frank_link(4.0), frank_link(6.0), frank_link(8.0)],
+        25,
+    )
+    .expect("reference model should be valid");
+
+    let mut rng = StdRng::seed_from_u64(303);
+    let sample = truth
+        .sample(2000, &mut rng, &Default::default())
+        .expect("sampling should succeed");
+    let data = PseudoObs::new(sample).expect("sample should yield valid pseudo-observations");
+
+    let options = FactorFitOptions {
+        family_set: vec![PairCopulaFamily::Frank],
+        include_rotations: false,
+        ..FactorFitOptions::default()
+    };
+    let fit = FactorCopula::fit(&data, &options).expect("fit should succeed");
+
+    for link in fit.model.links() {
+        assert_eq!(link.family, PairCopulaFamily::Frank);
+    }
+    let truth_thetas = [4.0, 6.0, 8.0];
+    for (link, expected) in fit.model.links().iter().zip(truth_thetas.iter()) {
+        let theta = match link.params {
+            PairCopulaParams::One(value) => value,
+            _ => panic!("expected single-parameter Frank link"),
+        };
+        assert!(
+            (theta - expected).abs() < 1.0,
+            "theta recovery: got {theta}, expected near {expected}"
+        );
+    }
+    assert_eq!(fit.std_errors.len(), 3);
+    for se in &fit.std_errors {
+        assert!(se.is_finite() && *se > 0.0, "std error {se} invalid");
+    }
+}
+
+#[test]
+fn factor_copula_polish_never_degrades_loglik_vs_refinement_only() {
+    // Same DGP and fit options, once with the polish enabled and once with
+    // it disabled. The bail-out guard inside `fit_basic_1f` ensures the
+    // polished fit's loglik is never worse than the refinement-only fit
+    // (modulo floating-point noise), matching Joe's `CopulaModel` invariant.
+    let truth = reference_model();
+    let mut rng = StdRng::seed_from_u64(404);
+    let sample = truth
+        .sample(1500, &mut rng, &Default::default())
+        .expect("sampling should succeed");
+    let data = PseudoObs::new(sample).expect("sample should yield valid pseudo-observations");
+
+    let refinement_only = FactorFitOptions {
+        joint_polish_cycles: 0,
+        ..FactorFitOptions::default()
+    };
+    let polished = FactorFitOptions::default();
+
+    let fit_refinement = FactorCopula::fit(&data, &refinement_only).expect("fit without polish");
+    let fit_polished = FactorCopula::fit(&data, &polished).expect("fit with polish");
+
+    // Allow a small negative slack for floating-point noise; in practice the
+    // polish either improves or is rejected by the bail-out guard.
+    assert!(
+        fit_polished.diagnostics.loglik + 1e-6 >= fit_refinement.diagnostics.loglik,
+        "polished loglik {} < refinement-only loglik {}",
+        fit_polished.diagnostics.loglik,
+        fit_refinement.diagnostics.loglik,
+    );
+
+    // The polish should produce SEs; the no-polish path still computes the
+    // Hessian at the refined fit, so it should also produce a vector of
+    // matching length (may contain NaN entries for off-manifold MLEs).
+    assert_eq!(fit_polished.std_errors.len(), fit_refinement.std_errors.len());
+}
+
+#[test]
+fn factor_copula_standard_errors_scale_with_sqrt_n() {
+    // Asymptotic theory: SE(θ̂) ∝ 1/√n. We fit the same mono-family Gaussian
+    // DGP at n=500 and n=2000 and check that SE_2000 · √2000 agrees with
+    // SE_500 · √500 within ±40% — a generous ±σ band around the expected
+    // Fisher-information-sized scaling, since Gaussian-ρ SEs are small and
+    // Monte-Carlo noise on one draw per size is substantial.
+    let truth = FactorCopula::basic_1f(
+        vec![gaussian_link(0.7), gaussian_link(0.6), gaussian_link(0.5)],
+        25,
+    )
+    .expect("reference model should be valid");
+
+    let options = FactorFitOptions {
+        family_set: vec![PairCopulaFamily::Gaussian],
+        include_rotations: false,
+        ..FactorFitOptions::default()
+    };
+
+    let mut rng_small = StdRng::seed_from_u64(505);
+    let sample_small = truth
+        .sample(500, &mut rng_small, &Default::default())
+        .expect("sampling should succeed");
+    let data_small = PseudoObs::new(sample_small).expect("small sample should be valid");
+    let fit_small = FactorCopula::fit(&data_small, &options).expect("small fit should succeed");
+
+    let mut rng_big = StdRng::seed_from_u64(606);
+    let sample_big = truth
+        .sample(2000, &mut rng_big, &Default::default())
+        .expect("sampling should succeed");
+    let data_big = PseudoObs::new(sample_big).expect("big sample should be valid");
+    let fit_big = FactorCopula::fit(&data_big, &options).expect("big fit should succeed");
+
+    assert_eq!(fit_small.std_errors.len(), 3);
+    assert_eq!(fit_big.std_errors.len(), 3);
+
+    for k in 0..3 {
+        let scaled_small = fit_small.std_errors[k] * (500.0_f64).sqrt();
+        let scaled_big = fit_big.std_errors[k] * (2000.0_f64).sqrt();
+        let ratio = scaled_big / scaled_small;
+        assert!(
+            (0.6..1.6).contains(&ratio),
+            "SE scaling off at link {k}: scaled_small={scaled_small}, scaled_big={scaled_big}, ratio={ratio}"
+        );
     }
 }
 
