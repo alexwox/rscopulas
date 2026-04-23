@@ -40,6 +40,18 @@ fn rotated_pair_families_match_vinecopula_fixtures() {
         "pair_joe_rot90_case01.json",
         "pair_joe_rot180_case01.json",
         "pair_joe_rot270_case01.json",
+        "pair_bb1_rot90_case01.json",
+        "pair_bb1_rot180_case01.json",
+        "pair_bb1_rot270_case01.json",
+        "pair_bb6_rot90_case01.json",
+        "pair_bb6_rot180_case01.json",
+        "pair_bb6_rot270_case01.json",
+        "pair_bb7_rot90_case01.json",
+        "pair_bb7_rot180_case01.json",
+        "pair_bb7_rot270_case01.json",
+        "pair_bb8_rot90_case01.json",
+        "pair_bb8_rot180_case01.json",
+        "pair_bb8_rot270_case01.json",
     ] {
         let fixture: PairFixture = load_fixture(fixture_name);
         assert_eq!(fixture.metadata.source_package, "VineCopula");
@@ -125,20 +137,36 @@ fn fixture_spec(fixture: &PairFixture) -> PairCopulaSpec {
         PairCopulaFamily::Gumbel
     } else if fixture.family.starts_with("joe") {
         PairCopulaFamily::Joe
+    } else if fixture.family.starts_with("bb1") {
+        PairCopulaFamily::Bb1
+    } else if fixture.family.starts_with("bb6") {
+        PairCopulaFamily::Bb6
+    } else if fixture.family.starts_with("bb7") {
+        PairCopulaFamily::Bb7
+    } else if fixture.family.starts_with("bb8") {
+        PairCopulaFamily::Bb8
     } else {
         panic!("unexpected rotated family fixture {}", fixture.family);
     };
 
     let rotation = match fixture.family_code {
-        23 | 24 | 26 => Rotation::R90,
-        13 | 14 | 16 => Rotation::R180,
-        33 | 34 | 36 => Rotation::R270,
+        23 | 24 | 26 | 27 | 28 | 29 | 30 => Rotation::R90,
+        13 | 14 | 16 | 17 | 18 | 19 | 20 => Rotation::R180,
+        33 | 34 | 36 | 37 | 38 | 39 | 40 => Rotation::R270,
         other => panic!("unexpected rotated family code {other}"),
+    };
+
+    let params = match family {
+        PairCopulaFamily::Bb1
+        | PairCopulaFamily::Bb6
+        | PairCopulaFamily::Bb7
+        | PairCopulaFamily::Bb8 => PairCopulaParams::Two(fixture.par, fixture.par2),
+        _ => PairCopulaParams::One(fixture.par),
     };
 
     PairCopulaSpec {
         family,
         rotation,
-        params: PairCopulaParams::One(fixture.par),
+        params,
     }
 }

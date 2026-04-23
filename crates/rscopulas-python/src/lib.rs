@@ -101,9 +101,13 @@ fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
         "frank" => Ok(PairCopulaFamily::Frank),
         "gumbel" => Ok(PairCopulaFamily::Gumbel),
         "joe" => Ok(PairCopulaFamily::Joe),
+        "bb1" => Ok(PairCopulaFamily::Bb1),
+        "bb6" => Ok(PairCopulaFamily::Bb6),
+        "bb7" => Ok(PairCopulaFamily::Bb7),
+        "bb8" => Ok(PairCopulaFamily::Bb8),
         "khoudraji" => Ok(PairCopulaFamily::Khoudraji),
         other => Err(PyValueError::new_err(format!(
-            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, khoudraji"
+            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, bb1, bb6, bb7, bb8, khoudraji"
         ))),
     }
 }
@@ -132,6 +136,10 @@ fn pair_params_from_values(
         | (PairCopulaFamily::Gumbel, [value])
         | (PairCopulaFamily::Joe, [value]) => Ok(PairCopulaParams::One(*value)),
         (PairCopulaFamily::StudentT, [rho, nu]) => Ok(PairCopulaParams::Two(*rho, *nu)),
+        (PairCopulaFamily::Bb1, [theta, delta])
+        | (PairCopulaFamily::Bb6, [theta, delta])
+        | (PairCopulaFamily::Bb7, [theta, delta])
+        | (PairCopulaFamily::Bb8, [theta, delta]) => Ok(PairCopulaParams::Two(*theta, *delta)),
         (PairCopulaFamily::Khoudraji, _) => Err(PyValueError::new_err(
             "khoudraji pair copulas require structured base_copula_1/base_copula_2 and shape_1/shape_2 inputs",
         )),
@@ -141,6 +149,13 @@ fn pair_params_from_values(
         ))),
         (PairCopulaFamily::StudentT, values) => Err(PyValueError::new_err(format!(
             "student_t pair copulas require exactly two parameters (got {})",
+            values.len()
+        ))),
+        (PairCopulaFamily::Bb1, values)
+        | (PairCopulaFamily::Bb6, values)
+        | (PairCopulaFamily::Bb7, values)
+        | (PairCopulaFamily::Bb8, values) => Err(PyValueError::new_err(format!(
+            "BB pair copulas require exactly two parameters (theta, delta) (got {})",
             values.len()
         ))),
         (_, values) => Err(PyValueError::new_err(format!(
@@ -449,6 +464,10 @@ fn pair_family_name(family: PairCopulaFamily) -> &'static str {
         PairCopulaFamily::Frank => "frank",
         PairCopulaFamily::Gumbel => "gumbel",
         PairCopulaFamily::Joe => "joe",
+        PairCopulaFamily::Bb1 => "bb1",
+        PairCopulaFamily::Bb6 => "bb6",
+        PairCopulaFamily::Bb7 => "bb7",
+        PairCopulaFamily::Bb8 => "bb8",
         PairCopulaFamily::Khoudraji => "khoudraji",
     }
 }

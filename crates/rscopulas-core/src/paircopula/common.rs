@@ -8,7 +8,9 @@ use crate::{
     vine::{SelectionCriterion, VineFitOptions},
 };
 
-use super::{clayton, frank, gaussian, gumbel, joe, khoudraji, rotated, student_t};
+use super::{
+    bb1, bb6, bb7, bb8, clayton, frank, gaussian, gumbel, joe, khoudraji, rotated, student_t,
+};
 
 /// Supported bivariate pair-copula families for vine edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +23,10 @@ pub enum PairCopulaFamily {
     Gumbel,
     Khoudraji,
     Joe,
+    Bb1,
+    Bb6,
+    Bb7,
+    Bb8,
 }
 
 /// Rotation applied to a bivariate pair-copula kernel.
@@ -226,6 +232,18 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
                 joe::log_pdf(x1, x2, *theta)?
             }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                bb1::log_pdf(x1, x2, *theta, *delta)?
+            }
+            (PairCopulaFamily::Bb6, PairCopulaParams::Two(theta, delta)) => {
+                bb6::log_pdf(x1, x2, *theta, *delta)?
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                bb7::log_pdf(x1, x2, *theta, *delta)?
+            }
+            (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
+                bb8::log_pdf(x1, x2, *theta, *delta)?
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::log_pdf(x1, x2, params, clip_eps)?
             }
@@ -343,6 +361,18 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
                 joe::cond_first_given_second(u1, u2, *theta)
             }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                bb1::cond_first_given_second(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb6, PairCopulaParams::Two(theta, delta)) => {
+                bb6::cond_first_given_second(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                bb7::cond_first_given_second(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
+                bb8::cond_first_given_second(u1, u2, *theta, *delta)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_first_given_second(u1, u2, params, clip_eps)
             }
@@ -381,6 +411,18 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
                 joe::cond_second_given_first(u1, u2, *theta)
             }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                bb1::cond_second_given_first(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb6, PairCopulaParams::Two(theta, delta)) => {
+                bb6::cond_second_given_first(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                bb7::cond_second_given_first(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
+                bb8::cond_second_given_first(u1, u2, *theta, *delta)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_second_given_first(u1, u2, params, clip_eps)
             }
@@ -416,6 +458,18 @@ impl PairCopulaSpec {
             }
             (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
                 joe::inv_first_given_second(p, u2, *theta, clip_eps)
+            }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                bb1::inv_first_given_second(p, u2, *theta, *delta, clip_eps)
+            }
+            (PairCopulaFamily::Bb6, PairCopulaParams::Two(theta, delta)) => {
+                bb6::inv_first_given_second(p, u2, *theta, *delta, clip_eps)
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                bb7::inv_first_given_second(p, u2, *theta, *delta, clip_eps)
+            }
+            (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
+                bb8::inv_first_given_second(p, u2, *theta, *delta, clip_eps)
             }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_first_given_second(p, u2, params, clip_eps)
@@ -453,6 +507,18 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
                 joe::inv_second_given_first(u1, p, *theta, clip_eps)
             }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                bb1::inv_second_given_first(u1, p, *theta, *delta, clip_eps)
+            }
+            (PairCopulaFamily::Bb6, PairCopulaParams::Two(theta, delta)) => {
+                bb6::inv_second_given_first(u1, p, *theta, *delta, clip_eps)
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                bb7::inv_second_given_first(u1, p, *theta, *delta, clip_eps)
+            }
+            (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
+                bb8::inv_second_given_first(u1, p, *theta, *delta, clip_eps)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_second_given_first(u1, p, params, clip_eps)
             }
@@ -485,6 +551,18 @@ impl PairCopulaSpec {
                 let b = (1.0 - u2).powf(*theta);
                 let s = a + b - a * b;
                 Ok((1.0 - s.max(0.0).powf(1.0 / *theta)).clamp(0.0, 1.0))
+            }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                bb1::cdf(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb6, PairCopulaParams::Two(theta, delta)) => {
+                bb6::cdf(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                bb7::cdf(u1, u2, *theta, *delta)
+            }
+            (PairCopulaFamily::Bb8, PairCopulaParams::Two(theta, delta)) => {
+                bb8::cdf(u1, u2, *theta, *delta)
             }
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(_))
             | (PairCopulaFamily::StudentT, PairCopulaParams::Two(_, _))
@@ -683,15 +761,38 @@ fn candidate_rotations(
 
     match family {
         Family::Independence | Family::Gaussian | Family::StudentT | Family::Frank => &[Rot::R0],
-        Family::Clayton | Family::Gumbel | Family::Joe | Family::Khoudraji
+        Family::Clayton
+        | Family::Gumbel
+        | Family::Joe
+        | Family::Bb1
+        | Family::Bb6
+        | Family::Bb7
+        | Family::Bb8
+        | Family::Khoudraji
             if include_rotations && tau >= 0.0 =>
         {
             &[Rot::R0, Rot::R180]
         }
-        Family::Clayton | Family::Gumbel | Family::Joe | Family::Khoudraji if include_rotations => {
+        Family::Clayton
+        | Family::Gumbel
+        | Family::Joe
+        | Family::Bb1
+        | Family::Bb6
+        | Family::Bb7
+        | Family::Bb8
+        | Family::Khoudraji
+            if include_rotations =>
+        {
             &[Rot::R90, Rot::R270]
         }
-        Family::Clayton | Family::Gumbel | Family::Joe | Family::Khoudraji => &[Rot::R0],
+        Family::Clayton
+        | Family::Gumbel
+        | Family::Joe
+        | Family::Bb1
+        | Family::Bb6
+        | Family::Bb7
+        | Family::Bb8
+        | Family::Khoudraji => &[Rot::R0],
     }
 }
 
@@ -805,6 +906,127 @@ fn fit_simple_family(
                     .sum::<f64>()
             });
             PairCopulaParams::One(theta)
+        }
+        PairCopulaFamily::Bb1 => {
+            // 2-parameter family (θ > 0, δ ≥ 1). Mirrors the Student-t fit
+            // pattern: coarse outer grid over δ (the tail-dependence
+            // ingredient) with an inner 1-D MLE over θ (the Clayton
+            // ingredient), initialised from the closed-form τ relation
+            // τ = 1 - 2 / (δ(θ+2)) so each δ starts near a reasonable θ.
+            let mut best = None;
+            let mut best_loglik = f64::NEG_INFINITY;
+            for &delta in &[1.05_f64, 1.25, 1.5, 2.0, 3.0, 5.0] {
+                // Warm-start θ from τ if τ allows, otherwise fall back to
+                // the midpoint of the search bracket.
+                let init_theta = bb1::params_from_tau(tau, delta).unwrap_or(1.0);
+                let upper = (init_theta * 4.0 + 2.0).max(10.0);
+                let theta = maximize_scalar(1e-4, upper, search_iterations, |theta| {
+                    x1.iter()
+                        .zip(x2.iter())
+                        .map(|(&u, &v)| {
+                            bb1::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
+                        })
+                        .sum::<f64>()
+                });
+                let loglik = x1
+                    .iter()
+                    .zip(x2.iter())
+                    .map(|(&u, &v)| bb1::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
+                    .sum::<f64>();
+                if loglik > best_loglik {
+                    best_loglik = loglik;
+                    best = Some((theta, delta));
+                }
+            }
+            let (theta, delta) = best.ok_or(FitError::Failed {
+                reason: "bb1 pair fit failed",
+            })?;
+            PairCopulaParams::Two(theta, delta)
+        }
+        PairCopulaFamily::Bb6 => {
+            // θ ≥ 1, δ ≥ 1 — Joe-Gumbel blend. τ has no closed form so we
+            // just coarse-grid δ and maximise over θ in [1+ε, 20].
+            let mut best = None;
+            let mut best_loglik = f64::NEG_INFINITY;
+            for &delta in &[1.05_f64, 1.25, 1.5, 2.0, 3.0, 5.0] {
+                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
+                    x1.iter()
+                        .zip(x2.iter())
+                        .map(|(&u, &v)| {
+                            bb6::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
+                        })
+                        .sum::<f64>()
+                });
+                let loglik = x1
+                    .iter()
+                    .zip(x2.iter())
+                    .map(|(&u, &v)| bb6::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
+                    .sum::<f64>();
+                if loglik > best_loglik {
+                    best_loglik = loglik;
+                    best = Some((theta, delta));
+                }
+            }
+            let (theta, delta) = best.ok_or(FitError::Failed {
+                reason: "bb6 pair fit failed",
+            })?;
+            PairCopulaParams::Two(theta, delta)
+        }
+        PairCopulaFamily::Bb7 => {
+            // θ ≥ 1, δ > 0 — Joe-Clayton blend.
+            let mut best = None;
+            let mut best_loglik = f64::NEG_INFINITY;
+            for &delta in &[0.25_f64, 0.5, 1.0, 2.0, 4.0, 8.0] {
+                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
+                    x1.iter()
+                        .zip(x2.iter())
+                        .map(|(&u, &v)| {
+                            bb7::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
+                        })
+                        .sum::<f64>()
+                });
+                let loglik = x1
+                    .iter()
+                    .zip(x2.iter())
+                    .map(|(&u, &v)| bb7::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
+                    .sum::<f64>();
+                if loglik > best_loglik {
+                    best_loglik = loglik;
+                    best = Some((theta, delta));
+                }
+            }
+            let (theta, delta) = best.ok_or(FitError::Failed {
+                reason: "bb7 pair fit failed",
+            })?;
+            PairCopulaParams::Two(theta, delta)
+        }
+        PairCopulaFamily::Bb8 => {
+            // θ ≥ 1, δ ∈ (0, 1] — Joe-Frank blend.
+            let mut best = None;
+            let mut best_loglik = f64::NEG_INFINITY;
+            for &delta in &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6] {
+                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
+                    x1.iter()
+                        .zip(x2.iter())
+                        .map(|(&u, &v)| {
+                            bb8::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
+                        })
+                        .sum::<f64>()
+                });
+                let loglik = x1
+                    .iter()
+                    .zip(x2.iter())
+                    .map(|(&u, &v)| bb8::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
+                    .sum::<f64>();
+                if loglik > best_loglik {
+                    best_loglik = loglik;
+                    best = Some((theta, delta));
+                }
+            }
+            let (theta, delta) = best.ok_or(FitError::Failed {
+                reason: "bb8 pair fit failed",
+            })?;
+            PairCopulaParams::Two(theta, delta)
         }
         PairCopulaFamily::Khoudraji => {
             return Err(FitError::Failed {

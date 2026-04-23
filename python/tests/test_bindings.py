@@ -185,6 +185,70 @@ def test_joe_pair_copula() -> None:
     assert np.all((inv_second > 0.0) & (inv_second < 1.0))
 
 
+def test_bb1_pair_copula() -> None:
+    # BB1 is a 2-parameter Archimedean (Clayton-Gumbel blend) with both lower
+    # and upper tail dependence; the smoke test checks that the binding
+    # round-trips a (theta, delta) pair and that all h-functions produce
+    # values strictly inside (0, 1).
+    model = PairCopula.from_spec("bb1", [1.5, 1.5])
+    u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+    u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+    p = np.array([0.27, 0.45, 0.73, 0.91], dtype=np.float64)
+
+    log_pdf = model.log_pdf(u1, u2)
+    cond_first = model.cond_first_given_second(u1, u2)
+    cond_second = model.cond_second_given_first(u1, u2)
+    inv_first = model.inv_first_given_second(p, u2)
+    inv_second = model.inv_second_given_first(u1, p)
+
+    assert model.family == "bb1"
+    assert model.rotation == "R0"
+    assert model.parameters == (1.5, 1.5)
+    assert log_pdf.shape == (4,)
+    assert np.all(np.isfinite(log_pdf))
+    assert cond_first.shape == (4,)
+    assert np.all((cond_first > 0.0) & (cond_first < 1.0))
+    assert cond_second.shape == (4,)
+    assert np.all((cond_second > 0.0) & (cond_second < 1.0))
+    assert inv_first.shape == (4,)
+    assert np.all((inv_first > 0.0) & (inv_first < 1.0))
+    assert inv_second.shape == (4,)
+    assert np.all((inv_second > 0.0) & (inv_second < 1.0))
+
+
+@pytest.mark.parametrize(
+    ("family", "params"),
+    [
+        ("bb6", (2.0, 1.5)),
+        ("bb7", (1.5, 1.5)),
+        ("bb8", (2.0, 0.8)),
+    ],
+)
+def test_bb_pair_copulas_round_trip(family: str, params: tuple[float, float]) -> None:
+    # BB6 (Joe-Gumbel), BB7 (Joe-Clayton), BB8 (Joe-Frank) — all 2-parameter
+    # Archimedeans. Smoke-test that each binding round-trips parameters and
+    # evaluates density / h-functions without non-finite values.
+    model = PairCopula.from_spec(family, list(params))
+    u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+    u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+    p = np.array([0.27, 0.45, 0.73, 0.91], dtype=np.float64)
+
+    log_pdf = model.log_pdf(u1, u2)
+    cond_first = model.cond_first_given_second(u1, u2)
+    cond_second = model.cond_second_given_first(u1, u2)
+    inv_first = model.inv_first_given_second(p, u2)
+    inv_second = model.inv_second_given_first(u1, p)
+
+    assert model.family == family
+    assert model.rotation == "R0"
+    assert model.parameters == params
+    assert log_pdf.shape == (4,)
+    assert np.all(np.isfinite(log_pdf))
+    for arr in (cond_first, cond_second, inv_first, inv_second):
+        assert arr.shape == (4,)
+        assert np.all((arr > 0.0) & (arr < 1.0))
+
+
 def test_khoudraji_pair_wrapper_round_trips_structured_spec() -> None:
     model = PairCopula.from_khoudraji(
         "gaussian",

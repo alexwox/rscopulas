@@ -210,6 +210,8 @@ fn default_family_set() -> Vec<PairCopulaFamily> {
         PairCopulaFamily::Frank,
         PairCopulaFamily::Gumbel,
         PairCopulaFamily::Joe,
+        PairCopulaFamily::Bb1,
+        PairCopulaFamily::Bb7,
         PairCopulaFamily::Khoudraji,
     ]
 }
