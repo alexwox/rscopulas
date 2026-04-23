@@ -154,6 +154,37 @@ def test_pair_wrapper_exposes_density_and_h_kernels() -> None:
     np.testing.assert_allclose(inv_second[-1], 0.96246049482916851)
 
 
+def test_joe_pair_copula() -> None:
+    # Joe is a 1-parameter Archimedean family with upper-tail dependence;
+    # the smoke test mirrors the Gaussian pair test and checks that the new
+    # binding is reachable via the "joe" family string and evaluates the
+    # density / h-function kernels without error.
+    model = PairCopula.from_spec("joe", [2.5])
+    u1 = np.array([0.17, 0.31, 0.62, 0.88], dtype=np.float64)
+    u2 = np.array([0.23, 0.54, 0.41, 0.79], dtype=np.float64)
+    p = np.array([0.27, 0.45, 0.73, 0.91], dtype=np.float64)
+
+    log_pdf = model.log_pdf(u1, u2)
+    cond_first = model.cond_first_given_second(u1, u2)
+    cond_second = model.cond_second_given_first(u1, u2)
+    inv_first = model.inv_first_given_second(p, u2)
+    inv_second = model.inv_second_given_first(u1, p)
+
+    assert model.family == "joe"
+    assert model.rotation == "R0"
+    assert model.parameters == (2.5,)
+    assert log_pdf.shape == (4,)
+    assert np.all(np.isfinite(log_pdf))
+    assert cond_first.shape == (4,)
+    assert np.all((cond_first > 0.0) & (cond_first < 1.0))
+    assert cond_second.shape == (4,)
+    assert np.all((cond_second > 0.0) & (cond_second < 1.0))
+    assert inv_first.shape == (4,)
+    assert np.all((inv_first > 0.0) & (inv_first < 1.0))
+    assert inv_second.shape == (4,)
+    assert np.all((inv_second > 0.0) & (inv_second < 1.0))
+
+
 def test_khoudraji_pair_wrapper_round_trips_structured_spec() -> None:
     model = PairCopula.from_khoudraji(
         "gaussian",

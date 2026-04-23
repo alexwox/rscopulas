@@ -8,7 +8,7 @@ use crate::{
     vine::{SelectionCriterion, VineFitOptions},
 };
 
-use super::{clayton, frank, gaussian, gumbel, khoudraji, rotated, student_t};
+use super::{clayton, frank, gaussian, gumbel, joe, khoudraji, rotated, student_t};
 
 /// Supported bivariate pair-copula families for vine edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +20,7 @@ pub enum PairCopulaFamily {
     Frank,
     Gumbel,
     Khoudraji,
+    Joe,
 }
 
 /// Rotation applied to a bivariate pair-copula kernel.
@@ -222,6 +223,9 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
                 gumbel::log_pdf(x1, x2, *theta)?
             }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                joe::log_pdf(x1, x2, *theta)?
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::log_pdf(x1, x2, params, clip_eps)?
             }
@@ -336,6 +340,9 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
                 gumbel::cond_first_given_second(u1, u2, *theta, clip_eps)
             }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                joe::cond_first_given_second(u1, u2, *theta)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_first_given_second(u1, u2, params, clip_eps)
             }
@@ -371,6 +378,9 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
                 gumbel::cond_second_given_first(u1, u2, *theta, clip_eps)
             }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                joe::cond_second_given_first(u1, u2, *theta)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::cond_second_given_first(u1, u2, params, clip_eps)
             }
@@ -403,6 +413,9 @@ impl PairCopulaSpec {
             }
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
                 gumbel::inv_first_given_second(p, u2, *theta, clip_eps)
+            }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                joe::inv_first_given_second(p, u2, *theta, clip_eps)
             }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_first_given_second(p, u2, params, clip_eps)
@@ -437,6 +450,9 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
                 gumbel::inv_second_given_first(u1, p, *theta, clip_eps)
             }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                joe::inv_second_given_first(u1, p, *theta, clip_eps)
+            }
             (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
                 khoudraji::inv_second_given_first(u1, p, params, clip_eps)
             }
@@ -462,6 +478,13 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
                 let term = ((-u1.ln()).powf(*theta) + (-u2.ln()).powf(*theta)).powf(1.0 / *theta);
                 Ok(f64::exp(-term).clamp(0.0, 1.0))
+            }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                // C(u1, u2) = 1 - ((1-u1)^θ + (1-u2)^θ - (1-u1)^θ(1-u2)^θ)^(1/θ)
+                let a = (1.0 - u1).powf(*theta);
+                let b = (1.0 - u2).powf(*theta);
+                let s = a + b - a * b;
+                Ok((1.0 - s.max(0.0).powf(1.0 / *theta)).clamp(0.0, 1.0))
             }
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(_))
             | (PairCopulaFamily::StudentT, PairCopulaParams::Two(_, _))
@@ -660,13 +683,15 @@ fn candidate_rotations(
 
     match family {
         Family::Independence | Family::Gaussian | Family::StudentT | Family::Frank => &[Rot::R0],
-        Family::Clayton | Family::Gumbel | Family::Khoudraji if include_rotations && tau >= 0.0 => {
+        Family::Clayton | Family::Gumbel | Family::Joe | Family::Khoudraji
+            if include_rotations && tau >= 0.0 =>
+        {
             &[Rot::R0, Rot::R180]
         }
-        Family::Clayton | Family::Gumbel | Family::Khoudraji if include_rotations => {
+        Family::Clayton | Family::Gumbel | Family::Joe | Family::Khoudraji if include_rotations => {
             &[Rot::R90, Rot::R270]
         }
-        Family::Clayton | Family::Gumbel | Family::Khoudraji => &[Rot::R0],
+        Family::Clayton | Family::Gumbel | Family::Joe | Family::Khoudraji => &[Rot::R0],
     }
 }
 
@@ -766,6 +791,17 @@ fn fit_simple_family(
                 x1.iter()
                     .zip(x2.iter())
                     .map(|(&u, &v)| gumbel::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
+                    .sum::<f64>()
+            });
+            PairCopulaParams::One(theta)
+        }
+        PairCopulaFamily::Joe => {
+            let init = joe::theta_from_tau(tau)?;
+            let upper = (init * 4.0 + 2.0).max(20.0);
+            let theta = maximize_scalar(1.0 + 1e-6, upper, search_iterations, |theta| {
+                x1.iter()
+                    .zip(x2.iter())
+                    .map(|(&u, &v)| joe::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
                     .sum::<f64>()
             });
             PairCopulaParams::One(theta)

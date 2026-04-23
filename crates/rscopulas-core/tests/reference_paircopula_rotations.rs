@@ -37,6 +37,9 @@ fn rotated_pair_families_match_vinecopula_fixtures() {
         "pair_gumbel_rot90_case01.json",
         "pair_gumbel_rot180_case01.json",
         "pair_gumbel_rot270_case01.json",
+        "pair_joe_rot90_case01.json",
+        "pair_joe_rot180_case01.json",
+        "pair_joe_rot270_case01.json",
     ] {
         let fixture: PairFixture = load_fixture(fixture_name);
         assert_eq!(fixture.metadata.source_package, "VineCopula");
@@ -120,14 +123,16 @@ fn fixture_spec(fixture: &PairFixture) -> PairCopulaSpec {
         PairCopulaFamily::Clayton
     } else if fixture.family.starts_with("gumbel") {
         PairCopulaFamily::Gumbel
+    } else if fixture.family.starts_with("joe") {
+        PairCopulaFamily::Joe
     } else {
         panic!("unexpected rotated family fixture {}", fixture.family);
     };
 
     let rotation = match fixture.family_code {
-        23 | 24 => Rotation::R90,
-        13 | 14 => Rotation::R180,
-        33 | 34 => Rotation::R270,
+        23 | 24 | 26 => Rotation::R90,
+        13 | 14 | 16 => Rotation::R180,
+        33 | 34 | 36 => Rotation::R270,
         other => panic!("unexpected rotated family code {other}"),
     };
 

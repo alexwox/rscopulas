@@ -100,9 +100,10 @@ fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
         "clayton" => Ok(PairCopulaFamily::Clayton),
         "frank" => Ok(PairCopulaFamily::Frank),
         "gumbel" => Ok(PairCopulaFamily::Gumbel),
+        "joe" => Ok(PairCopulaFamily::Joe),
         "khoudraji" => Ok(PairCopulaFamily::Khoudraji),
         other => Err(PyValueError::new_err(format!(
-            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, khoudraji"
+            "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, khoudraji"
         ))),
     }
 }
@@ -128,7 +129,8 @@ fn pair_params_from_values(
         (PairCopulaFamily::Gaussian, [value])
         | (PairCopulaFamily::Clayton, [value])
         | (PairCopulaFamily::Frank, [value])
-        | (PairCopulaFamily::Gumbel, [value]) => Ok(PairCopulaParams::One(*value)),
+        | (PairCopulaFamily::Gumbel, [value])
+        | (PairCopulaFamily::Joe, [value]) => Ok(PairCopulaParams::One(*value)),
         (PairCopulaFamily::StudentT, [rho, nu]) => Ok(PairCopulaParams::Two(*rho, *nu)),
         (PairCopulaFamily::Khoudraji, _) => Err(PyValueError::new_err(
             "khoudraji pair copulas require structured base_copula_1/base_copula_2 and shape_1/shape_2 inputs",
@@ -446,6 +448,7 @@ fn pair_family_name(family: PairCopulaFamily) -> &'static str {
         PairCopulaFamily::Clayton => "clayton",
         PairCopulaFamily::Frank => "frank",
         PairCopulaFamily::Gumbel => "gumbel",
+        PairCopulaFamily::Joe => "joe",
         PairCopulaFamily::Khoudraji => "khoudraji",
     }
 }

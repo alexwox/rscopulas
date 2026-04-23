@@ -94,6 +94,62 @@ pub(crate) mod frank {
     }
 }
 
+pub(crate) mod joe {
+    use crate::errors::{CopulaError, FitError};
+
+    // Kendall's tau for the Joe copula via the series representation
+    //   τ(θ) = 1 - 4 Σ_{k=1}^∞ 1 / [k · (θk + 2) · (θ(k-1) + 2)].
+    // The series converges like 1/k³ so the truncation below is more than
+    // enough for double precision. At θ = 1 Joe reduces to independence and
+    // τ = 0, which the explicit guard handles without entering the loop
+    // (avoiding a harmless but noisy near-equal-to-zero computation).
+    pub(crate) fn tau(theta: f64) -> f64 {
+        if theta <= 1.0 {
+            return 0.0;
+        }
+        let mut sum = 0.0;
+        for k in 1..100_000 {
+            let kf = k as f64;
+            let term =
+                1.0 / (kf * (theta * kf + 2.0) * (theta * (kf - 1.0) + 2.0));
+            sum += term;
+            if term < 1e-18 * sum.abs().max(1.0) {
+                break;
+            }
+        }
+        1.0 - 4.0 * sum
+    }
+
+    pub(crate) fn invert_tau(
+        target_tau: f64,
+        bracket_error: &'static str,
+    ) -> Result<f64, CopulaError> {
+        let mut low = 1.0;
+        let mut high = 30.0;
+        while tau(high) < target_tau && high < 1e6 {
+            high *= 2.0;
+        }
+
+        if tau(high) < target_tau {
+            return Err(FitError::Failed {
+                reason: bracket_error,
+            }
+            .into());
+        }
+
+        for _ in 0..80 {
+            let mid = 0.5 * (low + high);
+            if tau(mid) < target_tau {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+
+        Ok(0.5 * (low + high))
+    }
+}
+
 pub(crate) mod gumbel {
     pub(crate) fn log_abs_generator_derivative(dim: usize, t: f64, alpha: f64) -> f64 {
         let derivatives = (1..=dim)

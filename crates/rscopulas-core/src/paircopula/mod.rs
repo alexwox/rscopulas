@@ -3,6 +3,7 @@ mod common;
 mod frank;
 mod gaussian;
 mod gumbel;
+mod joe;
 mod khoudraji;
 mod rotated;
 mod student_t;
