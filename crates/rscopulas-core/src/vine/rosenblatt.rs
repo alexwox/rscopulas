@@ -357,6 +357,9 @@ fn validate_matrix_shape(data: ArrayView2<f64>, dim: usize) -> Result<(), Copula
     if data.nrows() == 0 {
         return Err(InputError::EmptyObservations.into());
     }
+    for &value in data {
+        crate::data::validate_probability(value)?;
+    }
     Ok(())
 }
 

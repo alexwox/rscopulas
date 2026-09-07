@@ -251,3 +251,18 @@ print(np.allclose(u1, u1_recovered))  # True
 <ResponseField name="spec" type="dict">
   A serializable dict representation of the pair-copula specification, including family, rotation, and parameters. For Khoudraji copulas, the dict also contains `shape_1`, `shape_2`, `base_copula_1`, and `base_copula_2`.
 </ResponseField>
+
+## Fitted TLL state
+
+TLL supports `constant`, `linear`, and `quadratic` local likelihood. Its
+normalized density and conditional functions represent the same copula.
+The full fitted grid is carried in `pair.spec["state"]`, so it survives
+JSON serialization and can be used in factor links and vine edge specifications.
+
+```python
+pair = PairCopula.fit_tll(u1, u2, method="linear")
+restored = PairCopula.from_spec(**pair.spec)
+```
+
+TLL `parameters` contains an effective-degrees-of-freedom summary; reconstruction
+also requires `state`. Scalar parametric families do not accept this field.

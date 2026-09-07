@@ -152,3 +152,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <Info>
 `PairCopulaSpec` is `Clone`, `Debug`, `Serialize`, and `Deserialize`. Vine structures serialize all edge specs, so you can round-trip a fitted vine through JSON using `serde_json`.
 </Info>
+
+## TLL parameters
+
+`TllParams` is fitted by `tll_fit` or restored through validated Serde state.
+Its grid is immutable; inspect it with `log_density()`, `grid_min()`,
+`grid_max()`, `bandwidth()`, `effective_df()`, and `method()`.
+`PairCopulaSpec::swap_axes()` transposes all family-specific state, including
+TLL grids, Tawn family identity, and Khoudraji bases and shapes.

@@ -239,7 +239,7 @@ Forward Rosenblatt transform `U = F(V)`. Takes vine-distributed pseudo-observati
 
 ### `inverse_rosenblatt(data) → ndarray`
 
-Inverse Rosenblatt transform `V = F^{-1}(U)`. Takes a matrix of independent uniforms and returns a vine-distributed sample. This is the primitive behind [`sample`](#sample-n-seed-none-ndarray) and [`sample_conditional`](#sample-conditional-known-n-seed-none-ndarray).
+Inverse Rosenblatt transform `V = F^{-1}(U)`. Takes a matrix of independent uniforms and returns a vine-distributed sample. This is the primitive behind [`sample`](#samplen--seednone--ndarray) and [`sample_conditional`](#sample_conditionalknown-n--seednone--ndarray).
 
 <ParamField body="data" type="ArrayLike" required>
   A 2-D array of independent uniforms with shape matching the vine's dimension.
@@ -254,7 +254,7 @@ Inverse Rosenblatt transform `V = F^{-1}(U)`. Takes a matrix of independent unif
 Draw `n` samples from the vine **conditional** on known values for a subset of columns. See [Conditional sampling](/guides/vine-copulas#conditional-sampling) for the full workflow, including the `variable_order` convention and how to set up the vine via `fit_c(order=...)` or `fit_d(order=...)`.
 
 <ParamField body="known" type="dict[int, ArrayLike]" required>
-  Mapping of column index to a 1-D array of length `n` with values in `(0, 1)`. The provided column indices must form a prefix of [`variable_order`](#variable-order-list-int).
+  Mapping of column index to a 1-D array of length `n` with values in `(0, 1)`. The provided column indices must form a prefix of [`variable_order`](#properties).
 </ParamField>
 
 <ParamField body="n" type="int" required>

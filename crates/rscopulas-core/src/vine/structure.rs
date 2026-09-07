@@ -34,11 +34,24 @@ pub(crate) fn validate_order(order: &[usize], dim: usize) -> Result<(), CopulaEr
 
 pub(crate) fn build_model_from_trees(
     kind: VineStructureKind,
-    trees: Vec<VineTree>,
+    mut trees: Vec<VineTree>,
     truncation_level: Option<usize>,
 ) -> Result<VineCopula, CopulaError> {
     let dim = trees.len() + 1;
     validate_tree_variables(&trees, dim)?;
+    if let Some(level) = truncation_level {
+        if level >= dim {
+            return Err(FitError::Failed {
+                reason: "truncation level must not exceed dim - 1",
+            }
+            .into());
+        }
+        for tree in trees.iter_mut().skip(level) {
+            for edge in &mut tree.edges {
+                edge.copula = PairCopulaSpec::independence();
+            }
+        }
+    }
     let (matrix, pair_matrix) = to_structure_matrices(&trees)?;
     let variable_order = matrix.diag().iter().rev().copied().collect::<Vec<_>>();
     let normalized_matrix = normalize_matrix(&matrix, &variable_order)?;
@@ -53,6 +66,7 @@ pub(crate) fn build_model_from_trees(
         &variable_order,
     )?;
     Ok(VineCopula {
+        format_version: 1,
         dim,
         structure: VineStructure {
             kind,
@@ -157,7 +171,9 @@ fn to_structure_matrices(
         let w = first.conditioned.0;
         matrix[(k, k)] = w;
         matrix[(k + 1, k)] = first.conditioned.1;
-        pair_matrix[(k + 1, k)] = Some(first.copula.clone());
+        // Runtime kernels receive (row variable, diagonal variable), whereas
+        // public edges and fitting use (conditioned.0, conditioned.1).
+        pair_matrix[(k + 1, k)] = Some(first.copula.clone().swap_axes());
 
         if k == n - 2 {
             matrix[(k + 1, k + 1)] = first.conditioned.1;
@@ -169,11 +185,11 @@ fn to_structure_matrices(
             let mut found = None;
             for (idx, edge) in remaining[tree_idx].iter().enumerate() {
                 if edge.conditioned.0 == w {
-                    found = Some((idx, edge.conditioned.1, edge.copula.clone()));
+                    found = Some((idx, edge.conditioned.1, edge.copula.clone().swap_axes()));
                     break;
                 }
                 if edge.conditioned.1 == w {
-                    found = Some((idx, edge.conditioned.0, edge.copula.clone().swap_axes()));
+                    found = Some((idx, edge.conditioned.0, edge.copula.clone()));
                     break;
                 }
             }
@@ -191,18 +207,76 @@ fn to_structure_matrices(
 }
 
 fn validate_tree_variables(trees: &[VineTree], dim: usize) -> Result<(), CopulaError> {
-    for tree in trees {
-        for edge in &tree.edges {
-            if edge.conditioned.0 >= dim
-                || edge.conditioned.1 >= dim
-                || edge.conditioning.iter().any(|&value| value >= dim)
-            {
-                return Err(FitError::Failed {
-                    reason: "vine tree references variables outside the declared dimension",
-                }
-                .into());
-            }
+    use std::collections::BTreeSet;
+    let invalid = || {
+        CopulaError::from(FitError::Failed {
+            reason: "invalid vine trees: check levels, variables, connectivity and proximity",
+        })
+    };
+    if dim < 2 {
+        return Err(invalid());
+    }
+    let mut scopes: Vec<BTreeSet<usize>> = (0..dim).map(|v| BTreeSet::from([v])).collect();
+    let mut parents: Vec<(usize, usize)> = Vec::new();
+    for (idx, tree) in trees.iter().enumerate() {
+        let level = idx + 1;
+        if tree.level != level || tree.edges.len() != dim - level {
+            return Err(invalid());
         }
+        let mut components: Vec<usize> = (0..scopes.len()).collect();
+        let mut next_scopes = Vec::new();
+        let mut next_parents = Vec::new();
+        for edge in &tree.edges {
+            let (a, b) = edge.conditioned;
+            let conditioning: BTreeSet<usize> = edge.conditioning.iter().copied().collect();
+            if edge.tree != level
+                || a == b
+                || a >= dim
+                || b >= dim
+                || edge.conditioning.len() != level - 1
+                || conditioning.len() != level - 1
+                || conditioning.contains(&a)
+                || conditioning.contains(&b)
+                || conditioning.iter().any(|&v| v >= dim)
+            {
+                return Err(invalid());
+            }
+            edge.copula.validate()?;
+            let mut left = conditioning.clone();
+            left.insert(a);
+            let mut right = conditioning.clone();
+            right.insert(b);
+            let first = scopes.iter().position(|s| s == &left).ok_or_else(invalid)?;
+            let second = scopes
+                .iter()
+                .position(|s| s == &right)
+                .ok_or_else(invalid)?;
+            if level > 1 {
+                let (i, j) = parents[first];
+                let (k, l) = parents[second];
+                if i != k && i != l && j != k && j != l {
+                    return Err(invalid());
+                }
+            }
+            let ca = components[first];
+            let cb = components[second];
+            if ca == cb {
+                return Err(invalid());
+            }
+            for component in &mut components {
+                if *component == cb {
+                    *component = ca;
+                }
+            }
+            left.insert(b);
+            if next_scopes.contains(&left) {
+                return Err(invalid());
+            }
+            next_scopes.push(left);
+            next_parents.push((first, second));
+        }
+        scopes = next_scopes;
+        parents = next_parents;
     }
     Ok(())
 }

@@ -2,6 +2,41 @@ use ndarray::Array2;
 
 use crate::errors::NumericalError;
 
+/// log(1 - exp(x)) for x <= 0, including the exact endpoint x = -infinity.
+pub(crate) fn log1mexp(x: f64) -> f64 {
+    if x < -std::f64::consts::LN_2 {
+        (-x.exp()).ln_1p()
+    } else {
+        (-x.exp_m1()).ln()
+    }
+}
+
+pub(crate) fn logaddexp(a: f64, b: f64) -> f64 {
+    let high = a.max(b);
+    if !high.is_finite() {
+        return high;
+    }
+    high + ((a.min(b) - high).exp()).ln_1p()
+}
+
+pub(crate) fn softplus(x: f64) -> f64 {
+    x.max(0.0) + (-x.abs()).exp().ln_1p()
+}
+
+/// log(1 - exp(-exp(log_x))), retaining values below the exp underflow limit.
+pub(crate) fn log1mexp_neg_exp(log_x: f64) -> f64 {
+    if log_x < -36.0 {
+        log_x
+    } else {
+        log1mexp(-log_x.exp())
+    }
+}
+
+/// log(-log(1 - exp(x))) without underflow in the upper copula tail.
+pub(crate) fn log_neg_log1mexp(x: f64) -> f64 {
+    if x < -36.0 { x } else { (-log1mexp(x)).ln() }
+}
+
 pub fn identity_correlation(dim: usize) -> Array2<f64> {
     Array2::eye(dim)
 }
@@ -212,11 +247,8 @@ pub fn inverse(matrix: &Array2<f64>) -> Result<Array2<f64>, NumericalError> {
 /// interval roots are found by Newton iteration on the `n`-th Legendre
 /// polynomial, started from Tricomi's asymptotic approximation.
 ///
-/// This is the primitive used by the factor-copula log-density, which
-/// integrates the product of link densities against the latent factor's
-/// uniform distribution on `[0, 1]`. Twenty-five nodes match Joe's
-/// `CopulaModel` R package default and are accurate to ~1e-14 for the
-/// integrands that arise from well-behaved link families.
+/// Integrates smooth functions on the unit interval. Accuracy depends on the
+/// integrand and node count; callers must check convergence for narrow peaks.
 pub fn gauss_legendre_01(n: usize) -> (Vec<f64>, Vec<f64>) {
     debug_assert!(n >= 1, "gauss_legendre_01 requires at least one node");
 
@@ -287,7 +319,19 @@ fn legendre_p_and_p_prime(n: usize, x: f64) -> (f64, f64) {
     (p_cur, p_prime)
 }
 
-pub fn maximize_scalar<F>(mut low: f64, mut high: f64, iterations: usize, mut f: F) -> f64
+pub fn maximize_scalar<F>(low: f64, high: f64, iterations: usize, f: F) -> f64
+where
+    F: FnMut(f64) -> f64,
+{
+    maximize_scalar_with_diagnostics(low, high, iterations, f).0
+}
+
+pub(crate) fn maximize_scalar_with_diagnostics<F>(
+    mut low: f64,
+    mut high: f64,
+    iterations: usize,
+    mut f: F,
+) -> (f64, usize, bool)
 where
     F: FnMut(f64) -> f64,
 {
@@ -298,7 +342,12 @@ where
     let mut f1 = f(x1);
     let mut f2 = f(x2);
 
+    let mut completed = 0;
     for _ in 0..iterations {
+        if (high - low).abs() <= 1e-10 * (1.0 + low.abs().max(high.abs())) {
+            break;
+        }
+        completed += 1;
         if f1 < f2 {
             low = x1;
             x1 = x2;
@@ -314,7 +363,11 @@ where
         }
     }
 
-    if f1 > f2 { x1 } else { x2 }
+    (
+        if f1 > f2 { x1 } else { x2 },
+        completed,
+        f1.max(f2).is_finite() && (high - low).abs() <= 1e-10 * (1.0 + low.abs().max(high.abs())),
+    )
 }
 
 /// Coordinate-ascent maximisation of `f: Rᵖ → R` using the crate's golden-
@@ -341,46 +394,52 @@ pub fn coord_ascent_maximise<F>(
 where
     F: Fn(&[f64]) -> f64,
 {
-    assert_eq!(
-        x0.len(),
-        brackets.len(),
-        "coord_ascent_maximise: starting point and brackets must have matching length"
-    );
+    let (x, value, _, _) =
+        coord_ascent_with_diagnostics(x0, brackets, rel_tol, max_cycles, iters_per_coord, f);
+    (x, value)
+}
 
+pub(crate) fn coord_ascent_with_diagnostics<F>(
+    x0: &[f64],
+    brackets: &[(f64, f64)],
+    rel_tol: f64,
+    max_cycles: usize,
+    iters_per_coord: usize,
+    f: F,
+) -> (Vec<f64>, f64, usize, bool)
+where
+    F: Fn(&[f64]) -> f64,
+{
+    assert_eq!(x0.len(), brackets.len());
     let mut x = x0.to_vec();
-    if x.is_empty() {
-        return (x, f64::NEG_INFINITY);
-    }
     let mut best = f(&x);
-
-    let mut scratch = x.clone();
+    if x.is_empty() {
+        return (x, best, 0, best.is_finite());
+    }
+    let mut completed = 0;
     for _ in 0..max_cycles {
-        let prev = best;
+        let previous = best;
+        completed += 1;
         for k in 0..x.len() {
-            let (low, high) = brackets[k];
-            // Clamp the starting coordinate into the bracket so the golden-
-            // section endpoints stay valid; warm starts can sit right on a
-            // bound (e.g. Frank θ near zero maps to identity near zero and
-            // may slide past the configured bracket during the previous EM
-            // refinement).
-            x[k] = x[k].clamp(low, high);
-            scratch.copy_from_slice(&x);
-            let x_star = maximize_scalar(low, high, iters_per_coord, |value| {
-                scratch[k] = value;
-                f(&scratch)
-            });
-            x[k] = x_star;
-            scratch[k] = x_star;
-            best = f(&x);
+            let mut candidate = x.clone();
+            let coordinate =
+                maximize_scalar(brackets[k].0, brackets[k].1, iters_per_coord, |value| {
+                    candidate[k] = value;
+                    f(&candidate)
+                });
+            candidate[k] = coordinate;
+            let value = f(&candidate);
+            // A bounded scalar search must never discard a better warm start.
+            if value.is_finite() && value > best {
+                x = candidate;
+                best = value;
+            }
         }
-
-        let denom = prev.abs().max(1.0);
-        if (best - prev).abs() <= rel_tol * denom {
-            break;
+        if best.is_finite() && (best - previous).abs() <= rel_tol * previous.abs().max(1.0) {
+            return (x, best, completed, true);
         }
     }
-
-    (x, best)
+    (x, best, completed, false)
 }
 
 /// Numerical Hessian via central differences.
@@ -525,14 +584,8 @@ mod tests {
     fn coord_ascent_finds_quadratic_maximum() {
         // f(x, y) = -((x - 1.5)^2 + 2 (y + 0.5)^2); argmax at (1.5, -0.5), f* = 0.
         let f = |x: &[f64]| -((x[0] - 1.5).powi(2) + 2.0 * (x[1] + 0.5).powi(2));
-        let (x, best) = coord_ascent_maximise(
-            &[0.0, 0.0],
-            &[(-5.0, 5.0), (-5.0, 5.0)],
-            1e-10,
-            20,
-            80,
-            f,
-        );
+        let (x, best) =
+            coord_ascent_maximise(&[0.0, 0.0], &[(-5.0, 5.0), (-5.0, 5.0)], 1e-10, 20, 80, f);
         assert!((x[0] - 1.5).abs() < 1e-6, "x[0] = {}", x[0]);
         assert!((x[1] - (-0.5)).abs() < 1e-6, "x[1] = {}", x[1]);
         assert!(best.abs() < 1e-10, "best = {best}");
@@ -541,7 +594,8 @@ mod tests {
     #[test]
     fn coord_ascent_terminates_early_on_stationary_start() {
         let f = |x: &[f64]| -(x[0].powi(2) + x[1].powi(2));
-        let (x, best) = coord_ascent_maximise(&[0.0, 0.0], &[(-1.0, 1.0), (-1.0, 1.0)], 1e-10, 5, 40, f);
+        let (x, best) =
+            coord_ascent_maximise(&[0.0, 0.0], &[(-1.0, 1.0), (-1.0, 1.0)], 1e-10, 5, 40, f);
         assert!(x[0].abs() < 1e-8);
         assert!(x[1].abs() < 1e-8);
         assert!(best.abs() < 1e-10);
@@ -551,7 +605,8 @@ mod tests {
     fn numerical_hessian_matches_analytic_on_quadratic() {
         // f(x, y) = -((x - 1)^2 + 3 (y + 2)^2 + 0.5 x y).
         // Analytic Hessian = [[-2, -0.5], [-0.5, -6]].
-        let f = |x: &[f64]| -((x[0] - 1.0).powi(2) + 3.0 * (x[1] + 2.0).powi(2) + 0.5 * x[0] * x[1]);
+        let f =
+            |x: &[f64]| -((x[0] - 1.0).powi(2) + 3.0 * (x[1] + 2.0).powi(2) + 0.5 * x[0] * x[1]);
         let h = numerical_hessian(&[1.0, -2.0], 1e-4, f);
         assert!((h[(0, 0)] - (-2.0)).abs() < 1e-4);
         assert!((h[(1, 1)] - (-6.0)).abs() < 1e-4);

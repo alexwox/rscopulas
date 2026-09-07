@@ -2,13 +2,49 @@ pub(crate) mod frank {
     use crate::errors::{CopulaError, FitError};
 
     pub(crate) fn generator(t: f64, theta: f64) -> f64 {
-        let scale = 1.0 - (-theta).exp();
-        -(1.0 - scale * (-t).exp()).ln() / theta
+        generator_from_log_argument(t.ln(), theta)
     }
 
-    pub(crate) fn log_abs_generator_derivative(dim: usize, q: f64, theta: f64) -> f64 {
-        let numerator_poly = derivative_polynomial(dim, q);
-        q.ln() + numerator_poly.abs().ln() - (dim as f64) * (1.0 - q).ln() - theta.ln()
+    pub(crate) fn generator_from_log_argument(log_t: f64, theta: f64) -> f64 {
+        if theta < 1e-10 {
+            return (-log_t.exp()).exp();
+        }
+        let log_complement = crate::math::logaddexp(
+            -theta,
+            crate::math::log1mexp(-theta) + crate::math::log1mexp_neg_exp(log_t),
+        );
+        (-log_complement / theta).clamp(1e-12, 1.0 - 1e-12)
+    }
+
+    /// Logarithmic-series frailty via the constant-time Kemp mixture.
+    /// Keeping log(N) avoids integer overflow and exp(theta) overflow.
+    /// Reference: Kemp (1981), Applied Statistics 30(3), 249-253.
+    pub(crate) fn sample_log_frailty<R: rand::Rng + ?Sized>(rng: &mut R, theta: f64) -> f64 {
+        use rand::distr::Open01;
+        let selector: f64 = rng.sample(Open01);
+        if selector > -(-theta).exp_m1() {
+            return 0.0;
+        }
+        let mixture: f64 = rng.sample(Open01);
+        let exponent = -theta * mixture;
+        let log_q = crate::math::log1mexp(exponent);
+        if selector.ln() < 2.0 * log_q {
+            let log_ratio = (-selector.ln()).ln() - crate::math::log_neg_log1mexp(exponent);
+            if log_ratio > 36.0 {
+                log_ratio
+            } else {
+                (log_ratio.exp().floor() + 1.0).ln()
+            }
+        } else if selector.ln() > log_q {
+            0.0
+        } else {
+            2.0_f64.ln()
+        }
+    }
+
+    pub(crate) fn log_abs_generator_derivative(dim: usize, log_q: f64, theta: f64) -> f64 {
+        let numerator_poly = derivative_polynomial(dim, log_q.exp());
+        log_q + numerator_poly.abs().ln() - (dim as f64) * crate::math::log1mexp(log_q) - theta.ln()
     }
 
     pub(crate) fn invert_tau(
@@ -110,8 +146,7 @@ pub(crate) mod joe {
         let mut sum = 0.0;
         for k in 1..100_000 {
             let kf = k as f64;
-            let term =
-                1.0 / (kf * (theta * kf + 2.0) * (theta * (kf - 1.0) + 2.0));
+            let term = 1.0 / (kf * (theta * kf + 2.0) * (theta * (kf - 1.0) + 2.0));
             sum += term;
             if term < 1e-18 * sum.abs().max(1.0) {
                 break;

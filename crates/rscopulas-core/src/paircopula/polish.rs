@@ -70,7 +70,11 @@ pub(crate) fn decode_params(template: &PairCopulaSpec, values: &[f64]) -> PairCo
             PairCopulaParams::One(values[0].tanh().clamp(-0.999_999, 0.999_999))
         }
         (PairCopulaFamily::StudentT, PairCopulaParams::Two(_, nu)) => {
-            assert_eq!(values.len(), 1, "StudentT expects one unconstrained value (ρ only)");
+            assert_eq!(
+                values.len(),
+                1,
+                "StudentT expects one unconstrained value (ρ only)"
+            );
             PairCopulaParams::Two(values[0].tanh().clamp(-0.999_999, 0.999_999), *nu)
         }
         (PairCopulaFamily::Clayton, _) => {
@@ -157,9 +161,9 @@ pub(crate) fn encode_brackets(family: PairCopulaFamily) -> Vec<(f64, f64)> {
         PairCopulaFamily::Bb7 => vec![(-10.0, 4.0), (-10.0, 6.0)],
         PairCopulaFamily::Bb8 => vec![(-10.0, 4.0), (-10.0, 10.0)],
         PairCopulaFamily::Tawn1 | PairCopulaFamily::Tawn2 => vec![(-10.0, 4.0), (-10.0, 10.0)],
-        PairCopulaFamily::Independence
-        | PairCopulaFamily::Tll
-        | PairCopulaFamily::Khoudraji => Vec::new(),
+        PairCopulaFamily::Independence | PairCopulaFamily::Tll | PairCopulaFamily::Khoudraji => {
+            Vec::new()
+        }
     }
 }
 

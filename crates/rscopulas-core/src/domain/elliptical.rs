@@ -48,6 +48,7 @@ impl GaussianCopula {
 
     /// Fits a Gaussian copula by inverting the Kendall tau matrix.
     pub fn fit(data: &PseudoObs, options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        options.validate()?;
         let tau = try_kendall_tau_matrix(data, options.exec)?;
         let correlation =
             make_spd_correlation(&tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin()))?;
@@ -65,6 +66,7 @@ impl GaussianCopula {
         let parameter_count = (model.dim * (model.dim - 1) / 2) as f64;
         let n_obs = data.n_obs() as f64;
         let diagnostics = super::FitDiagnostics {
+            likelihood_kind: crate::domain::LikelihoodKind::Joint,
             loglik,
             aic: 2.0 * parameter_count - 2.0 * loglik,
             bic: parameter_count * n_obs.ln() - 2.0 * loglik,
@@ -125,6 +127,7 @@ impl CopulaModel for GaussianCopula {
     }
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
+        options.validate()?;
         if data.dim() != self.dim {
             return Err(FitError::Failed {
                 reason: "input dimension does not match model dimension",
@@ -218,6 +221,7 @@ impl StudentTCopula {
 
     /// Fits a Student t copula by Kendall tau inversion plus a grid search over `nu`.
     pub fn fit(data: &PseudoObs, options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        options.validate()?;
         let tau = try_kendall_tau_matrix(data, options.exec)?;
         let correlation =
             make_spd_correlation(&tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin()))?;
@@ -251,6 +255,7 @@ impl StudentTCopula {
         let parameter_count = (model.dim * (model.dim - 1) / 2 + 1) as f64;
         let n_obs = data.n_obs() as f64;
         let diagnostics = super::FitDiagnostics {
+            likelihood_kind: crate::domain::LikelihoodKind::Joint,
             loglik: best_loglik,
             aic: 2.0 * parameter_count - 2.0 * best_loglik,
             bic: parameter_count * n_obs.ln() - 2.0 * best_loglik,
@@ -319,6 +324,7 @@ impl CopulaModel for StudentTCopula {
     }
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
+        options.validate()?;
         if data.dim() != self.dim {
             return Err(FitError::Failed {
                 reason: "input dimension does not match model dimension",

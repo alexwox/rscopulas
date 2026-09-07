@@ -96,3 +96,12 @@ let options = VineFitOptions {
 <Tip>
 When running Criterion benchmarks for vine workloads, always pass `ExecPolicy::Force(Device::Cpu)` to get stable, reproducible wall times unaffected by GPU availability on the benchmark machine.
 </Tip>
+
+## Metal precision
+
+The Metal Gaussian bridge uses float32 kernels for interior coordinates in
+`[1e-4, 1-1e-4]` with `abs(rho) <= .99`. It recomputes tail rows and stronger
+correlations in float64 on the CPU, preserving the caller's original values.
+Forced Metal therefore selects a hybrid bridge, not an all-GPU guarantee.
+All returned values are checked for finiteness. Factor and HAC density and
+sampling reject forced GPU policies because those operations are unsupported.

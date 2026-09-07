@@ -46,6 +46,8 @@ pub enum HacStructureMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HacFitMethod {
     TauInit,
+    CompositeMle,
+    /// Backward-compatible name for recursive pairwise composite MLE.
     RecursiveMle,
     FullMle,
     Smle,
@@ -59,6 +61,7 @@ pub struct HacFitOptions {
     pub fit_method: HacFitMethod,
     pub family_set: Vec<HacFamily>,
     pub collapse_eps: f64,
+    /// Reserved for unimplemented simulated likelihood. Must be zero.
     pub mc_samples: usize,
     pub allow_experimental: bool,
 }
@@ -68,16 +71,16 @@ impl Default for HacFitOptions {
         Self {
             base: FitOptions::default(),
             structure_method: HacStructureMethod::AgglomerativeTauThenCollapse,
-            fit_method: HacFitMethod::RecursiveMle,
+            fit_method: HacFitMethod::CompositeMle,
             family_set: vec![HacFamily::Clayton, HacFamily::Frank, HacFamily::Gumbel],
             collapse_eps: 0.05,
-            mc_samples: 256,
+            mc_samples: 0,
             allow_experimental: true,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HierarchicalArchimedeanCopula {
     root: HacTree,
     dim: usize,
@@ -87,6 +90,31 @@ pub struct HierarchicalArchimedeanCopula {
     exact_loglik: bool,
     used_smle: bool,
     mc_samples: usize,
+}
+
+impl<'de> Deserialize<'de> for HierarchicalArchimedeanCopula {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct State {
+            root: HacTree,
+            dim: usize,
+            structure_method: HacStructureMethod,
+            fit_method: HacFitMethod,
+        }
+        let state = State::deserialize(deserializer)?;
+        let mut model = Self::new(state.root).map_err(serde::de::Error::custom)?;
+        if model.dim != state.dim
+            || matches!(
+                state.fit_method,
+                HacFitMethod::FullMle | HacFitMethod::Smle | HacFitMethod::Dmle
+            )
+        {
+            return Err(serde::de::Error::custom("invalid or unsupported HAC state"));
+        }
+        model.structure_method = state.structure_method;
+        model.fit_method = state.fit_method;
+        Ok(model)
+    }
 }
 
 impl HierarchicalArchimedeanCopula {
@@ -176,6 +204,27 @@ impl HierarchicalArchimedeanCopula {
 
     pub fn parameters(&self) -> Vec<f64> {
         crate::hac::parameters_preorder(&self.root)
+    }
+
+    /// Pairwise composite log scores, not a normalized joint log density.
+    pub fn composite_log_pdf(
+        &self,
+        data: &PseudoObs,
+        options: &EvalOptions,
+    ) -> Result<Vec<f64>, CopulaError> {
+        options.validate()?;
+        crate::backend::resolve_strategy(
+            options.exec,
+            crate::backend::Operation::DensityEval,
+            data.n_obs(),
+        )?;
+        if data.dim() != self.dim {
+            return Err(crate::errors::FitError::Failed {
+                reason: "input dimension does not match HAC dimension",
+            }
+            .into());
+        }
+        crate::hac::composite_log_pdf_rows(self, data, options.clip_eps)
     }
 }
 

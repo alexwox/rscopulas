@@ -17,7 +17,7 @@ use crate::{
     },
     errors::{CopulaError, FitError},
     fit::FitResult,
-    math::maximize_scalar,
+    math::maximize_scalar_with_diagnostics,
     paircopula::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation},
     stats::try_kendall_tau_matrix,
 };
@@ -92,6 +92,35 @@ pub fn fit_hac(
     root: Option<HacTree>,
     options: &HacFitOptions,
 ) -> Result<FitResult<HierarchicalArchimedeanCopula>, CopulaError> {
+    options.base.validate()?;
+    if matches!(
+        options.fit_method,
+        HacFitMethod::FullMle | HacFitMethod::Smle | HacFitMethod::Dmle
+    ) {
+        return Err(FitError::Failed {
+            reason: "requested HAC optimizer is not implemented; use tau_init or composite_mle",
+        }
+        .into());
+    }
+    if options.family_set.is_empty()
+        || !options.collapse_eps.is_finite()
+        || options.collapse_eps < 0.0
+    {
+        return Err(FitError::Failed {
+            reason: "invalid HAC fitting options",
+        }
+        .into());
+    }
+    if options.mc_samples != 0 {
+        return Err(FitError::Failed {
+            reason: "HAC simulated likelihood is not implemented; mc_samples must be zero",
+        }
+        .into());
+    }
+    let mut progress = HacFitProgress {
+        iterations: 0,
+        converged: true,
+    };
     let tau = try_kendall_tau_matrix(data, options.base.exec)?;
     let structure_method = if root.is_some() {
         HacStructureMethod::GivenTree
@@ -109,39 +138,77 @@ pub fn fit_hac(
             }
             root
         }
+        None if options.structure_method == HacStructureMethod::GivenTree => {
+            return Err(FitError::Failed {
+                reason: "given_tree requires an explicit HAC tree",
+            }
+            .into());
+        }
         None => build_agglomerative_tree(&tau)?,
     };
 
-    tree = fit_tree_node(tree, data, &tau, options)?;
+    tree = fit_tree_node(tree, data, &tau, options, &mut progress)?;
     if matches!(
-        options.structure_method,
+        structure_method,
         HacStructureMethod::AgglomerativeTauThenCollapse
     ) {
         tree = collapse_tree(tree, options.collapse_eps);
-        tree = fit_tree_node(tree, data, &tau, options)?;
+        tree = fit_tree_node(tree, data, &tau, options, &mut progress)?;
     }
     project_same_family_nesting(&mut tree);
 
     let validation = validate_tree(&tree)?;
+    if !options.allow_experimental && !validation.exact {
+        return Err(FitError::Failed {
+            reason: "experimental mixed-family HAC fitting is disabled",
+        }
+        .into());
+    }
     let model = HierarchicalArchimedeanCopula::from_parts(
         tree,
         structure_method,
         options.fit_method,
         validation.exact,
         validation.exact_loglik,
-        matches!(options.fit_method, HacFitMethod::Smle) || !validation.exact_loglik,
-        options.mc_samples,
+        false,
+        0,
     )?;
 
-    let loglik = composite_loglik(&model, data, options.base.clip_eps)?;
+    let loglik = if validation.exact_loglik {
+        model
+            .log_pdf(
+                data,
+                &EvalOptions {
+                    exec: options.base.exec,
+                    clip_eps: options.base.clip_eps,
+                },
+            )?
+            .iter()
+            .sum()
+    } else {
+        composite_loglik(&model, data, options.base.clip_eps)?
+    };
     let n_params = internal_node_count(model.tree()) as f64;
     let n_obs = data.n_obs() as f64;
     let diagnostics = FitDiagnostics {
+        likelihood_kind: if validation.exact_loglik {
+            crate::domain::LikelihoodKind::Joint
+        } else {
+            crate::domain::LikelihoodKind::Composite
+        },
         loglik,
-        aic: 2.0 * n_params - 2.0 * loglik,
-        bic: n_params * n_obs.ln() - 2.0 * loglik,
-        converged: true,
-        n_iter: options.base.max_iter,
+        aic: if validation.exact_loglik {
+            2.0 * n_params - 2.0 * loglik
+        } else {
+            f64::NAN
+        },
+        bic: if validation.exact_loglik {
+            n_params * n_obs.ln() - 2.0 * loglik
+        } else {
+            f64::NAN
+        },
+        converged: progress.converged,
+        n_iter: progress.iterations,
     };
     Ok(FitResult { model, diagnostics })
 }
@@ -151,6 +218,7 @@ pub fn log_pdf(
     data: &PseudoObs,
     options: &EvalOptions,
 ) -> Result<Vec<f64>, CopulaError> {
+    options.validate()?;
     if data.dim() != model.dim() {
         return Err(FitError::Failed {
             reason: "input dimension does not match model dimension",
@@ -160,7 +228,7 @@ pub fn log_pdf(
     if let Some(values) = exact_exchangeable_log_pdf(model, data, options)? {
         return Ok(values);
     }
-    composite_log_pdf_rows(model, data, options.clip_eps)
+    Err(FitError::Failed { reason: "joint density is unavailable for nested HAC; use composite_log_pdf for an explicitly composite score" }.into())
 }
 
 pub fn sample<R: Rng + ?Sized>(
@@ -169,6 +237,7 @@ pub fn sample<R: Rng + ?Sized>(
     rng: &mut R,
     options: &SampleOptions,
 ) -> Result<Array2<f64>, CopulaError> {
+    crate::backend::resolve_strategy(options.exec, crate::backend::Operation::Sample, n)?;
     if let Some(values) = exact_exchangeable_sample(model, n, rng, options)? {
         return Ok(values);
     }
@@ -317,11 +386,17 @@ fn average_cross_tau(left: &[usize], right: &[usize], tau: &Array2<f64>) -> f64 
     total / count as f64
 }
 
+struct HacFitProgress {
+    iterations: usize,
+    converged: bool,
+}
+
 fn fit_tree_node(
     tree: HacTree,
     data: &PseudoObs,
     tau: &Array2<f64>,
     options: &HacFitOptions,
+    progress: &mut HacFitProgress,
 ) -> Result<HacTree, CopulaError> {
     match tree {
         HacTree::Leaf(_) => Ok(tree),
@@ -329,11 +404,12 @@ fn fit_tree_node(
             let children = node
                 .children
                 .into_iter()
-                .map(|child| fit_tree_node(child, data, tau, options))
+                .map(|child| fit_tree_node(child, data, tau, options, progress))
                 .collect::<Result<Vec<_>, _>>()?;
             let child_groups = children.iter().map(leaves_of).collect::<Vec<_>>();
             let direct_pairs = direct_pairs_from_groups(&child_groups);
-            let (family, theta) = fit_best_family_for_pairs(&direct_pairs, data, tau, options)?;
+            let (family, theta) =
+                fit_best_family_for_pairs(&direct_pairs, data, tau, options, progress)?;
             Ok(HacTree::Node(HacNode::new(family, theta, children)))
         }
     }
@@ -344,6 +420,7 @@ fn fit_best_family_for_pairs(
     data: &PseudoObs,
     tau: &Array2<f64>,
     options: &HacFitOptions,
+    progress: &mut HacFitProgress,
 ) -> Result<(HacFamily, f64), CopulaError> {
     let mut best = None;
     let view = data.as_view();
@@ -358,38 +435,46 @@ fn fit_best_family_for_pairs(
         let init = theta_from_tau(*family, mean_tau)?;
         let (low, upper_seed) = family_parameter_bounds(*family);
         let upper = (init * 4.0 + 2.0).max(upper_seed);
-        let theta = maximize_scalar(low, upper, options.base.max_iter.max(8), |theta| {
-            direct_pairs
-                .iter()
-                .map(|&(left, right)| {
-                    let spec = pair_spec(*family, theta);
-                    (0..data.n_obs())
-                        .map(|row| {
-                            spec.log_pdf(
-                                view[(row, left)],
-                                view[(row, right)],
-                                options.base.clip_eps,
-                            )
-                            .unwrap_or(-1e12)
-                        })
-                        .sum::<f64>()
-                })
-                .sum::<f64>()
-        });
+        let (theta, iterations, converged) = if options.fit_method == HacFitMethod::TauInit {
+            (init, 0, true)
+        } else {
+            maximize_scalar_with_diagnostics(low, upper, options.base.max_iter, |theta| {
+                direct_pairs
+                    .iter()
+                    .map(|&(left, right)| {
+                        let spec = pair_spec(*family, theta);
+                        (0..data.n_obs())
+                            .map(|row| {
+                                spec.log_pdf(
+                                    view[(row, left)],
+                                    view[(row, right)],
+                                    options.base.clip_eps,
+                                )
+                                .unwrap_or(-1e12)
+                            })
+                            .sum::<f64>()
+                    })
+                    .sum::<f64>()
+            })
+        };
+        progress.iterations += iterations;
         let score = pair_loglik_sum(*family, theta, direct_pairs, data, options.base.clip_eps)?;
         match best {
-            Some((_, _, best_score)) if score <= best_score => {}
-            _ => best = Some((*family, theta, score)),
+            Some((_, _, best_score, _)) if score <= best_score => {}
+            _ => best = Some((*family, theta, score, converged)),
         }
     }
 
-    best.map(|(family, theta, _)| (family, theta))
-        .ok_or_else(|| {
-            FitError::Failed {
-                reason: "HAC family selection requires at least one candidate family",
-            }
-            .into()
-        })
+    best.map(|(family, theta, _, converged)| {
+        progress.converged &= converged;
+        (family, theta)
+    })
+    .ok_or_else(|| {
+        FitError::Failed {
+            reason: "HAC family selection requires at least one candidate family",
+        }
+        .into()
+    })
 }
 
 fn pair_loglik_sum(
@@ -462,7 +547,7 @@ fn project_same_family_nesting(tree: &mut HacTree) -> f64 {
     }
 }
 
-fn composite_log_pdf_rows(
+pub(crate) fn composite_log_pdf_rows(
     model: &HierarchicalArchimedeanCopula,
     data: &PseudoObs,
     clip_eps: f64,
@@ -637,8 +722,14 @@ fn sample_root_frailty<R: Rng + ?Sized>(
             Ok(dist.sample(rng))
         }
         HacFamily::Frank => {
-            let p = 1.0 - (-theta).exp();
-            Ok(sample_log_series(rng, p) as f64)
+            let frailty = frank::sample_log_frailty(rng, theta).exp();
+            if !frailty.is_finite() {
+                return Err(crate::errors::NumericalError::Failed {
+                    reason: "nested Frank frailty exceeds f64 range",
+                }
+                .into());
+            }
+            Ok(frailty)
         }
         HacFamily::Gumbel => Ok(sample_positive_stable(rng, 1.0 / theta)),
     }
@@ -653,6 +744,9 @@ fn sample_child_frailty<R: Rng + ?Sized>(
     rng: &mut R,
     weights: &[f64],
 ) -> Result<f64, CopulaError> {
+    if parent_family == child_family && parent_theta == child_theta {
+        return Ok(parent_frailty);
+    }
     if parent_family == HacFamily::Gumbel && child_family == HacFamily::Gumbel {
         let alpha = parent_theta / child_theta;
         let stable = sample_positive_stable(rng, alpha);
@@ -727,7 +821,7 @@ fn stehfest_weights(n: usize) -> Vec<f64> {
         .map(|k| {
             let sign = if (k + m).is_multiple_of(2) { 1.0 } else { -1.0 };
             let mut total = 0.0;
-            let lower = (k + 1).div_ceil(2);
+            let lower = k.div_ceil(2);
             let upper = k.min(m);
             for j in lower..=upper {
                 total += (j as f64).powi(m as i32) * factorial(2 * j)
@@ -752,22 +846,6 @@ fn sample_leaf<R: Rng + ?Sized>(family: HacFamily, theta: f64, frailty: f64, rng
         HacFamily::Clayton => (1.0 + e / frailty).powf(-1.0 / theta),
         HacFamily::Frank => frank::generator(e / frailty, theta),
         HacFamily::Gumbel => (-(e / frailty).powf(1.0 / theta)).exp(),
-    }
-}
-
-fn sample_log_series<R: Rng + ?Sized>(rng: &mut R, p: f64) -> usize {
-    let normalizer = -1.0 / (1.0 - p).ln();
-    let threshold: f64 = rng.random();
-    let mut cumulative = 0.0;
-    let mut probability = normalizer * p;
-    let mut k = 1usize;
-    loop {
-        cumulative += probability;
-        if threshold <= cumulative {
-            return k;
-        }
-        k += 1;
-        probability *= p * (k as f64 - 1.0) / k as f64;
     }
 }
 
@@ -903,5 +981,18 @@ fn internal_node_count(tree: &HacTree) -> usize {
     match tree {
         HacTree::Leaf(_) => 0,
         HacTree::Node(node) => 1 + node.children.iter().map(internal_node_count).sum::<usize>(),
+    }
+}
+
+#[cfg(test)]
+mod inversion_tests {
+    #[test]
+    fn stehfest_recovers_known_laplace_transforms() {
+        assert_eq!(super::stehfest_weights(2), vec![2.0, -2.0]);
+        let weights = super::stehfest_weights(12);
+        for x in [0.1, 1.0, 3.0] {
+            let value = super::inverse_laplace_stehfest(|s| 1.0 / (s + 1.0), x, &weights);
+            assert!((value - (-x).exp()).abs() < 1e-3);
+        }
     }
 }

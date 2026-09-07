@@ -165,12 +165,12 @@ kernel void gaussian_pair_batch(
         let u1 = request
             .u1
             .iter()
-            .map(|value| *value as f32)
+            .map(|value| value.clamp(1e-4, 1.0 - 1e-4) as f32)
             .collect::<Vec<_>>();
         let u2 = request
             .u2
             .iter()
-            .map(|value| *value as f32)
+            .map(|value| value.clamp(1e-4, 1.0 - 1e-4) as f32)
             .collect::<Vec<_>>();
 
         let bytes_len = (n * size_of::<f32>()) as u64;
@@ -190,8 +190,8 @@ kernel void gaussian_pair_batch(
             .device
             .new_buffer(bytes_len, MTLResourceOptions::StorageModeShared);
         let params = Params {
-            rho: request.rho as f32,
-            clip_eps: request.clip_eps as f32,
+            rho: request.rho.clamp(-0.99, 0.99) as f32,
+            clip_eps: (request.clip_eps as f32).max(f32::EPSILON),
             n: n as u32,
         };
         let params_buffer = runtime.device.new_buffer(
@@ -252,11 +252,47 @@ kernel void gaussian_pair_batch(
             }
         };
 
-        Ok(GaussianPairBatchResult {
+        let mut result = GaussianPairBatchResult {
             log_pdf: read_back(&out_log_pdf),
             cond_on_first: read_back(&out_h12),
             cond_on_second: read_back(&out_h21),
-        })
+        };
+        // Metal is a mixed-precision backend. Evaluate rows outside its f32
+        // accuracy envelope on the f64 reference path, using original inputs.
+        let spec = crate::paircopula::PairCopulaSpec {
+            family: crate::paircopula::PairCopulaFamily::Gaussian,
+            rotation: crate::paircopula::Rotation::R0,
+            params: crate::paircopula::PairCopulaParams::One(request.rho),
+        };
+        let error = |err: crate::errors::CopulaError| DispatchError::Runtime {
+            backend: "metal",
+            reason: err.to_string(),
+        };
+        for idx in 0..n {
+            let (u, v) = (request.u1[idx], request.u2[idx]);
+            if !(1e-4..=1.0 - 1e-4).contains(&u)
+                || !(1e-4..=1.0 - 1e-4).contains(&v)
+                || request.rho.abs() > 0.99
+            {
+                result.log_pdf[idx] = spec.log_pdf(u, v, request.clip_eps).map_err(error)?;
+                result.cond_on_first[idx] = spec
+                    .cond_first_given_second(u, v, request.clip_eps)
+                    .map_err(error)?;
+                result.cond_on_second[idx] = spec
+                    .cond_second_given_first(u, v, request.clip_eps)
+                    .map_err(error)?;
+            }
+            if !result.log_pdf[idx].is_finite()
+                || !result.cond_on_first[idx].is_finite()
+                || !result.cond_on_second[idx].is_finite()
+            {
+                return Err(DispatchError::Runtime {
+                    backend: "metal",
+                    reason: "Gaussian kernel returned a non-finite result".into(),
+                });
+            }
+        }
+        Ok(result)
     }
 }
 

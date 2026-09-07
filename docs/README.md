@@ -1,6 +1,6 @@
 # rscopulas documentation
 
-Start here for guides beyond the root [README.md](../README.md).
+The canonical user guides and API reference live in [mdx/](mdx/README.md), rendered by the Next.js site in `demo/` and described by `mdx/docs.json`. Edit those sources for website content; do not create nested copies. The Markdown notes below provide repository and validation context.
 
 ## Guides
 

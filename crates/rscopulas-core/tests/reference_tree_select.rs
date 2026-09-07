@@ -9,13 +9,13 @@
 //!     to the Tau-based fit on strongly non-monotone data).
 
 use ndarray::Array2;
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::{SeedableRng, rngs::StdRng};
-use rand::Rng;
 
 use rscopulas::{
-    PairCopulaFamily, PseudoObs, SelectionCriterion, TreeAlgorithm, TreeCriterion, VineCopula,
-    VineFitOptions,
+    CopulaModel, GaussianCopula, PairCopulaFamily, PseudoObs, SelectionCriterion, TreeAlgorithm,
+    TreeCriterion, VineCopula, VineFitOptions,
 };
 
 fn synthetic_gaussian_sample(dim: usize, n: usize, seed: u64) -> PseudoObs {
@@ -26,47 +26,19 @@ fn synthetic_gaussian_sample(dim: usize, n: usize, seed: u64) -> PseudoObs {
             corr[(i, j)] = 0.6_f64.powi((i as i32 - j as i32).abs());
         }
     }
+    let model = GaussianCopula::new(corr).unwrap();
     let mut rng = StdRng::seed_from_u64(seed);
-    let mut sample = Array2::<f64>::zeros((n, dim));
-    for row in 0..n {
-        let z: Vec<f64> = (0..dim)
-            .map(|_| {
-                // Box–Muller for a standard normal.
-                let u1: f64 = rng.sample::<f64, _>(StandardUniform).max(1e-12);
-                let u2: f64 = rng.sample::<f64, _>(StandardUniform);
-                (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
-            })
-            .collect();
-        let mut y = vec![0.0; dim];
-        for i in 0..dim {
-            // Lower-triangular Cholesky solve for the Toeplitz corr would be
-            // a bit fiddly; cheat by mixing via corr directly (not a true
-            // Cholesky — but good enough for generating a sample with
-            // positive pairwise dependence, which is all the tests need).
-            for j in 0..=i {
-                y[i] += corr[(i, j)] * z[j];
-            }
-        }
-        for i in 0..dim {
-            // Map N(0, σ²) → (0, 1) via the standard normal CDF.
-            let cdf = 0.5 * (1.0 + erf(y[i] / (2.0_f64.sqrt())));
-            sample[(row, i)] = cdf.clamp(1e-6, 1.0 - 1e-6);
-        }
-    }
-    PseudoObs::new(sample).expect("synthetic sample should be valid pseudo-observations")
+    PseudoObs::new(model.sample(n, &mut rng, &Default::default()).unwrap()).unwrap()
 }
 
-/// Abramowitz & Stegun 7.1.26 approximation of the error function —
-/// accurate to ~1.5e-7 in the tails, plenty for generating test data.
-fn erf(x: f64) -> f64 {
-    let sign = x.signum();
-    let t = 1.0 / (1.0 + 0.3275911 * x.abs());
-    let y = 1.0
-        - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
-            + 0.254829592)
-            * t
-            * (-x * x).exp();
-    sign * y
+// Structure tests do not need exhaustive pair-family optimization. All pair
+// families retain their dedicated numerical and parameter-recovery coverage.
+fn structure_options() -> VineFitOptions {
+    VineFitOptions {
+        family_set: vec![PairCopulaFamily::Independence, PairCopulaFamily::Gaussian],
+        include_rotations: false,
+        ..VineFitOptions::default()
+    }
 }
 
 #[test]
@@ -77,11 +49,11 @@ fn prim_and_kruskal_produce_identical_total_weight() {
     let data = synthetic_gaussian_sample(6, 400, 11);
     let options_kruskal = VineFitOptions {
         tree_algorithm: TreeAlgorithm::Kruskal,
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let options_prim = VineFitOptions {
         tree_algorithm: TreeAlgorithm::Prim,
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let fit_k = VineCopula::fit_r_vine(&data, &options_kruskal).expect("kruskal fit");
     let fit_p = VineCopula::fit_r_vine(&data, &options_prim).expect("prim fit");
@@ -106,7 +78,7 @@ fn wilson_random_weighted_produces_valid_spanning_tree() {
     let options = VineFitOptions {
         tree_algorithm: TreeAlgorithm::RandomWeighted,
         rng_seed: Some(7),
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let fit = VineCopula::fit_r_vine(&data, &options).expect("wilson fit");
     // First tree should have exactly d − 1 = 4 edges.
@@ -134,7 +106,7 @@ fn wilson_random_weighted_prefers_strong_dependence_edges() {
     let base = VineFitOptions {
         family_set: vec![PairCopulaFamily::Gaussian],
         include_rotations: false,
-        ..VineFitOptions::default()
+        ..structure_options()
     };
 
     let mut weighted_hits = 0usize;
@@ -194,12 +166,12 @@ fn wilson_random_unweighted_reproducibility() {
     let options_a = VineFitOptions {
         tree_algorithm: TreeAlgorithm::RandomUnweighted,
         rng_seed: Some(42),
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let options_b = VineFitOptions {
         tree_algorithm: TreeAlgorithm::RandomUnweighted,
         rng_seed: Some(42),
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let fit_a = VineCopula::fit_r_vine(&data, &options_a).expect("wilson fit a");
     let fit_b = VineCopula::fit_r_vine(&data, &options_b).expect("wilson fit b");
@@ -217,7 +189,7 @@ fn spearman_rho_criterion_produces_valid_fit() {
     let data = synthetic_gaussian_sample(5, 400, 37);
     let options = VineFitOptions {
         tree_criterion: TreeCriterion::Rho,
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let fit = VineCopula::fit_r_vine(&data, &options).expect("rho-weighted fit");
     assert!(fit.diagnostics.loglik.is_finite());
@@ -230,7 +202,7 @@ fn hoeffding_criterion_produces_valid_fit() {
     let data = synthetic_gaussian_sample(5, 400, 41);
     let options = VineFitOptions {
         tree_criterion: TreeCriterion::Hoeffding,
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let fit = VineCopula::fit_r_vine(&data, &options).expect("hoeffding-weighted fit");
     assert!(fit.diagnostics.loglik.is_finite());
@@ -243,7 +215,7 @@ fn non_kruskal_rejected_for_c_and_d_vines() {
     let data = synthetic_gaussian_sample(4, 200, 43);
     let options = VineFitOptions {
         tree_algorithm: TreeAlgorithm::Prim,
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let err_c = VineCopula::fit_c_vine(&data, &options).expect_err("C-vine should reject Prim");
     assert!(err_c.to_string().contains("C-vine"), "got {}", err_c);
@@ -261,7 +233,7 @@ fn mbicv_auto_truncation_drops_weak_trees() {
     let options = VineFitOptions {
         criterion: SelectionCriterion::Mbicv { psi0: 0.9 },
         select_trunc_lvl: true,
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let fit = VineCopula::fit_r_vine(&data, &options).expect("mbicv fit");
     let level = fit
@@ -287,7 +259,7 @@ fn mbicv_auto_truncation_respects_user_cap() {
         criterion: SelectionCriterion::Mbicv { psi0: 0.9 },
         select_trunc_lvl: true,
         truncation_level: Some(2),
-        ..VineFitOptions::default()
+        ..structure_options()
     };
     let fit = VineCopula::fit_r_vine(&data, &options).expect("mbicv capped fit");
     let level = fit.model.structure_info().truncation_level.unwrap_or(0);

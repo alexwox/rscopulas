@@ -10,6 +10,25 @@ pub fn tau_to_rho(tau: f64) -> f64 {
     (std::f64::consts::FRAC_PI_2 * tau).sin()
 }
 
+pub fn cdf(u: f64, v: f64, rho: f64) -> Result<f64, CopulaError> {
+    // Plackett's correlation integral, with rho=sin(t) to remove the
+    // endpoint square-root singularity. The integrand is symmetric in u,v.
+    let normal = standard_normal();
+    let x = normal.inverse_cdf(u);
+    let y = normal.inverse_cdf(v);
+    let correction = super::common::integrate_1d(
+        &|t| {
+            let r = t.sin();
+            Ok((-(x * x + y * y - 2.0 * x * y * r) / (2.0 * t.cos().powi(2))).exp())
+        },
+        0.0,
+        rho.asin(),
+        1e-12,
+        18,
+    )? / (2.0 * std::f64::consts::PI);
+    Ok((u * v + correction).clamp((u + v - 1.0).max(0.0), u.min(v)))
+}
+
 pub fn log_pdf(u1: f64, u2: f64, rho: f64) -> Result<f64, CopulaError> {
     if !rho.is_finite() || rho.abs() >= 1.0 {
         return Err(FitError::Failed {

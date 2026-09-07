@@ -1,0 +1,65 @@
+---
+title: "Migrating to 0.3"
+description: "Numerical, API, and stored-model changes from rscopulas 0.2."
+---
+
+Version 0.3 changes several public contracts to correct distributions that were
+previously evaluated or labelled incorrectly. Refit models whose scores will be
+compared with new fits; numerical outputs and selected families may change.
+
+## Stored vines and pair orientation
+
+A pair on an edge with `conditioned=(i, j)` represents `c(U_i, U_j)` in that
+order. Version 0.2 runtime evaluation could reverse asymmetric pairs. Serialized
+vines now include `format_version: 1`; loading an unversioned or unknown version
+raises an error. Adding a version field to an old payload is not a migration.
+
+Refit from the original observations, or explicitly rebuild a model with
+`VineCopula.from_trees` after checking each pair's orientation against the model
+you intend. Keep 0.2 available separately when you need to reproduce old outputs.
+No automatic conversion can infer whether you intended the old fitted score or
+the different distribution its runtime evaluated.
+
+## HAC likelihood and fit options
+
+`log_pdf` now works only for flat HACs with an implemented joint density.
+For nested HACs, use `composite_log_pdf` explicitly. This returns pairwise
+composite scores, which are not a normalized multivariate density.
+
+The default fit method is `composite_mle`; `recursive_mle` remains an alias.
+`tau_init` performs initialization only. `full_mle`, `smle`, and `dmle` raise
+unsupported-method errors. Set `mc_samples=0` (the new default): nonzero values
+are rejected because simulated likelihood is not implemented.
+
+Fit diagnostics now include `likelihood_kind` (`joint` or `composite`). Ordinary
+AIC and BIC are NaN for composite scores. Python's diagnostic constructors
+default the new field to `joint`; Rust struct literals must provide it.
+
+## TLL fitted state
+
+Rust `TllParams` fields are private. Use `method()`, `bandwidth()`,
+`effective_df()`, `grid_min()`, `grid_max()`, and `log_density()` accessors.
+The density grid and derived marginal transforms must remain consistent.
+
+Python `PairCopula.from_spec` accepts the optional `state` keyword. Preserve it
+when copying `.spec`, vine edges, or factor links; scalar parameters alone
+cannot reconstruct TLL. For example, `PairCopula.from_spec(**model.spec)` keeps
+the fitted grid. Refit old TLL models to use the corrected smoothing rule and
+normalized density rather than interpreting their numerical scores as unchanged.
+
+## Factor integration cost and accuracy
+
+All-Gaussian links use an exact Gaussian identity. Other links now refine the
+latent integral by interval. `quadrature_max_nodes` caps integrand evaluations
+per row throughout fitting and inference; `quadrature_rel_tol` sets the
+estimated relative error target. The defaults are 4096 and `1e-7`.
+
+Set `adaptive_quadrature=False` to use exactly `quadrature_nodes` without a
+convergence guarantee. Fixed mode can be useful for bounded-cost exploration;
+compare its result with adaptive evaluation before relying on likelihoods.
+See [factor copulas](/guides/factor-copulas) for both APIs.
+
+Standard errors may be NaN when Hessian checks fail. `converged=False` is
+expected when joint polishing is disabled. Integration failures raise an
+explicit numerical error; NaN and positive infinity are not converted to zero
+density. A valid zero-density row is represented by `-inf`.

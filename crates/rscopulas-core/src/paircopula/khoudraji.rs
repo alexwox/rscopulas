@@ -18,6 +18,18 @@ struct KhoudrajiParts {
     dv_second: f64,
 }
 
+pub fn cdf(u: f64, v: f64, params: &KhoudrajiParams, clip_eps: f64) -> Result<f64, CopulaError> {
+    Ok(params.first.cdf(
+        u.powf(1.0 - params.shape_first),
+        v.powf(1.0 - params.shape_second),
+        clip_eps,
+    )? * params.second.cdf(
+        u.powf(params.shape_first),
+        v.powf(params.shape_second),
+        clip_eps,
+    )?)
+}
+
 pub fn log_pdf(
     u1: f64,
     u2: f64,

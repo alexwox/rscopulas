@@ -1,0 +1,89 @@
+---
+title: "Factor copulas"
+description: "Fit and evaluate a one-factor model with explicit integration controls."
+---
+
+`FactorCopula` links each observed variable to one common uniform latent factor.
+Each link is a bivariate pair copula, so dependence can differ across variables.
+Only the `basic_1f` layout is currently supported.
+
+## Python
+
+```python
+from rscopulas import FactorCopula
+
+model = FactorCopula.from_links([
+    {"family": "gaussian", "parameters": [0.7]},
+    {"family": "clayton", "parameters": [2.0]},
+    {"family": "gumbel", "parameters": [1.8]},
+], quadrature_max_nodes=4096, quadrature_rel_tol=1e-7)
+data = model.sample(200, seed=7)
+log_density = model.log_pdf(data)
+
+fit = FactorCopula.fit(
+    data, family_set=["gaussian", "clayton", "gumbel"],
+    quadrature_max_nodes=4096, quadrature_rel_tol=1e-7,
+)
+assert abs(fit.diagnostics.loglik - fit.model.log_pdf(data).sum()) < 1e-7
+restored = FactorCopula.from_json(fit.model.to_json())
+```
+
+`from_links` accepts the same specifications as `PairCopula.from_spec`, including
+rotations, Khoudraji bases, and TLL `state`. `links` returns those specifications
+in observed-variable order. `dim`, `layout`, and `num_factors` describe the model.
+
+Both `fit` and `from_links` accept these integration options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `quadrature_nodes` | `25` | Minimum work in adaptive mode; exact node count in fixed mode. |
+| `adaptive_quadrature` | `True` | Refine intervals by estimated integration error. |
+| `quadrature_max_nodes` | `4096` | Maximum integrand evaluations per row, including discarded coarse rules. |
+| `quadrature_rel_tol` | `1e-7` | Target estimated relative error in adaptive mode. |
+
+These settings are stored and serialized with the model. An exhausted adaptive
+budget raises a numerical error with the available remedies. The budget applies
+to each density evaluation; the complete fit evaluates many candidate models.
+
+For fixed work, pass `adaptive_quadrature=False, quadrature_nodes=100`. This is an
+approximation without an accuracy guarantee; tail observations can require more
+nodes. Gaussian-only models always use the exact identity and need no quadrature.
+
+## Fitting and diagnostics
+
+Fitting starts from a normal-score pseudo-latent, fits each link, and optionally
+refines and jointly polishes the model. `refine_iterations` defaults to 2.
+`joint_polish_cycles` defaults to 5; setting it to 0 disables polishing.
+`joint_polish_rel_tol` controls when a polish sweep stops improving the score.
+Candidate family selection uses `criterion`, and rotations can be disabled with
+`include_rotations=False`.
+
+Diagnostics use the returned model's joint likelihood and its stored integration
+policy. `n_iter` counts performed stages and polish sweeps. `converged` reports
+the polish stopping criterion and is false when polishing is disabled.
+`std_errors` contains delta-method standard errors for polished parameters; NaN
+indicates an unstable or non-positive-definite information estimate.
+
+## Rust
+
+```rust
+use rscopulas::{FactorCopula, FactorQuadrature, PairCopulaFamily,
+    PairCopulaParams, PairCopulaSpec, Rotation};
+
+let links = vec![PairCopulaSpec {
+    family: PairCopulaFamily::Clayton,
+    params: PairCopulaParams::One(2.0),
+    rotation: Rotation::R0,
+}; 3];
+let model = FactorCopula::basic_1f(links, 25).unwrap()
+    .with_quadrature(FactorQuadrature {
+        adaptive: true,
+        max_nodes: 2048,
+        rel_tol: 1e-6,
+    }).unwrap();
+assert_eq!(model.links().len(), 3);
+```
+
+Set `FactorFitOptions.quadrature` to apply the same policy during fitting. Call
+`model.quadrature()` to inspect it. The standard `CopulaModel` trait supplies
+`sample` and `log_pdf`; serde preserves links and integration settings.

@@ -6,6 +6,7 @@ on:
       - main
       - master
   pull_request:
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,7 +38,7 @@ jobs:
         with:
           rustflags: ""
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --release --all-features
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
         run: cargo bench --no-run
@@ -58,7 +59,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest numpy
+        run: python -m pip install --upgrade pip pytest numpy matplotlib
       - name: Build and install rscopulas
         shell: bash
         run: python -m pip install . --verbose --config-settings=build-args="--profile release"

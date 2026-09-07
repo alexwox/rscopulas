@@ -43,7 +43,7 @@ primitives are documented in [vines.md](vines.md#conditional-sampling).
 
 ## Hierarchical Archimedean copulas (HAC)
 
-`HierarchicalArchimedeanCopula.from_tree(...)` builds a nested Archimedean model from a nested dict (see tests for shape). **Density** uses an exact exchangeable path when the tree is a single Archimedean fan; nested trees use a composite pair-copula evaluation.
+`HierarchicalArchimedeanCopula.from_tree(...)` builds a nested Archimedean model from a nested dict (see tests for shape). **Density** uses an exact exchangeable path when the tree is a single Archimedean fan; nested trees require explicit `composite_log_pdf(data)` scoring. Their `log_pdf(data)` raises an unsupported-density error.
 
 **Sampling:** nested **same-family Gumbel** clusters and **fully exchangeable** Archimedean trees are the scenarios validated for Monte Carlo use. **Mixed-family** nesting (different Archimedean family on a child node than on its parent) uses a numerical frailty sampler that can **degenerate** (e.g. coordinates near 1); do not rely on `sample()` for those trees until the implementation is improved.
 

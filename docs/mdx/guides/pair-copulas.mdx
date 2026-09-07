@@ -40,12 +40,30 @@ Rotations extend asymmetric families — Clayton and Gumbel — to capture diffe
 | Rotation string | Effect |
 |---|---|
 | `"R0"` | Default; no rotation |
-| `"R90"` | 90° rotation; lower tail becomes right tail |
+| `"R90"` | Reflect first margin: evaluate the base at `(1-u, v)` |
 | `"R180"` | 180° rotation; reverses the dependence direction |
-| `"R270"` | 270° rotation; reflects across the other diagonal |
+| `"R270"` | Reflect second margin: evaluate the base at `(u, 1-v)` |
 
 <Tip>
-Use `"R90"` or `"R270"` with Clayton to model upper tail dependence, which the unrotated Clayton family cannot capture. Gumbel has upper tail dependence by default; rotate it to capture lower tail dependence instead.
+Use `"R180"` with Clayton for upper-right tail dependence. `"R90"` and `"R270"`
+reflect one margin and model negative dependence. Rotate Gumbel by `"R180"`
+for lower-left tail dependence.
+
+### Tawn rotations and R family codes
+
+Here `R90` replaces the first input by `1-u`, and `R270` replaces the second
+input by `1-v`. VineCopula's negative-rotation Tawn codes swap the Tawn type:
+
+| rscopulas specification | VineCopula family code |
+| --- | --- |
+| `tawn1`, `R0` / `R180` | `104` / `114` |
+| `tawn2`, `R0` / `R180` | `204` / `214` |
+| `tawn1`, `R90` / `R270` | `224` / `234` |
+| `tawn2`, `R90` / `R270` | `124` / `134` |
+
+rscopulas keeps positive theta under rotation; VineCopula requires negative
+`par` for these `R90` and `R270` codes. Check the coordinate transformation
+when exchanging specifications rather than copying numeric codes directly.
 </Tip>
 
 ## Evaluating log-density and h-functions
@@ -82,7 +100,7 @@ All input arrays must be `dtype=np.float64` and contain values **strictly** in `
 In Rust, pair copulas are represented as `PairCopulaSpec` values. Build one directly and call `log_pdf`:
 
 ```rust
-use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = PairCopulaSpec {

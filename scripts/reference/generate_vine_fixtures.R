@@ -119,7 +119,7 @@ trees_to_rvine_parts <- function(trees, dim) {
     w <- first$conditioned[[1]]
     Matrix[k, k] <- w
     Matrix[k + 1, k] <- first$conditioned[[2]]
-    family[k + 1, k] <- first$family
+    family[k + 1, k] <- swap_family_code(first$family)
     par[k + 1, k] <- first$par
     par2[k + 1, k] <- first$par2
 
@@ -142,7 +142,7 @@ trees_to_rvine_parts <- function(trees, dim) {
         if (edge$conditioned[[1]] == w) {
           found_idx <- edge_idx
           found_value <- edge$conditioned[[2]]
-          found_family <- edge$family
+          found_family <- swap_family_code(edge$family)
           found_par <- edge$par
           found_par2 <- edge$par2
           break
@@ -150,7 +150,7 @@ trees_to_rvine_parts <- function(trees, dim) {
         if (edge$conditioned[[2]] == w) {
           found_idx <- edge_idx
           found_value <- edge$conditioned[[1]]
-          found_family <- swap_family_code(edge$family)
+          found_family <- edge$family
           found_par <- edge$par
           found_par2 <- edge$par2
           break

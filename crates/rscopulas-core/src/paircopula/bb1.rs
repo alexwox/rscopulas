@@ -1,4 +1,18 @@
 use crate::errors::{CopulaError, FitError};
+use crate::math::{log1mexp, logaddexp, softplus};
+
+fn terms(u: f64, v: f64, theta: f64, delta: f64) -> (f64, f64, f64, f64) {
+    terms_from_logs(u.ln(), v.ln(), theta, delta)
+}
+
+fn terms_from_logs(u: f64, v: f64, theta: f64, delta: f64) -> (f64, f64, f64, f64) {
+    let a = -theta * u;
+    let b = -theta * v;
+    let x = a + log1mexp(-a);
+    let y = b + log1mexp(-b);
+    let s = logaddexp(delta * x, delta * y);
+    (x, y, s, softplus(s / delta))
+}
 
 // BB1 bivariate copula (Clayton–Gumbel blend).
 // Parameters: θ > 0, δ ≥ 1.
@@ -48,18 +62,7 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaEr
         }
         .into());
     }
-    let x = u1.powf(-theta) - 1.0;
-    let y = u2.powf(-theta) - 1.0;
-    let s = x.powf(delta) + y.powf(delta);
-    let a = s.powf(1.0 / delta);
-    let bracket = theta * (delta - 1.0) + a * (theta * delta + 1.0);
-    Ok((1.0 / delta - 2.0) * s.ln()
-        + (-1.0 / theta - 2.0) * (1.0 + a).ln()
-        + bracket.ln()
-        + (-theta - 1.0) * u1.ln()
-        + (-theta - 1.0) * u2.ln()
-        + (delta - 1.0) * x.ln()
-        + (delta - 1.0) * y.ln())
+    Ok(log_pdf_from_logs(u1.ln(), u2.ln(), theta, delta))
 }
 
 pub fn cond_first_given_second(
@@ -70,14 +73,12 @@ pub fn cond_first_given_second(
 ) -> Result<f64, CopulaError> {
     // h_{1|2}(u1|u2) = ∂C/∂u2
     //   = (1 + a)^(-1/θ - 1) · s^(1/δ - 1) · u2^(-θ-1) · y^(δ-1)
-    let x = u1.powf(-theta) - 1.0;
-    let y = u2.powf(-theta) - 1.0;
-    let s = x.powf(delta) + y.powf(delta);
-    let a = s.powf(1.0 / delta);
-    Ok((1.0 + a).powf(-1.0 / theta - 1.0)
-        * s.powf(1.0 / delta - 1.0)
-        * u2.powf(-theta - 1.0)
-        * y.powf(delta - 1.0))
+    let (_, y, s, log1pa) = terms(u1, u2, theta, delta);
+    Ok(
+        ((-1.0 / theta - 1.0) * log1pa + (1.0 / delta - 1.0) * s - (theta + 1.0) * u2.ln()
+            + (delta - 1.0) * y)
+            .exp(),
+    )
 }
 
 pub fn cond_second_given_first(
@@ -86,14 +87,7 @@ pub fn cond_second_given_first(
     theta: f64,
     delta: f64,
 ) -> Result<f64, CopulaError> {
-    let x = u1.powf(-theta) - 1.0;
-    let y = u2.powf(-theta) - 1.0;
-    let s = x.powf(delta) + y.powf(delta);
-    let a = s.powf(1.0 / delta);
-    Ok((1.0 + a).powf(-1.0 / theta - 1.0)
-        * s.powf(1.0 / delta - 1.0)
-        * u1.powf(-theta - 1.0)
-        * x.powf(delta - 1.0))
+    cond_first_given_second(u2, u1, theta, delta)
 }
 
 pub fn inv_first_given_second(
@@ -140,9 +134,16 @@ pub fn inv_second_given_first(
 }
 
 pub fn cdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
-    let x = u1.powf(-theta) - 1.0;
-    let y = u2.powf(-theta) - 1.0;
-    let s = x.powf(delta) + y.powf(delta);
-    let a = s.powf(1.0 / delta);
-    Ok((1.0 + a).powf(-1.0 / theta).clamp(0.0, 1.0))
+    let (_, _, _, log1pa) = terms(u1, u2, theta, delta);
+    Ok((-log1pa / theta).exp())
+}
+
+pub(super) fn log_pdf_from_logs(u: f64, v: f64, theta: f64, delta: f64) -> f64 {
+    let (x, y, s, log1pa) = terms_from_logs(u, v, theta, delta);
+    let bracket = logaddexp(
+        theta.ln() + (delta - 1.0).ln(),
+        s / delta + (theta * delta).ln_1p(),
+    );
+    (1.0 / delta - 2.0) * s + (-1.0 / theta - 2.0) * log1pa + bracket - (theta + 1.0) * (u + v)
+        + (delta - 1.0) * (x + y)
 }

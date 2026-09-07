@@ -39,6 +39,7 @@ class FitDiagnostics:
     bic: float
     converged: bool
     n_iter: int
+    likelihood_kind: str = "joint"
 ```
 
 <ResponseField name="loglik" type="float">
@@ -149,3 +150,13 @@ except ModelFitError as e:
 | `NumericalError` | A numerical operation (log, inversion, etc.) produces an invalid result such as `NaN` or `Inf`. |
 | `BackendError` | An internal error in the Rust backend that does not fall into the categories above. |
 | `InternalError` | An internal Rust panic was caught at the Python boundary. This indicates a bug in `rscopulas` and should be reported upstream. |
+
+## Objective type
+
+`diagnostics.likelihood_kind` is `"joint"` for ordinary joint likelihoods.
+For nested HAC fits it is `"composite"`: `loglik` is a pairwise score and
+ordinary `aic`/`bic` are NaN. Nested HAC joint density is not implemented;
+call `model.composite_log_pdf(data)` to evaluate the score explicitly.
+Factor and HAC iteration counts record completed work. A false `converged`
+flag indicates that the stopping condition was not reached (or factor
+joint polishing was disabled).

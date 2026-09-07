@@ -1,33 +1,21 @@
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, Normal};
+use std::sync::{Arc, OnceLock};
 
 use crate::errors::{CopulaError, FitError};
 
 // TLL (Transformation Local Likelihood) nonparametric bivariate copula.
 //
-// Implementation notes:
-//   * Only the *constant*-order variant (TLL0, equivalently Gaussian-kernel
-//     density estimation on Φ⁻¹-transformed inputs) is implemented in this
-//     phase. `TllOrder::Linear` and `TllOrder::Quadratic` are part of the
-//     type surface for future local-polynomial extensions but currently
-//     return an error from `fit`.
-//   * The density is stored as a 30×30 grid of log-density values on the
-//     z-scale, covering z ∈ [-3.5, 3.5]² — which captures ≈ 99.95% of the
-//     standard-normal mass on each axis. Evaluation uses bilinear
-//     interpolation in log-space.
-//   * h-functions integrate the interpolated density via Simpson's rule on
-//     100 nodes, then renormalise by the marginal integral so h(1|v) = 1 is
-//     approximately satisfied even when the KDE's marginal integral drifts.
-//   * Inverse h-functions: 90-iteration bisection (same as Gumbel/Joe).
-//   * Rotations: Tll is rotationless — only Rotation::R0 is supported. The
-//     dispatch layer keeps Tll in its own single-rotation bucket.
+// The fitted normal-scale KDE is converted to a positive bilinear density
+// on [0,1]^2, normalized, then transformed by its own marginal CDFs.
+// Density, CDF, conditionals, and inverse conditionals all use this same
+// distribution, including both tails. Derived grids are cached immutably.
 
 pub(crate) const GRID_SIZE: usize = 30;
 const GRID_MIN: f64 = -3.5;
 const GRID_MAX: f64 = 3.5;
 const GRID_CLIP: f64 = 1e-12;
-const SIMPSON_NODES: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TllOrder {
@@ -36,15 +24,110 @@ pub enum TllOrder {
     Quadratic,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TllParams {
-    pub method: TllOrder,
-    pub grid_min: f64,
-    pub grid_max: f64,
+    pub(crate) method: TllOrder,
+    pub(crate) grid_min: f64,
+    pub(crate) grid_max: f64,
     /// log-density values on the z-scale grid (shape `GRID_SIZE × GRID_SIZE`).
-    pub log_density: Array2<f64>,
-    pub bandwidth: f64,
-    pub effective_df: f64,
+    pub(crate) log_density: Array2<f64>,
+    pub(crate) bandwidth: f64,
+    pub(crate) effective_df: f64,
+    #[serde(skip)]
+    normalized: OnceLock<Arc<CopulaGrid>>,
+}
+
+impl PartialEq for TllParams {
+    fn eq(&self, other: &Self) -> bool {
+        self.method == other.method
+            && self.grid_min == other.grid_min
+            && self.grid_max == other.grid_max
+            && self.log_density == other.log_density
+            && self.bandwidth == other.bandwidth
+            && self.effective_df == other.effective_df
+    }
+}
+
+impl<'de> Deserialize<'de> for TllParams {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct State {
+            method: TllOrder,
+            grid_min: f64,
+            grid_max: f64,
+            log_density: Array2<f64>,
+            bandwidth: f64,
+            effective_df: f64,
+        }
+        let s = State::deserialize(deserializer)?;
+        let value = Self {
+            method: s.method,
+            grid_min: s.grid_min,
+            grid_max: s.grid_max,
+            log_density: s.log_density,
+            bandwidth: s.bandwidth,
+            effective_df: s.effective_df,
+            normalized: OnceLock::new(),
+        };
+        value.validate().map_err(serde::de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl TllParams {
+    pub fn method(&self) -> TllOrder {
+        self.method
+    }
+    pub fn grid_min(&self) -> f64 {
+        self.grid_min
+    }
+    pub fn grid_max(&self) -> f64 {
+        self.grid_max
+    }
+    pub fn log_density(&self) -> &Array2<f64> {
+        &self.log_density
+    }
+    pub fn bandwidth(&self) -> f64 {
+        self.bandwidth
+    }
+    pub fn effective_df(&self) -> f64 {
+        self.effective_df
+    }
+
+    pub fn validate(&self) -> Result<(), CopulaError> {
+        if !self.grid_min.is_finite()
+            || !self.grid_max.is_finite()
+            || self.grid_min < -8.0
+            || self.grid_max > 8.0
+            || self.grid_min >= self.grid_max
+            || self.log_density.dim() != (GRID_SIZE, GRID_SIZE)
+            || self.log_density.iter().any(|x| !x.is_finite())
+            || !self.bandwidth.is_finite()
+            || self.bandwidth <= 0.0
+            || !self.effective_df.is_finite()
+            || self.effective_df < 0.0
+        {
+            return Err(FitError::Failed {
+                reason: "invalid TLL grid state",
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn transpose(&mut self) {
+        self.log_density = self.log_density.t().to_owned();
+        self.normalized.take();
+    }
+
+    fn grid(&self) -> &CopulaGrid {
+        self.normalized
+            .get_or_init(|| Arc::new(CopulaGrid::new(self)))
+    }
+
+    pub(crate) fn second_margin_knots(&self) -> &[f64] {
+        &self.grid().cdfs[1]
+    }
 }
 
 fn standard_normal() -> Normal {
@@ -82,6 +165,9 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
         }
         .into());
     }
+    for &u in u1.iter().chain(u2) {
+        crate::data::validate_probability(u)?;
+    }
 
     let normal = standard_normal();
     let z1: Vec<f64> = u1
@@ -101,15 +187,17 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
     // inputs drift from unit variance.
     let exponent = match method {
         TllOrder::Constant => -1.0 / 6.0, // classic Silverman 1.0·n^{-1/6} (p=0 in our convention)
-        TllOrder::Linear => -1.0 / 3.0,   // p=1, so -1/(2p+1) = -1/3
-        TllOrder::Quadratic => -1.0 / 5.0, // p=2, so -1/5
+        // vinecopulib specifies covariance bandwidth B. Our scalar is its
+        // square root h, so both the exponent and multiplier must be rooted.
+        TllOrder::Linear => -1.0 / 6.0,
+        TllOrder::Quadratic => -1.0 / 10.0,
     };
     let scale = match method {
         TllOrder::Constant => 1.0,
         // vinecopulib's `1.5` multiplier for local-polynomial orders; keeps
         // enough smoothing to counter the extra bias-variance that higher-
         // order corrections would otherwise introduce.
-        TllOrder::Linear | TllOrder::Quadratic => 1.5,
+        TllOrder::Linear | TllOrder::Quadratic => 1.5_f64.sqrt(),
     };
     let bandwidth = scale * sigma.max(1e-3) * n.powf(exponent);
 
@@ -194,16 +282,13 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
                         }
                     }
                     // `b = B · b` — remap into original-parameter scale.
-                    let b_prime = [
-                        b_mat[0][0] * b_decorr[0],
-                        b_mat[1][1] * b_decorr[1],
-                    ];
+                    let b_prime = [b_mat[0][0] * b_decorr[0], b_mat[1][1] * b_decorr[1]];
                     // S_inv = B · zz_cov · B − b' · b'ᵀ.
                     let mut s_inv = [[0.0_f64; 2]; 2];
                     for a in 0..2 {
                         for b in 0..2 {
-                            s_inv[a][b] = b_mat[a][a] * zz_cov[a][b] * b_mat[b][b]
-                                - b_prime[a] * b_prime[b];
+                            s_inv[a][b] =
+                                b_mat[a][a] * zz_cov[a][b] * b_mat[b][b] - b_prime[a] * b_prime[b];
                         }
                     }
                     let fallback_to_linear = |res_log: f64| -> f64 {
@@ -264,6 +349,7 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
         log_density: infl_grid.mapv(f64::ln),
         bandwidth,
         effective_df: 0.0,
+        normalized: OnceLock::new(),
     };
     for k in 0..z1.len() {
         // Re-use the bilinear log-density helper against the (already
@@ -275,6 +361,7 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
     let effective_df = infl_sum.max(1.0).min(n);
 
     Ok(TllParams {
+        normalized: OnceLock::new(),
         method,
         grid_min: GRID_MIN,
         grid_max: GRID_MAX,
@@ -335,7 +422,11 @@ fn local_gram_m_inv_00(
         match solve_symmetric(&mut m.clone(), &mut b, basis_size) {
             Some(sol) => sol[0].max(0.0),
             None => {
-                if m[0] > 1e-300 { 1.0 / m[0] } else { 1e-300 }
+                if m[0] > 1e-300 {
+                    1.0 / m[0]
+                } else {
+                    1e-300
+                }
             }
         }
     }
@@ -474,137 +565,212 @@ fn bilinear_log_density(params: &TllParams, zx: f64, zy: f64) -> f64 {
     g0 * (1.0 - ax) + g1 * ax
 }
 
-pub fn log_pdf(u1: f64, u2: f64, params: &TllParams) -> Result<f64, CopulaError> {
-    let normal = standard_normal();
-    let zx = normal.inverse_cdf(u1.clamp(GRID_CLIP, 1.0 - GRID_CLIP));
-    let zy = normal.inverse_cdf(u2.clamp(GRID_CLIP, 1.0 - GRID_CLIP));
-    // log c(u, v) = log f(z1, z2) − log φ(z1) − log φ(z2).
-    Ok(bilinear_log_density(params, zx, zy) - log_normal_pdf(zx) - log_normal_pdf(zy))
+/// A positive bilinear density on [0,1]^2, normalized and transformed
+/// through its own marginal CDFs. Density, CDF and h-functions therefore
+/// belong to one copula, including the intervals outside the fitted z grid.
+#[derive(Debug, Clone)]
+struct CopulaGrid {
+    knots: Vec<f64>,
+    density: Array2<f64>,
+    margins: [Vec<f64>; 2],
+    cdfs: [Vec<f64>; 2],
 }
 
-fn pdf(u1: f64, u2: f64, params: &TllParams) -> f64 {
-    log_pdf(u1, u2, params).map(f64::exp).unwrap_or(0.0)
+impl CopulaGrid {
+    fn new(params: &TllParams) -> Self {
+        let normal = standard_normal();
+        let z: Vec<f64> = (0..GRID_SIZE)
+            .map(|i| params.grid_min + i as f64 * grid_step(params))
+            .collect();
+        let mut knots = vec![0.0];
+        knots.extend(z.iter().map(|&x| normal.cdf(x)));
+        knots.push(1.0);
+        let n = knots.len();
+        let mut density = Array2::zeros((n, n));
+        for i in 0..n {
+            for j in 0..n {
+                let a = i.saturating_sub(1).min(GRID_SIZE - 1);
+                let b = j.saturating_sub(1).min(GRID_SIZE - 1);
+                density[(i, j)] =
+                    params.log_density[(a, b)] - log_normal_pdf(z[a]) - log_normal_pdf(z[b]);
+            }
+        }
+        let max = density.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        density.mapv_inplace(|x| (x - max).max(-690.0).exp());
+        let weights = hat_integrals(&knots, 1.0);
+        let mut mass = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                mass += density[(i, j)] * weights[i] * weights[j];
+            }
+        }
+        density /= mass;
+        let mut margins = [vec![0.0; n], vec![0.0; n]];
+        for i in 0..n {
+            for j in 0..n {
+                margins[0][i] += density[(i, j)] * weights[j];
+                margins[1][j] += density[(i, j)] * weights[i];
+            }
+        }
+        let cdfs = [
+            prefix_integrals(&knots, &margins[0]),
+            prefix_integrals(&knots, &margins[1]),
+        ];
+        Self {
+            knots,
+            density,
+            margins,
+            cdfs,
+        }
+    }
+
+    fn inverse_margin(&self, axis: usize, p: f64) -> (usize, f64) {
+        invert_integral(&self.knots, &self.margins[axis], &self.cdfs[axis], p)
+    }
+
+    fn slice(&self, axis: usize, cell: usize, fraction: f64) -> Vec<f64> {
+        (0..self.knots.len())
+            .map(|k| {
+                if axis == 0 {
+                    lerp(
+                        self.density[(k, cell)],
+                        self.density[(k, cell + 1)],
+                        fraction,
+                    )
+                } else {
+                    lerp(
+                        self.density[(cell, k)],
+                        self.density[(cell + 1, k)],
+                        fraction,
+                    )
+                }
+            })
+            .collect()
+    }
+
+    fn conditional(&self, axis: usize, u: f64, v: f64) -> f64 {
+        let (i, a) = self.inverse_margin(axis, u);
+        let (j, b) = self.inverse_margin(1 - axis, v);
+        let slice = self.slice(axis, j, b);
+        let prefix = prefix_integrals(&self.knots, &slice);
+        partial_integral(&self.knots, &slice, &prefix, i, a) / prefix[prefix.len() - 1]
+    }
+
+    fn inverse_conditional(&self, axis: usize, p: f64, v: f64) -> f64 {
+        let (j, b) = self.inverse_margin(1 - axis, v);
+        let slice = self.slice(axis, j, b);
+        let prefix = prefix_integrals(&self.knots, &slice);
+        let (i, a) = invert_integral(&self.knots, &slice, &prefix, p * prefix[prefix.len() - 1]);
+        partial_integral(&self.knots, &self.margins[axis], &self.cdfs[axis], i, a)
+    }
 }
 
-/// Simpson integration of `f` over `[a, b]` using `n` intervals (forced even).
-fn simpson<F>(f: F, a: f64, b: f64, n: usize) -> f64
-where
-    F: Fn(f64) -> f64,
-{
-    if b <= a {
-        return 0.0;
-    }
-    let n = n.max(2) & !1;
-    let h = (b - a) / n as f64;
-    let mut sum = f(a) + f(b);
-    for k in 1..n {
-        let x = a + k as f64 * h;
-        sum += if k % 2 == 0 { 2.0 * f(x) } else { 4.0 * f(x) };
-    }
-    sum * h / 3.0
+fn lerp(a: f64, b: f64, fraction: f64) -> f64 {
+    a * (1.0 - fraction) + b * fraction
 }
 
-pub fn cond_first_given_second(
-    u1: f64,
-    u2: f64,
-    params: &TllParams,
-) -> Result<f64, CopulaError> {
-    // h_{1|2}(u | v) = P(U ≤ u | V = v). Evaluated on the z-scale (where the
-    // KDE density f is bounded and smooth) rather than on the copula scale
-    // (where c(u, v) has an integrable spike near the corners from the 1/φ
-    // Jacobian). Change of variables u → z = Φ⁻¹(u):
-    //   h_{1|2}(u | v) = ∫_{-∞}^{z_u} f(z, z_v) dz  /  ∫_{-∞}^{∞} f(z, z_v) dz.
-    // The denominator is the z-scale marginal density at z_v; numerically the
-    // ratio stays in [0, 1] and reaches 1 at the grid boundary exactly.
-    let normal = standard_normal();
-    let zv = normal.inverse_cdf(u2.clamp(GRID_CLIP, 1.0 - GRID_CLIP));
-    let zu = normal.inverse_cdf(u1.clamp(GRID_CLIP, 1.0 - GRID_CLIP));
-    let lower = params.grid_min;
-    let upper = params.grid_max;
-    let integrand = |z: f64| bilinear_log_density(params, z, zv).exp();
-    let total = simpson(integrand, lower, upper, SIMPSON_NODES);
-    if total <= 0.0 {
-        return Ok(0.5);
+fn prefix_integrals(knots: &[f64], heights: &[f64]) -> Vec<f64> {
+    let mut out = vec![0.0; knots.len()];
+    for i in 0..knots.len() - 1 {
+        out[i + 1] = out[i] + 0.5 * (heights[i] + heights[i + 1]) * (knots[i + 1] - knots[i]);
     }
-    let zu_bounded = zu.clamp(lower, upper);
-    let partial = simpson(integrand, lower, zu_bounded, SIMPSON_NODES);
-    Ok((partial / total).clamp(0.0, 1.0))
+    out
 }
 
-pub fn cond_second_given_first(
-    u1: f64,
-    u2: f64,
-    params: &TllParams,
-) -> Result<f64, CopulaError> {
-    let normal = standard_normal();
-    let zu = normal.inverse_cdf(u1.clamp(GRID_CLIP, 1.0 - GRID_CLIP));
-    let zv = normal.inverse_cdf(u2.clamp(GRID_CLIP, 1.0 - GRID_CLIP));
-    let lower = params.grid_min;
-    let upper = params.grid_max;
-    let integrand = |z: f64| bilinear_log_density(params, zu, z).exp();
-    let total = simpson(integrand, lower, upper, SIMPSON_NODES);
-    if total <= 0.0 {
-        return Ok(0.5);
+fn partial_integral(knots: &[f64], heights: &[f64], prefix: &[f64], i: usize, a: f64) -> f64 {
+    prefix[i]
+        + (knots[i + 1] - knots[i]) * a * (heights[i] + 0.5 * a * (heights[i + 1] - heights[i]))
+}
+
+fn invert_integral(knots: &[f64], heights: &[f64], prefix: &[f64], p: f64) -> (usize, f64) {
+    let i = prefix
+        .partition_point(|&c| c <= p)
+        .saturating_sub(1)
+        .min(knots.len() - 2);
+    let scale = heights[i].max(heights[i + 1]);
+    let left = heights[i] / scale;
+    let slope = heights[i + 1] / scale - left;
+    let target = ((p - prefix[i]) / (knots[i + 1] - knots[i]) / scale).max(0.0);
+    let denominator = left + (left * left + 2.0 * slope * target).max(0.0).sqrt();
+    let a = if denominator > 0.0 {
+        2.0 * target / denominator
+    } else {
+        0.0
+    };
+    (i, a.clamp(0.0, 1.0))
+}
+
+fn hat_integrals(knots: &[f64], x: f64) -> Vec<f64> {
+    let mut out = vec![0.0; knots.len()];
+    for i in 0..knots.len() - 1 {
+        let width = knots[i + 1] - knots[i];
+        let fraction = ((x - knots[i]) / width).clamp(0.0, 1.0);
+        out[i] += width * (fraction - 0.5 * fraction * fraction);
+        out[i + 1] += width * 0.5 * fraction * fraction;
     }
-    let zv_bounded = zv.clamp(lower, upper);
-    let partial = simpson(integrand, lower, zv_bounded, SIMPSON_NODES);
-    Ok((partial / total).clamp(0.0, 1.0))
+    out
+}
+
+pub fn log_pdf(u: f64, v: f64, params: &TllParams) -> Result<f64, CopulaError> {
+    let grid = params.grid();
+    let (i, a) = grid.inverse_margin(0, u);
+    let (j, b) = grid.inverse_margin(1, v);
+    let density = lerp(
+        lerp(grid.density[(i, j)], grid.density[(i + 1, j)], a),
+        lerp(grid.density[(i, j + 1)], grid.density[(i + 1, j + 1)], a),
+        b,
+    );
+    Ok(density.ln()
+        - lerp(grid.margins[0][i], grid.margins[0][i + 1], a).ln()
+        - lerp(grid.margins[1][j], grid.margins[1][j + 1], b).ln())
+}
+
+pub fn cond_first_given_second(u: f64, v: f64, params: &TllParams) -> Result<f64, CopulaError> {
+    Ok(params.grid().conditional(0, u, v))
+}
+
+pub fn cond_second_given_first(u: f64, v: f64, params: &TllParams) -> Result<f64, CopulaError> {
+    Ok(params.grid().conditional(1, v, u))
 }
 
 pub fn inv_first_given_second(
     p: f64,
-    u2: f64,
+    v: f64,
     params: &TllParams,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_first_given_second(mid, u2, params)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    Ok(params
+        .grid()
+        .inverse_conditional(0, p, v)
+        .clamp(clip_eps, 1.0 - clip_eps))
 }
 
 pub fn inv_second_given_first(
-    u1: f64,
+    u: f64,
     p: f64,
     params: &TllParams,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_second_given_first(u1, mid, params)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    Ok(params
+        .grid()
+        .inverse_conditional(1, p, u)
+        .clamp(clip_eps, 1.0 - clip_eps))
 }
 
-pub fn cdf(u1: f64, u2: f64, params: &TllParams) -> Result<f64, CopulaError> {
-    // C(u, v) = ∫_0^u h_{2|1}(v | s) · 1 ds is the identity we want, but
-    // computing it that way requires another nested integral. Instead,
-    // integrate the marginal conditional: C(u, v) ≈ ∫_0^u h_{1|2}(s | v)
-    // ds — but again nested. The pragmatic choice is to compute C by
-    // returning u·v as a placeholder when the density hasn't been fit yet;
-    // a proper implementation would use a 2-D integral. For the current
-    // test surface (density, h, inverse h) we don't need CDF, so we return
-    // a Simpson-based 1-D approximation that is monotone but not exact.
-    let lower = GRID_CLIP;
-    let upper = 1.0 - GRID_CLIP;
-    let integrand = |s: f64| {
-        let h_val = cond_second_given_first(s, u2, params).unwrap_or(0.0);
-        h_val.max(0.0)
-    };
-    let value = simpson(integrand, lower, u1.clamp(lower, upper), SIMPSON_NODES);
+pub fn cdf(u: f64, v: f64, params: &TllParams) -> Result<f64, CopulaError> {
+    let g = params.grid();
+    let (i, a) = g.inverse_margin(0, u);
+    let (j, b) = g.inverse_margin(1, v);
+    let x = lerp(g.knots[i], g.knots[i + 1], a);
+    let y = lerp(g.knots[j], g.knots[j + 1], b);
+    let wx = hat_integrals(&g.knots, x);
+    let wy = hat_integrals(&g.knots, y);
+    let mut value = 0.0;
+    for (i, x_weight) in wx.iter().enumerate() {
+        for (j, y_weight) in wy.iter().enumerate() {
+            value += g.density[(i, j)] * x_weight * y_weight;
+        }
+    }
     Ok(value.clamp(0.0, 1.0))
 }
 

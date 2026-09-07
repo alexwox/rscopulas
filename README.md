@@ -149,7 +149,7 @@ The sections below mirror the quick starts with fuller snippets (R-vine, pair co
 
 ```rust
 use ndarray::array;
-use rscopulas_core::{
+use rscopulas::{
     PairCopulaFamily, PseudoObs, SelectionCriterion, VineCopula, VineFitOptions,
 };
 
@@ -192,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use ndarray::array;
-use rscopulas_core::VineCopula;
+use rscopulas::VineCopula;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let correlation = array![
@@ -209,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Rust — Pair copula and Khoudraji
 
 ```rust
-use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = PairCopulaSpec {

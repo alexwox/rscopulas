@@ -88,7 +88,14 @@ def plot_density(
     axis = np.linspace(0.01, 0.99, grid_size, dtype=np.float64)
     u1, u2 = np.meshgrid(axis, axis)
     points = np.column_stack([u1.ravel(), u2.ravel()])
-    density = np.exp(model.log_pdf(points, clip_eps=clip_eps)).reshape(grid_size, grid_size)
+    from ._models import PairCopula
+
+    log_density = (
+        model.log_pdf(points[:, 0], points[:, 1], clip_eps=clip_eps)
+        if isinstance(model, PairCopula)
+        else model.log_pdf(points, clip_eps=clip_eps)
+    )
+    density = np.exp(log_density).reshape(grid_size, grid_size)
 
     fig, ax = _resolve_ax(ax)
     filled = ax.contourf(u1, u2, density, levels=max(int(levels), 2), cmap=cmap)

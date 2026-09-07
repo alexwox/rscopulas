@@ -11,11 +11,12 @@ use pyo3::{
 use rand::{SeedableRng, random, rngs::StdRng};
 use rscopulas::{
     ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FactorCopula,
-    FactorFitOptions, FactorFitResult, FactorLayout, FitDiagnostics, FitOptions, FrankCopula,
-    GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions, HacNode,
-    HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams, PairCopulaFamily,
-    PairCopulaParams, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, TreeAlgorithm,
-    TreeCriterion, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
+    FactorFitOptions, FactorFitResult, FactorLayout, FactorQuadrature, FitDiagnostics, FitOptions,
+    FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions,
+    HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams,
+    PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions, SelectionCriterion,
+    StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge, VineFitOptions,
+    VineStructureKind, VineTree,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -185,11 +186,13 @@ fn pair_spec_from_values(
     parameters: Vec<f64>,
 ) -> PyResult<rscopulas::PairCopulaSpec> {
     let family = pair_family_from_name(family)?;
-    Ok(rscopulas::PairCopulaSpec {
+    let spec = rscopulas::PairCopulaSpec {
         family,
         rotation: rotation_from_name(rotation)?,
         params: pair_params_from_values(family, parameters)?,
-    })
+    };
+    spec.validate().map_err(to_pyerr)?;
+    Ok(spec)
 }
 
 fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas::PairCopulaSpec> {
@@ -203,6 +206,25 @@ fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas::PairC
         .transpose()?
         .unwrap_or_else(|| "R0".to_string());
     let parsed_family = pair_family_from_name(&family)?;
+    if parsed_family == PairCopulaFamily::Tll {
+        let state = dict.get_item("state")?.ok_or_else(|| {
+            PyValueError::new_err("TLL specs require fitted 'state'; use PairCopula.fit_tll")
+        })?;
+        let json: String = dict
+            .py()
+            .import("json")?
+            .call_method1("dumps", (state,))?
+            .extract()?;
+        let params = serde_json::from_str::<rscopulas::TllParams>(&json)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let spec = rscopulas::PairCopulaSpec {
+            family: parsed_family,
+            rotation: rotation_from_name(&rotation)?,
+            params: PairCopulaParams::Tll(params),
+        };
+        spec.validate().map_err(to_pyerr)?;
+        return Ok(spec);
+    }
     if parsed_family == PairCopulaFamily::Khoudraji {
         let base_first_value = dict
             .get_item("base_copula_1")?
@@ -441,6 +463,7 @@ fn hac_structure_method_from_name(name: &str) -> PyResult<HacStructureMethod> {
 fn hac_fit_method_name(method: HacFitMethod) -> &'static str {
     match method {
         HacFitMethod::TauInit => "tau_init",
+        HacFitMethod::CompositeMle => "composite_mle",
         HacFitMethod::RecursiveMle => "recursive_mle",
         HacFitMethod::FullMle => "full_mle",
         HacFitMethod::Smle => "smle",
@@ -451,6 +474,7 @@ fn hac_fit_method_name(method: HacFitMethod) -> &'static str {
 fn hac_fit_method_from_name(name: &str) -> PyResult<HacFitMethod> {
     match name.trim().to_ascii_lowercase().as_str() {
         "tau_init" | "tau" => Ok(HacFitMethod::TauInit),
+        "composite_mle" | "composite" => Ok(HacFitMethod::CompositeMle),
         "recursive_mle" | "recursive" => Ok(HacFitMethod::RecursiveMle),
         "full_mle" | "full" => Ok(HacFitMethod::FullMle),
         "smle" => Ok(HacFitMethod::Smle),
@@ -581,7 +605,7 @@ fn params_to_vec(params: &PairCopulaParams) -> Vec<f64> {
         // TLL's state is a full interpolation grid; the only scalar summary
         // worth flattening at the Python surface is the effective dof used
         // for BIC scoring.
-        PairCopulaParams::Tll(params) => vec![params.effective_df],
+        PairCopulaParams::Tll(params) => vec![params.effective_df()],
     }
 }
 
@@ -590,6 +614,11 @@ fn attach_pair_components<'py>(
     dict: &Bound<'py, PyDict>,
     spec: &rscopulas::PairCopulaSpec,
 ) -> PyResult<()> {
+    if let PairCopulaParams::Tll(params) = &spec.params {
+        let state =
+            serde_json::to_string(params).map_err(|err| PyValueError::new_err(err.to_string()))?;
+        dict.set_item("state", py.import("json")?.call_method1("loads", (state,))?)?;
+    }
     if let PairCopulaParams::Khoudraji(params) = &spec.params {
         dict.set_item("shape_1", params.shape_first)?;
         dict.set_item("shape_2", params.shape_second)?;
@@ -658,6 +687,7 @@ struct PyFitDiagnostics {
     bic: f64,
     converged: bool,
     n_iter: usize,
+    likelihood_kind: &'static str,
 }
 
 impl From<FitDiagnostics> for PyFitDiagnostics {
@@ -668,12 +698,20 @@ impl From<FitDiagnostics> for PyFitDiagnostics {
             bic: value.bic,
             converged: value.converged,
             n_iter: value.n_iter,
+            likelihood_kind: match value.likelihood_kind {
+                rscopulas::LikelihoodKind::Joint => "joint",
+                rscopulas::LikelihoodKind::Composite => "composite",
+            },
         }
     }
 }
 
 #[pymethods]
 impl PyFitDiagnostics {
+    #[getter]
+    fn likelihood_kind(&self) -> &'static str {
+        self.likelihood_kind
+    }
     #[getter]
     fn loglik(&self) -> f64 {
         self.loglik
@@ -1172,8 +1210,28 @@ impl PyPairCopula {
 #[pymethods]
 impl PyPairCopula {
     #[staticmethod]
-    #[pyo3(signature = (family, parameters=None, rotation="R0"))]
-    fn from_spec(family: &str, parameters: Option<Vec<f64>>, rotation: &str) -> PyResult<Self> {
+    #[pyo3(signature = (family, parameters=None, rotation="R0", state=None))]
+    fn from_spec(
+        py: Python<'_>,
+        family: &str,
+        parameters: Option<Vec<f64>>,
+        rotation: &str,
+        state: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
+        if let Some(state) = state {
+            if pair_family_from_name(family)? != PairCopulaFamily::Tll {
+                return Err(PyValueError::new_err(
+                    "'state' is only valid for TLL specifications",
+                ));
+            }
+            let spec = PyDict::new(py);
+            spec.set_item("family", family)?;
+            spec.set_item("rotation", rotation)?;
+            spec.set_item("state", state)?;
+            return Ok(Self {
+                inner: pair_spec_from_py_dict(&spec)?,
+            });
+        }
         if pair_family_from_name(family)? == PairCopulaFamily::Khoudraji {
             return Err(PyValueError::new_err(
                 "use PairCopula.from_khoudraji(...) for khoudraji specifications",
@@ -1185,9 +1243,7 @@ impl PyPairCopula {
     }
 
     /// Fit a nonparametric TLL (Transformation Local Likelihood) pair
-    /// copula from pseudo-observations. Only `method="constant"` is
-    /// supported in this phase; linear and quadratic local-polynomial
-    /// orders are reserved for future work.
+    /// copula using constant, linear, or quadratic local likelihood.
     #[staticmethod]
     #[pyo3(signature = (u1, u2, method="constant"))]
     fn fit_tll(
@@ -1723,7 +1779,7 @@ impl PyHierarchicalArchimedeanCopula {
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, tree=None, family_set=None, structure_method="agglomerative_tau_then_collapse", fit_method="recursive_mle", collapse_eps=0.05, mc_samples=256, allow_experimental=true, clip_eps=1e-12, max_iter=500))]
+    #[pyo3(signature = (data, tree=None, family_set=None, structure_method="agglomerative_tau_then_collapse", fit_method="composite_mle", collapse_eps=0.05, mc_samples=0, allow_experimental=true, clip_eps=1e-12, max_iter=500))]
     fn fit(
         data: PyReadonlyArray2<'_, f64>,
         tree: Option<&Bound<'_, PyAny>>,
@@ -1840,6 +1896,21 @@ impl PyHierarchicalArchimedeanCopula {
         Ok(values.into_pyarray(py))
     }
 
+    #[pyo3(signature = (data, clip_eps=1e-12))]
+    fn composite_log_pdf<'py>(
+        &self,
+        py: Python<'py>,
+        data: PyReadonlyArray2<'_, f64>,
+        clip_eps: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let data = pseudo_obs_from_py(data)?;
+        let values = self
+            .inner
+            .composite_log_pdf(&data, &eval_options(clip_eps))
+            .map_err(to_pyerr)?;
+        Ok(values.into_pyarray(py))
+    }
+
     #[pyo3(signature = (n, seed=None))]
     fn sample<'py>(
         &self,
@@ -1873,13 +1944,26 @@ impl PyFactorCopula {
     /// `{"family": str, "rotation": str, "parameters": [floats]}` — so users
     /// can hand-build a model for simulation studies or unit tests.
     #[staticmethod]
-    #[pyo3(signature = (links, quadrature_nodes=25))]
-    fn from_links(links: &Bound<'_, PyList>, quadrature_nodes: usize) -> PyResult<Self> {
+    #[pyo3(signature = (links, quadrature_nodes=25, *, adaptive_quadrature=true, quadrature_max_nodes=4096, quadrature_rel_tol=1e-7))]
+    fn from_links(
+        links: &Bound<'_, PyList>,
+        quadrature_nodes: usize,
+        adaptive_quadrature: bool,
+        quadrature_max_nodes: usize,
+        quadrature_rel_tol: f64,
+    ) -> PyResult<Self> {
         let specs: Vec<rscopulas::PairCopulaSpec> = links
             .iter()
             .map(|item| pair_spec_from_py_dict(item.cast::<PyDict>()?))
             .collect::<PyResult<Vec<_>>>()?;
         FactorCopula::basic_1f(specs, quadrature_nodes)
+            .and_then(|model| {
+                model.with_quadrature(FactorQuadrature {
+                    adaptive: adaptive_quadrature,
+                    max_nodes: quadrature_max_nodes,
+                    rel_tol: quadrature_rel_tol,
+                })
+            })
             .map(|inner| Self { inner })
             .map_err(to_pyerr)
     }
@@ -1897,7 +1981,10 @@ impl PyFactorCopula {
         joint_polish_rel_tol=1e-6,
         layout="basic_1f",
         clip_eps=1e-12,
-        max_iter=500
+        max_iter=500,
+        adaptive_quadrature=true,
+        quadrature_max_nodes=4096,
+        quadrature_rel_tol=1e-7
     ))]
     fn fit(
         data: PyReadonlyArray2<'_, f64>,
@@ -1911,6 +1998,9 @@ impl PyFactorCopula {
         layout: &str,
         clip_eps: f64,
         max_iter: usize,
+        adaptive_quadrature: bool,
+        quadrature_max_nodes: usize,
+        quadrature_rel_tol: f64,
     ) -> PyResult<(Self, PyFitDiagnostics, Vec<f64>)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1920,6 +2010,11 @@ impl PyFactorCopula {
                 include_rotations,
                 criterion: criterion_from_name(criterion)?,
                 quadrature_nodes,
+                quadrature: FactorQuadrature {
+                    adaptive: adaptive_quadrature,
+                    max_nodes: quadrature_max_nodes,
+                    rel_tol: quadrature_rel_tol,
+                },
                 refine_iterations,
                 joint_polish_cycles,
                 joint_polish_rel_tol,
@@ -1976,6 +2071,19 @@ impl PyFactorCopula {
     #[getter]
     fn quadrature_nodes(&self) -> usize {
         self.inner.quadrature_nodes()
+    }
+
+    #[getter]
+    fn adaptive_quadrature(&self) -> bool {
+        self.inner.quadrature().adaptive
+    }
+    #[getter]
+    fn quadrature_max_nodes(&self) -> usize {
+        self.inner.quadrature().max_nodes
+    }
+    #[getter]
+    fn quadrature_rel_tol(&self) -> f64 {
+        self.inner.quadrature().rel_tol
     }
 
     #[getter]

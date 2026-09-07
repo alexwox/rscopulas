@@ -5,7 +5,7 @@ matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from rscopulas import ClaytonCopula, GaussianCopula, VineCopula
+from rscopulas import ClaytonCopula, GaussianCopula, PairCopula, VineCopula
 from rscopulas.plotting import plot_density, plot_scatter, plot_vine_structure
 
 
@@ -46,6 +46,12 @@ def test_plot_density_rejects_non_bivariate_models() -> None:
 
     with pytest.raises(ValueError, match="bivariate"):
         plot_density(model)
+
+
+def test_plot_density_accepts_pair_copulas() -> None:
+    ax = plot_density(PairCopula.from_spec("gaussian", [.6]), grid_size=12)
+    assert ax.get_title() == "Gaussian density"
+    assert len(ax.collections) >= 1
 
 
 def test_plot_scatter_supports_samples_and_model_sampling() -> None:

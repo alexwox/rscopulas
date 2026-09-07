@@ -12,73 +12,74 @@ use crate::errors::{CopulaError, FitError};
 // τ(θ, δ) has no closed form either — the fitter uses a grid-over-δ with an
 // inner MLE on θ, as for BB1.
 
-fn prep(u1: f64, u2: f64, theta: f64) -> (f64, f64, f64, f64) {
-    let x_u = 1.0 - (1.0 - u1).powf(theta);
-    let x_v = 1.0 - (1.0 - u2).powf(theta);
-    let w_u = -x_u.ln();
-    let w_v = -x_v.ln();
-    (x_u, x_v, w_u, w_v)
+// All small complements stay in log space, including 1 - exp(-q).
+struct Terms {
+    lx: [f64; 2],
+    lw: [f64; 2],
+    lu: [f64; 2],
+    ls: f64,
+    lq: f64,
+    q: f64,
+    la: f64,
+}
+fn prep(u: f64, v: f64, theta: f64, delta: f64) -> Terms {
+    use crate::math::{log_neg_log1mexp, log1mexp, log1mexp_neg_exp, logaddexp};
+    let lu = [(-u).ln_1p(), (-v).ln_1p()];
+    let lx = [log1mexp(theta * lu[0]), log1mexp(theta * lu[1])];
+    let lw = [
+        log_neg_log1mexp(theta * lu[0]),
+        log_neg_log1mexp(theta * lu[1]),
+    ];
+    let ls = logaddexp(delta * lw[0], delta * lw[1]);
+    let lq = ls / delta;
+    Terms {
+        lx,
+        lw,
+        lu,
+        ls,
+        lq,
+        q: lq.exp(),
+        la: log1mexp_neg_exp(lq),
+    }
 }
 
-pub fn log_pdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
-    if !theta.is_finite() || theta < 1.0 {
+pub fn log_pdf(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    if !theta.is_finite() || theta < 1.0 || !delta.is_finite() || delta < 1.0 {
         return Err(FitError::Failed {
-            reason: "bb6 pair theta must be at least 1",
+            reason: "bb6 requires theta >= 1 and delta >= 1",
         }
         .into());
     }
-    if !delta.is_finite() || delta < 1.0 {
-        return Err(FitError::Failed {
-            reason: "bb6 pair delta must be at least 1",
-        }
-        .into());
-    }
-    let (x_u, x_v, w_u, w_v) = prep(u1, u2, theta);
-    let s = w_u.powf(delta) + w_v.powf(delta);
-    let q = s.powf(1.0 / delta);
-    let e = (-q).exp();
-    let bracket = q * (1.0 - e / theta) + (delta - 1.0) * (1.0 - e);
-    Ok(theta.ln() - q
-        + (1.0 / delta - 2.0) * s.ln()
-        + (1.0 / theta - 2.0) * (1.0 - e).ln()
-        + bracket.ln()
-        + (delta - 1.0) * (w_u.ln() + w_v.ln())
-        + (theta - 1.0) * ((1.0 - u1).ln() + (1.0 - u2).ln())
-        - (x_u.ln() + x_v.ln()))
+    let t = prep(u, v, theta, delta);
+    let first = if theta == 1.0 {
+        t.la
+    } else {
+        crate::math::log1mexp(-t.q - theta.ln())
+    };
+    let bracket = crate::math::logaddexp(t.lq + first, (delta - 1.0).ln() + t.la);
+    Ok(theta.ln() - t.q
+        + (1.0 / delta - 2.0) * t.ls
+        + (1.0 / theta - 2.0) * t.la
+        + bracket
+        + (delta - 1.0) * (t.lw[0] + t.lw[1])
+        + (theta - 1.0) * (t.lu[0] + t.lu[1])
+        - t.lx[0]
+        - t.lx[1])
 }
 
-pub fn cond_first_given_second(
-    u1: f64,
-    u2: f64,
-    theta: f64,
-    delta: f64,
-) -> Result<f64, CopulaError> {
-    let (_, x_v, w_u, w_v) = prep(u1, u2, theta);
-    let s = w_u.powf(delta) + w_v.powf(delta);
-    let q = s.powf(1.0 / delta);
-    let e = (-q).exp();
-    Ok(e * (1.0 - e).powf(1.0 / theta - 1.0)
-        * s.powf(1.0 / delta - 1.0)
-        * w_v.powf(delta - 1.0)
-        * (1.0 - u2).powf(theta - 1.0)
-        / x_v)
+pub fn cond_first_given_second(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    let t = prep(u, v, theta, delta);
+    Ok((-t.q
+        + (1.0 / theta - 1.0) * t.la
+        + (1.0 / delta - 1.0) * t.ls
+        + (delta - 1.0) * t.lw[1]
+        + (theta - 1.0) * t.lu[1]
+        - t.lx[1])
+        .exp())
 }
 
-pub fn cond_second_given_first(
-    u1: f64,
-    u2: f64,
-    theta: f64,
-    delta: f64,
-) -> Result<f64, CopulaError> {
-    let (x_u, _, w_u, w_v) = prep(u1, u2, theta);
-    let s = w_u.powf(delta) + w_v.powf(delta);
-    let q = s.powf(1.0 / delta);
-    let e = (-q).exp();
-    Ok(e * (1.0 - e).powf(1.0 / theta - 1.0)
-        * s.powf(1.0 / delta - 1.0)
-        * w_u.powf(delta - 1.0)
-        * (1.0 - u1).powf(theta - 1.0)
-        / x_u)
+pub fn cond_second_given_first(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    cond_first_given_second(v, u, theta, delta)
 }
 
 pub fn inv_first_given_second(
@@ -121,10 +122,6 @@ pub fn inv_second_given_first(
     Ok(0.5 * (low + high))
 }
 
-pub fn cdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
-    let (_, _, w_u, w_v) = prep(u1, u2, theta);
-    let s = w_u.powf(delta) + w_v.powf(delta);
-    let q = s.powf(1.0 / delta);
-    let e = (-q).exp();
-    Ok((1.0 - (1.0 - e).powf(1.0 / theta)).clamp(0.0, 1.0))
+pub fn cdf(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    Ok(-(prep(u, v, theta, delta).la / theta).exp_m1())
 }
