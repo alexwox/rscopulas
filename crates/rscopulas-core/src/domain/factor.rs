@@ -9,9 +9,9 @@
 //! ```
 //!
 //! Gaussian links use an exact Gaussian density. Other links use normal-scale
-//! Gauss-Legendre quadrature on [-8,8], doubling the node count until successive
-//! log densities agree to 1e-7 twice (at most 4096 nodes). Failure to converge
-//! returns a numerical error. The requested node count is a minimum budget.
+//! Gauss-Legendre quadrature on [-8,8], refining intervals by their estimated
+//! error. The default relative tolerance is 1e-7 with a budget of 4096 integrand
+//! evaluations per row. Fixed-node evaluation is an explicit approximate mode.
 //!
 //! Extensions (Nested2F, Structured, BiFactor) are intentionally deferred —
 //! adding them only requires extending the `FactorLayout` enum and
@@ -65,6 +65,47 @@ pub enum FactorLayout {
     Basic1F,
 }
 
+/// Work and accuracy controls for the latent integral. Stored with the model
+/// so fitting diagnostics and subsequent evaluation use the same rule.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FactorQuadrature {
+    /// Refine by estimated integration error. False uses exactly the model's
+    /// `quadrature_nodes` and makes no convergence guarantee.
+    pub adaptive: bool,
+    /// Maximum integrand evaluations per row in adaptive mode, including
+    /// coarse rules and discarded parent intervals.
+    pub max_nodes: usize,
+    /// Relative error target for adaptive integration.
+    pub rel_tol: f64,
+}
+
+impl Default for FactorQuadrature {
+    fn default() -> Self {
+        Self {
+            adaptive: true,
+            max_nodes: 4096,
+            rel_tol: 1e-7,
+        }
+    }
+}
+
+impl FactorQuadrature {
+    fn validate(self, min_nodes: usize) -> Result<(), CopulaError> {
+        if !self.rel_tol.is_finite()
+            || self.rel_tol <= 0.0
+            || self.rel_tol >= 1.0
+            || !(24..=65_536).contains(&self.max_nodes)
+            || (self.adaptive && self.max_nodes < min_nodes)
+        {
+            return Err(FitError::Failed {
+                reason: "invalid factor quadrature tolerance or node budget",
+            }
+            .into());
+        }
+        Ok(())
+    }
+}
+
 /// Configuration for fitting a [`FactorCopula`] to pseudo-observations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactorFitOptions {
@@ -79,8 +120,10 @@ pub struct FactorFitOptions {
     pub include_rotations: bool,
     /// Criterion used when comparing candidate link fits.
     pub criterion: SelectionCriterion,
-    /// Number of Gauss–Legendre nodes used for the latent integral.
+    /// Minimum work in adaptive mode, or exact node count in fixed mode.
     pub quadrature_nodes: usize,
+    #[serde(default)]
+    pub quadrature: FactorQuadrature,
     /// Number of EM-style refinement passes after the initial sequential
     /// MLE. Each pass recomputes `E[V | U_i]` under the current fit (the
     /// posterior mean of the latent), rank-normalises it, and refits every
@@ -119,13 +162,13 @@ impl Default for FactorFitOptions {
             ],
             include_rotations: true,
             criterion: SelectionCriterion::Aic,
-            // 25 nodes is exact for polynomials up to degree 49 on [0, 1] and
-            // matches the default used by Joe's `CopulaModel` R package.
+            // Small initial work budget; adaptive accuracy and maximum work
+            // are controlled separately by `quadrature`.
             quadrature_nodes: 25,
+            quadrature: FactorQuadrature::default(),
             refine_iterations: 2,
-            // Five sweeps is enough to reach the joint MLE from a sequential-
-            // MLE warm start on realistic d ≤ 20 problems; each sweep is
-            // bracketed by a bail-out guard so runaway cost is not a risk.
+            // Bound the number of sweeps; diagnostics report whether the
+            // stopping criterion was reached before this cap.
             joint_polish_cycles: 5,
             joint_polish_rel_tol: 1e-6,
         }
@@ -144,6 +187,7 @@ pub struct FactorCopula {
     /// bivariate copula between variable `j` and the common latent factor.
     links: Vec<PairCopulaSpec>,
     quadrature_nodes: usize,
+    quadrature: FactorQuadrature,
 }
 
 impl<'de> Deserialize<'de> for FactorCopula {
@@ -154,9 +198,12 @@ impl<'de> Deserialize<'de> for FactorCopula {
             layout: FactorLayout,
             links: Vec<PairCopulaSpec>,
             quadrature_nodes: usize,
+            #[serde(default)]
+            quadrature: FactorQuadrature,
         }
         let state = State::deserialize(deserializer)?;
         let model = Self::basic_1f(state.links, state.quadrature_nodes)
+            .and_then(|model| model.with_quadrature(state.quadrature))
             .map_err(serde::de::Error::custom)?;
         if model.dim != state.dim || model.layout != state.layout {
             return Err(serde::de::Error::custom(
@@ -193,16 +240,28 @@ impl FactorCopula {
             layout: FactorLayout::Basic1F,
             links,
             quadrature_nodes,
+            quadrature: FactorQuadrature::default(),
         })
+    }
+
+    /// Sets the work/accuracy policy used for every subsequent density call.
+    pub fn with_quadrature(mut self, quadrature: FactorQuadrature) -> Result<Self, CopulaError> {
+        quadrature.validate(self.quadrature_nodes)?;
+        self.quadrature = quadrature;
+        Ok(self)
+    }
+
+    pub fn quadrature(&self) -> FactorQuadrature {
+        self.quadrature
     }
 
     /// Fits a factor copula to pseudo-observations using a two-stage sequential
     /// MLE: (i) build a pseudo-latent via normal-score PCA-like projection,
     /// (ii) fit each link by bivariate MLE against the pseudo-latent.
     ///
-    /// The final log-likelihood reported in `FitDiagnostics` is the true
-    /// factor-copula log-likelihood (evaluated with the fitted links and the
-    /// same error checks used at inference), not the per-link sum.
+    /// `FitDiagnostics` evaluates the joint likelihood with the fitted links
+    /// and the same integration policy used at inference. Fixed quadrature
+    /// explicitly forgoes the adaptive accuracy checks.
     /// Ordinary AIC/BIC uses this joint likelihood. Nested HAC composite
     /// scores cannot be compared using ordinary likelihood criteria.
     pub fn fit(
@@ -210,6 +269,7 @@ impl FactorCopula {
         options: &FactorFitOptions,
     ) -> Result<FactorFitResult, CopulaError> {
         options.base.validate()?;
+        options.quadrature.validate(options.quadrature_nodes)?;
         if !options.joint_polish_rel_tol.is_finite() || options.joint_polish_rel_tol <= 0.0 {
             return Err(FitError::Failed {
                 reason: "polish tolerance must be finite and positive",
@@ -352,11 +412,24 @@ impl CopulaModel for FactorCopula {
             }
             return super::GaussianCopula::new(correlation)?.log_pdf(data, options);
         }
-        let observations: Vec<Vec<f64>> = view.rows().into_iter().map(|row| row.to_vec()).collect();
-        let mut previous = vec![f64::NEG_INFINITY; observations.len()];
-        let mut agreement = vec![0; observations.len()];
         let normal = Normal::new(0.0, 1.0).unwrap();
-        let mut breaks = vec![-8.0, 8.0];
+        if !self.quadrature.adaptive {
+            let (nodes, weights) = factor_quadrature(self.quadrature_nodes);
+            let normal_nodes: Vec<_> = nodes.iter().map(|&v| normal.inverse_cdf(v)).collect();
+            return view
+                .rows()
+                .into_iter()
+                .map(|row| {
+                    let obs: Vec<_> = row
+                        .iter()
+                        .map(|u| u.clamp(options.clip_eps, 1.0 - options.clip_eps))
+                        .collect();
+                    self.log_pdf_single(&obs, &nodes, &weights, &normal_nodes, f64::EPSILON / 2.0)
+                })
+                .collect();
+        }
+        // Include TLL knots, where derivatives change, in every row's mesh.
+        let mut knots = Vec::new();
         for link in &self.links {
             if let crate::paircopula::PairCopulaParams::Tll(params) = &link.params {
                 for &knot in params.second_margin_knots() {
@@ -371,60 +444,95 @@ impl CopulaModel for FactorCopula {
                     if v > 0.0 && v < 1.0 {
                         let z = normal.inverse_cdf(v);
                         if z > -8.0 && z < 8.0 {
-                            breaks.push(z);
+                            knots.push(z);
                         }
                     }
                 }
             }
         }
-        breaks.sort_by(f64::total_cmp);
-        breaks.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
-        let segments = breaks.len() - 1;
-        let max_nodes = (4096 / segments).max(2);
-        let mut nodes_count = self
-            .quadrature_nodes
-            .div_ceil(segments)
-            .clamp(2, (max_nodes / 4).max(2));
-        loop {
-            let (nodes, weights) = if segments == 1 {
-                factor_quadrature(nodes_count)
-            } else {
-                segmented_factor_quadrature(nodes_count, &breaks)
-            };
-            let normal_nodes: Vec<f64> = nodes
-                .iter()
-                .map(|v| normal.inverse_cdf(v.clamp(options.clip_eps, 1.0 - options.clip_eps)))
-                .collect();
-            for (idx, obs) in observations.iter().enumerate() {
-                if agreement[idx] >= 2 {
-                    continue;
-                }
-                let value =
-                    self.log_pdf_single(obs, &nodes, &weights, &normal_nodes, options.clip_eps)?;
-                if !value.is_finite() {
-                    return Err(crate::errors::NumericalError::Failed {
-                        reason: "factor density is not finite",
+        view.rows()
+            .into_iter()
+            .map(|row| {
+                let obs: Vec<_> = row
+                    .iter()
+                    .map(|u| u.clamp(options.clip_eps, 1.0 - options.clip_eps))
+                    .collect();
+                let normal_obs: Vec<_> = obs.iter().map(|&u| normal.inverse_cdf(u)).collect();
+                let mut breaks = vec![-8.0, 0.0, 8.0];
+                breaks.extend(&knots);
+                for (&z, link) in normal_obs.iter().zip(&self.links) {
+                    let z = if matches!(
+                        link.rotation,
+                        crate::paircopula::Rotation::R90 | crate::paircopula::Rotation::R270
+                    ) {
+                        -z
+                    } else {
+                        z
+                    };
+                    if z > -8.0 && z < 8.0 {
+                        breaks.push(z);
                     }
-                    .into());
                 }
-                agreement[idx] = if (value - previous[idx]).abs() < 1e-7 {
-                    agreement[idx] + 1
-                } else {
-                    0
+                breaks.sort_by(f64::total_cmp);
+                breaks.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+                let integrand = |z: f64| -> Result<f64, CopulaError> {
+                    let v = normal.cdf(z);
+                    let tail = normal.cdf(-z.abs());
+                    let (log_v, log_sv) = if z > 0.0 {
+                        ((-tail).ln_1p(), tail.ln())
+                    } else {
+                        (tail.ln(), (-tail).ln_1p())
+                    };
+                    let mut value = -0.5 * z * z - 0.5 * (2.0 * std::f64::consts::PI).ln();
+                    for (j, link) in self.links.iter().enumerate() {
+                        if let (
+                            PairCopulaFamily::Gaussian,
+                            crate::paircopula::PairCopulaParams::One(rho),
+                        ) = (link.family, &link.params)
+                        {
+                            let rho = if matches!(
+                                link.rotation,
+                                crate::paircopula::Rotation::R90
+                                    | crate::paircopula::Rotation::R270
+                            ) {
+                                -*rho
+                            } else {
+                                *rho
+                            };
+                            let x = normal_obs[j];
+                            let variance = 1.0 - rho * rho;
+                            value += -0.5 * variance.ln()
+                                - (rho * rho * (x * x + z * z) - 2.0 * rho * x * z)
+                                    / (2.0 * variance);
+                        } else if link.family != PairCopulaFamily::Independence {
+                            // The public clipping policy applies to observations.
+                            // Clipping latent integration nodes at 1e-12 creates an
+                            // artificial tail plateau and prevents convergence.
+                            value += match link.log_pdf_from_log_probabilities(
+                                [obs[j].ln(), log_v],
+                                [(-obs[j]).ln_1p(), log_sv],
+                            ) {
+                                Some(value) => value,
+                                None => link.log_pdf(obs[j], v, f64::EPSILON / 2.0)?,
+                            };
+                        }
+                    }
+                    if value.is_nan() || value == f64::INFINITY {
+                        return Err(crate::errors::NumericalError::Failed {
+                            reason: "factor integrand is not finite",
+                        }
+                        .into());
+                    }
+                    Ok(value)
                 };
-                previous[idx] = value;
-            }
-            if nodes.len() >= self.quadrature_nodes && agreement.iter().all(|&count| count >= 2) {
-                return Ok(previous);
-            }
-            if nodes_count == max_nodes {
-                return Err(crate::errors::NumericalError::Failed {
-                    reason: "factor quadrature did not converge to relative tolerance 1e-7",
-                }
-                .into());
-            }
-            nodes_count = (2 * nodes_count).min(max_nodes);
-        }
+                adaptive_factor_integral(
+                    &integrand,
+                    &breaks,
+                    self.quadrature_nodes,
+                    self.quadrature,
+                )
+            })
+            .collect()
     }
 
     fn sample<R: Rng + ?Sized>(
@@ -453,21 +561,85 @@ impl CopulaModel for FactorCopula {
     }
 }
 
-fn segmented_factor_quadrature(n: usize, breaks: &[f64]) -> (Vec<f64>, Vec<f64>) {
-    let (unit_nodes, unit_weights) = gauss_legendre_01(n);
-    let normal = Normal::new(0.0, 1.0).unwrap();
-    let mut nodes = Vec::with_capacity(n * (breaks.len() - 1));
-    let mut weights = Vec::with_capacity(nodes.capacity());
-    for interval in breaks.windows(2) {
-        let width = interval[1] - interval[0];
-        for (&node, &weight) in unit_nodes.iter().zip(&unit_weights) {
-            let z = interval[0] + width * node;
-            nodes.push(normal.cdf(z));
-            weights
-                .push(weight * width * (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt());
+#[derive(Clone, Copy)]
+struct IntegralInterval {
+    lower: f64,
+    upper: f64,
+    value: f64,
+    error: f64,
+}
+
+fn factor_interval<F: Fn(f64) -> Result<f64, CopulaError>>(
+    f: &F,
+    lower: f64,
+    upper: f64,
+) -> Result<IntegralInterval, CopulaError> {
+    use std::sync::OnceLock;
+    type Rule = (Vec<f64>, Vec<f64>);
+    static RULES: OnceLock<(Rule, Rule)> = OnceLock::new();
+    let (small, large) = RULES.get_or_init(|| (gauss_legendre_01(8), gauss_legendre_01(16)));
+    let integrate = |rule: &Rule| -> Result<f64, CopulaError> {
+        let mut terms = Vec::with_capacity(rule.0.len());
+        for (&x, &w) in rule.0.iter().zip(&rule.1) {
+            terms.push(w.ln() + f(lower + (upper - lower) * x)?);
         }
+        Ok((upper - lower).ln() + log_sum_exp(&terms))
+    };
+    let coarse = integrate(small)?;
+    let value = integrate(large)?;
+    let error = if coarse == value {
+        f64::NEG_INFINITY
+    } else {
+        coarse.max(value) + crate::math::log1mexp(-(coarse - value).abs())
+    };
+    Ok(IntegralInterval {
+        lower,
+        upper,
+        value,
+        error,
+    })
+}
+
+fn adaptive_factor_integral<F: Fn(f64) -> Result<f64, CopulaError>>(
+    f: &F,
+    breaks: &[f64],
+    min_nodes: usize,
+    policy: FactorQuadrature,
+) -> Result<f64, CopulaError> {
+    let budget_error = || {
+        CopulaError::from(crate::errors::NumericalError::Failed {
+            reason: "factor quadrature exhausted its node budget; increase quadrature_max_nodes, relax quadrature_rel_tol, or explicitly use fixed quadrature",
+        })
+    };
+    let mut spent = 24 * (breaks.len() - 1);
+    if spent > policy.max_nodes {
+        return Err(budget_error());
     }
-    (nodes, weights)
+    let mut intervals = breaks
+        .windows(2)
+        .map(|w| factor_interval(f, w[0], w[1]))
+        .collect::<Result<Vec<_>, _>>()?;
+    loop {
+        let value = log_sum_exp(&intervals.iter().map(|x| x.value).collect::<Vec<_>>());
+        let error = log_sum_exp(&intervals.iter().map(|x| x.error).collect::<Vec<_>>());
+        if value.is_finite() && spent >= min_nodes && error <= value + policy.rel_tol.ln() {
+            return Ok(value);
+        }
+        if spent + 48 > policy.max_nodes {
+            return Err(budget_error());
+        }
+        let worst = intervals
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.error.total_cmp(&b.1.error))
+            .unwrap()
+            .0;
+        let old = intervals[worst];
+        let mid = (old.lower + old.upper) * 0.5;
+        intervals[worst] = factor_interval(f, old.lower, mid)?;
+        intervals.push(factor_interval(f, mid, old.upper)?);
+        spent += 48;
+    }
 }
 
 /// Normal-scale quadrature resolves the latent tails without an endpoint cutoff
@@ -566,7 +738,8 @@ fn fit_basic_1f(
         .collect();
 
     let mut links = fit_links_against_latent(&columns, &v_pseudo, &vine_options)?;
-    let mut model = FactorCopula::basic_1f(links.clone(), options.quadrature_nodes)?;
+    let mut model = FactorCopula::basic_1f(links.clone(), options.quadrature_nodes)?
+        .with_quadrature(options.quadrature)?;
 
     // Stage 3: EM-style refinement. Each pass:
     //   1. Compute E[V | U_i] under the current fit (quadrature-integrated
@@ -585,8 +758,13 @@ fn fit_basic_1f(
         let posterior = posterior_latent_mean(&model, data, clip)?;
         v_pseudo = rank_normalise_01(&posterior, clip);
         let refined_links = fit_links_against_latent(&columns, &v_pseudo, &vine_options)?;
-        let refined = FactorCopula::basic_1f(refined_links.clone(), options.quadrature_nodes)?;
-        let refined_loglik = factor_log_likelihood(&refined, data, options.base.clip_eps)?;
+        let refined = FactorCopula::basic_1f(refined_links.clone(), options.quadrature_nodes)?
+            .with_quadrature(options.quadrature)?;
+        let refined_loglik = match factor_log_likelihood(&refined, data, options.base.clip_eps) {
+            Ok(value) => value,
+            Err(CopulaError::Numerical(_)) => break,
+            Err(error) => return Err(error),
+        };
         if refined_loglik > best_loglik {
             best_loglik = refined_loglik;
             links = refined_links;
@@ -783,7 +961,13 @@ fn polish_factor_model(
     let counts = per_link_counts.clone();
 
     let evaluate = |x: &[f64]| -> f64 {
-        match build_model_from_flat(&template_links, &counts, quadrature_nodes, x) {
+        match build_model_from_flat(
+            &template_links,
+            &counts,
+            quadrature_nodes,
+            model.quadrature,
+            x,
+        ) {
             Ok(candidate) => {
                 factor_log_likelihood(&candidate, data, clip_eps).unwrap_or(f64::NEG_INFINITY)
             }
@@ -798,6 +982,7 @@ fn polish_factor_model(
         &template_links,
         &per_link_counts,
         quadrature_nodes,
+        model.quadrature,
         &x_polished,
     )?;
     Ok((polished_model, polished_loglik, cycles, converged))
@@ -838,7 +1023,13 @@ fn factor_standard_errors(model: &FactorCopula, data: &PseudoObs, clip_eps: f64)
     let quadrature_nodes = model.quadrature_nodes;
     let counts = per_link_counts.clone();
     let evaluate = |x: &[f64]| -> f64 {
-        match build_model_from_flat(&template_links, &counts, quadrature_nodes, x) {
+        match build_model_from_flat(
+            &template_links,
+            &counts,
+            quadrature_nodes,
+            model.quadrature,
+            x,
+        ) {
             Ok(candidate) => {
                 factor_log_likelihood(&candidate, data, clip_eps).unwrap_or(f64::NEG_INFINITY)
             }
@@ -894,6 +1085,7 @@ fn build_model_from_flat(
     template_links: &[PairCopulaSpec],
     per_link_counts: &[usize],
     quadrature_nodes: usize,
+    quadrature: FactorQuadrature,
     x: &[f64],
 ) -> Result<FactorCopula, CopulaError> {
     let mut links = Vec::with_capacity(template_links.len());
@@ -907,7 +1099,7 @@ fn build_model_from_flat(
             decode_params(template, slice)
         });
     }
-    FactorCopula::basic_1f(links, quadrature_nodes)
+    FactorCopula::basic_1f(links, quadrature_nodes)?.with_quadrature(quadrature)
 }
 
 /// Maps a vector of arbitrary real-valued scores onto uniform pseudo-
@@ -948,6 +1140,29 @@ fn log_sum_exp(xs: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adaptive_integration_counts_all_work_against_its_budget() {
+        let calls = std::cell::Cell::new(0);
+        let integrand = |x: f64| {
+            calls.set(calls.get() + 1);
+            Ok(-10_000.0 * (x - 0.13).powi(2))
+        };
+        let policy = FactorQuadrature {
+            max_nodes: 72,
+            rel_tol: 1e-12,
+            ..Default::default()
+        };
+        assert!(adaptive_factor_integral(&integrand, &[0.0, 1.0], 25, policy).is_err());
+        assert_eq!(calls.get(), 72);
+        let value =
+            adaptive_factor_integral(&integrand, &[0.0, 1.0], 25, FactorQuadrature::default())
+                .unwrap();
+        // Integral of exp(-10000(x-.13)^2) over this interval equals the full
+        // Gaussian integral to far better than double precision.
+        let exact = (std::f64::consts::PI / 10_000.0).sqrt().ln();
+        assert!((value - exact).abs() < 1e-9);
+    }
 
     #[test]
     fn log_sum_exp_matches_naive_for_benign_inputs() {

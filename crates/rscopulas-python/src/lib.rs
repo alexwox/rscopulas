@@ -11,11 +11,12 @@ use pyo3::{
 use rand::{SeedableRng, random, rngs::StdRng};
 use rscopulas::{
     ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FactorCopula,
-    FactorFitOptions, FactorFitResult, FactorLayout, FitDiagnostics, FitOptions, FrankCopula,
-    GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions, HacNode,
-    HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams, PairCopulaFamily,
-    PairCopulaParams, Rotation, SampleOptions, SelectionCriterion, StudentTCopula, TreeAlgorithm,
-    TreeCriterion, VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
+    FactorFitOptions, FactorFitResult, FactorLayout, FactorQuadrature, FitDiagnostics, FitOptions,
+    FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions,
+    HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams,
+    PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions, SelectionCriterion,
+    StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge, VineFitOptions,
+    VineStructureKind, VineTree,
 };
 
 create_exception!(rscopulas, RscopulasError, PyException);
@@ -1778,7 +1779,7 @@ impl PyHierarchicalArchimedeanCopula {
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, tree=None, family_set=None, structure_method="agglomerative_tau_then_collapse", fit_method="composite_mle", collapse_eps=0.05, mc_samples=256, allow_experimental=true, clip_eps=1e-12, max_iter=500))]
+    #[pyo3(signature = (data, tree=None, family_set=None, structure_method="agglomerative_tau_then_collapse", fit_method="composite_mle", collapse_eps=0.05, mc_samples=0, allow_experimental=true, clip_eps=1e-12, max_iter=500))]
     fn fit(
         data: PyReadonlyArray2<'_, f64>,
         tree: Option<&Bound<'_, PyAny>>,
@@ -1943,13 +1944,26 @@ impl PyFactorCopula {
     /// `{"family": str, "rotation": str, "parameters": [floats]}` — so users
     /// can hand-build a model for simulation studies or unit tests.
     #[staticmethod]
-    #[pyo3(signature = (links, quadrature_nodes=25))]
-    fn from_links(links: &Bound<'_, PyList>, quadrature_nodes: usize) -> PyResult<Self> {
+    #[pyo3(signature = (links, quadrature_nodes=25, *, adaptive_quadrature=true, quadrature_max_nodes=4096, quadrature_rel_tol=1e-7))]
+    fn from_links(
+        links: &Bound<'_, PyList>,
+        quadrature_nodes: usize,
+        adaptive_quadrature: bool,
+        quadrature_max_nodes: usize,
+        quadrature_rel_tol: f64,
+    ) -> PyResult<Self> {
         let specs: Vec<rscopulas::PairCopulaSpec> = links
             .iter()
             .map(|item| pair_spec_from_py_dict(item.cast::<PyDict>()?))
             .collect::<PyResult<Vec<_>>>()?;
         FactorCopula::basic_1f(specs, quadrature_nodes)
+            .and_then(|model| {
+                model.with_quadrature(FactorQuadrature {
+                    adaptive: adaptive_quadrature,
+                    max_nodes: quadrature_max_nodes,
+                    rel_tol: quadrature_rel_tol,
+                })
+            })
             .map(|inner| Self { inner })
             .map_err(to_pyerr)
     }
@@ -1967,7 +1981,10 @@ impl PyFactorCopula {
         joint_polish_rel_tol=1e-6,
         layout="basic_1f",
         clip_eps=1e-12,
-        max_iter=500
+        max_iter=500,
+        adaptive_quadrature=true,
+        quadrature_max_nodes=4096,
+        quadrature_rel_tol=1e-7
     ))]
     fn fit(
         data: PyReadonlyArray2<'_, f64>,
@@ -1981,6 +1998,9 @@ impl PyFactorCopula {
         layout: &str,
         clip_eps: f64,
         max_iter: usize,
+        adaptive_quadrature: bool,
+        quadrature_max_nodes: usize,
+        quadrature_rel_tol: f64,
     ) -> PyResult<(Self, PyFitDiagnostics, Vec<f64>)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1990,6 +2010,11 @@ impl PyFactorCopula {
                 include_rotations,
                 criterion: criterion_from_name(criterion)?,
                 quadrature_nodes,
+                quadrature: FactorQuadrature {
+                    adaptive: adaptive_quadrature,
+                    max_nodes: quadrature_max_nodes,
+                    rel_tol: quadrature_rel_tol,
+                },
                 refine_iterations,
                 joint_polish_cycles,
                 joint_polish_rel_tol,
@@ -2046,6 +2071,19 @@ impl PyFactorCopula {
     #[getter]
     fn quadrature_nodes(&self) -> usize {
         self.inner.quadrature_nodes()
+    }
+
+    #[getter]
+    fn adaptive_quadrature(&self) -> bool {
+        self.inner.quadrature().adaptive
+    }
+    #[getter]
+    fn quadrature_max_nodes(&self) -> usize {
+        self.inner.quadrature().max_nodes
+    }
+    #[getter]
+    fn quadrature_rel_tol(&self) -> f64 {
+        self.inner.quadrature().rel_tol
     }
 
     #[getter]

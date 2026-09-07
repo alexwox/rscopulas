@@ -216,10 +216,9 @@ impl VineCopula {
     /// Fits a C-vine with an explicit variable order.
     ///
     /// The first element of `order` becomes the C-vine root, and the resulting
-    /// structure has that variable at the Rosenblatt anchor position. Use this
-    /// to set up exact conditional sampling via [`Self::inverse_rosenblatt`]:
-    /// variables intended to be conditioned on should occupy the leading
-    /// positions of `order`.
+    /// sampling order is reversed: the last element is `variable_order()[0]`,
+    /// the Rosenblatt anchor. Put conditioning variables at the end of `order`
+    /// and inspect [`Self::variable_order`] before conditional sampling.
     pub fn fit_c_vine_with_order(
         data: &PseudoObs,
         order: &[usize],
@@ -240,9 +239,9 @@ impl VineCopula {
 
     /// Fits a D-vine with an explicit variable order.
     ///
-    /// `order` defines the D-vine path in order, so `order[0]` is again the
-    /// Rosenblatt anchor. Use this to pin conditioning variables to the
-    /// leading diagonal positions for exact conditional sampling.
+    /// `order` defines the D-vine path. Its last element becomes
+    /// `variable_order()[0]`, the Rosenblatt anchor. Put conditioning variables
+    /// at the end of the path and inspect [`Self::variable_order`].
     pub fn fit_d_vine_with_order(
         data: &PseudoObs,
         order: &[usize],

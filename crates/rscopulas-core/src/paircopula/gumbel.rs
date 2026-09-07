@@ -1,5 +1,16 @@
-use crate::archimedean_math::gumbel;
 use crate::errors::{CopulaError, FitError};
+use crate::math::logaddexp;
+
+fn terms(u: f64, v: f64, theta: f64) -> (f64, f64, f64, f64) {
+    let x = (-u.ln()).ln();
+    let y = (-v.ln()).ln();
+    let s = logaddexp(theta * x, theta * y);
+    (x, y, s, (s / theta).exp())
+}
+
+pub fn cdf(u: f64, v: f64, theta: f64) -> Result<f64, CopulaError> {
+    Ok((-terms(u, v, theta).3).exp())
+}
 
 pub fn theta_from_tau(tau: f64) -> Result<f64, CopulaError> {
     if !tau.is_finite() || tau <= 0.0 || tau >= 1.0 {
@@ -18,14 +29,10 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
         }
         .into());
     }
-    let alpha = 1.0 / theta;
-    let t = (-u1.ln()).powf(theta) + (-u2.ln()).powf(theta);
-    let log_abs_derivative = gumbel::log_abs_generator_derivative(2, t, alpha);
-    let log_phi = theta.ln() + (theta - 1.0) * (-u1.ln()).ln() - u1.ln()
-        + theta.ln()
-        + (theta - 1.0) * (-u2.ln()).ln()
-        - u2.ln();
-    Ok(log_abs_derivative + log_phi)
+    if theta == 1.0 {
+        return Ok(0.0);
+    }
+    Ok(log_pdf_from_logs(u1.ln(), u2.ln(), theta))
 }
 
 pub fn cond_first_given_second(
@@ -34,10 +41,8 @@ pub fn cond_first_given_second(
     theta: f64,
     _clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let x = (-u1.ln()).powf(theta);
-    let y = (-u2.ln()).powf(theta);
-    let t = (x + y).powf(1.0 / theta);
-    Ok((-t).exp() * (x + y).powf(1.0 / theta - 1.0) * (-u2.ln()).powf(theta - 1.0) / u2)
+    let (_, y, s, t) = terms(u1, u2, theta);
+    Ok((-t + (1.0 / theta - 1.0) * s + (theta - 1.0) * y - u2.ln()).exp())
 }
 
 pub fn cond_second_given_first(
@@ -46,10 +51,7 @@ pub fn cond_second_given_first(
     theta: f64,
     _clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let x = (-u1.ln()).powf(theta);
-    let y = (-u2.ln()).powf(theta);
-    let t = (x + y).powf(1.0 / theta);
-    Ok((-t).exp() * (x + y).powf(1.0 / theta - 1.0) * (-u1.ln()).powf(theta - 1.0) / u1)
+    cond_first_given_second(u2, u1, theta, _clip_eps)
 }
 
 pub fn inv_first_given_second(
@@ -88,4 +90,17 @@ pub fn inv_second_given_first(
         }
     }
     Ok(0.5 * (low + high))
+}
+
+pub(super) fn log_pdf_from_logs(u: f64, v: f64, theta: f64) -> f64 {
+    if theta == 1.0 {
+        return 0.0;
+    }
+    let (x, y) = ((-u).ln(), (-v).ln());
+    let s = logaddexp(theta * x, theta * y);
+    let t = (s / theta).exp();
+    -t - u - v
+        + (theta - 1.0) * (x + y)
+        + (2.0 / theta - 2.0) * s
+        + logaddexp(0.0, (theta - 1.0).ln() - s / theta)
 }

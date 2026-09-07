@@ -111,6 +111,12 @@ pub fn fit_hac(
         }
         .into());
     }
+    if options.mc_samples != 0 {
+        return Err(FitError::Failed {
+            reason: "HAC simulated likelihood is not implemented; mc_samples must be zero",
+        }
+        .into());
+    }
     let mut progress = HacFitProgress {
         iterations: 0,
         converged: true,
@@ -738,6 +744,9 @@ fn sample_child_frailty<R: Rng + ?Sized>(
     rng: &mut R,
     weights: &[f64],
 ) -> Result<f64, CopulaError> {
+    if parent_family == child_family && parent_theta == child_theta {
+        return Ok(parent_frailty);
+    }
     if parent_family == HacFamily::Gumbel && child_family == HacFamily::Gumbel {
         let alpha = parent_theta / child_theta;
         let stable = sample_positive_stable(rng, alpha);
@@ -812,7 +821,7 @@ fn stehfest_weights(n: usize) -> Vec<f64> {
         .map(|k| {
             let sign = if (k + m).is_multiple_of(2) { 1.0 } else { -1.0 };
             let mut total = 0.0;
-            let lower = (k + 1).div_ceil(2);
+            let lower = k.div_ceil(2);
             let upper = k.min(m);
             for j in lower..=upper {
                 total += (j as f64).powi(m as i32) * factorial(2 * j)
@@ -972,5 +981,18 @@ fn internal_node_count(tree: &HacTree) -> usize {
     match tree {
         HacTree::Leaf(_) => 0,
         HacTree::Node(node) => 1 + node.children.iter().map(internal_node_count).sum::<usize>(),
+    }
+}
+
+#[cfg(test)]
+mod inversion_tests {
+    #[test]
+    fn stehfest_recovers_known_laplace_transforms() {
+        assert_eq!(super::stehfest_weights(2), vec![2.0, -2.0]);
+        let weights = super::stehfest_weights(12);
+        for x in [0.1, 1.0, 3.0] {
+            let value = super::inverse_laplace_stehfest(|s| 1.0 / (s + 1.0), x, &weights);
+            assert!((value - (-x).exp()).abs() < 1e-3);
+        }
     }
 }

@@ -341,8 +341,8 @@ Fit the copula to pseudo-observations. In addition to the shared `clip_eps` and 
   Threshold for collapsing subtrees when the structure method uses agglomeration.
 </ParamField>
 
-<ParamField body="mc_samples" type="int" default="256">
-  Reserved compatibility option. Simulated likelihood is not implemented; fitted models report zero samples.
+<ParamField body="mc_samples" type="int" default="0">
+  Reserved for simulated likelihood, which is not implemented. Must be zero; nonzero values raise an error.
 </ParamField>
 
 <ParamField body="allow_experimental" type="bool" default="True">

@@ -48,6 +48,7 @@ pub struct VineStructure {
 /// Fitted vine copula together with its structural matrices.
 #[derive(Debug, Clone, Serialize)]
 pub struct VineCopula {
+    pub(crate) format_version: u32,
     pub(crate) dim: usize,
     pub(crate) structure: VineStructure,
     pub(crate) trees: Vec<VineTree>,
@@ -65,11 +66,17 @@ impl<'de> Deserialize<'de> for VineCopula {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct State {
+            format_version: Option<u32>,
             dim: usize,
             structure: VineStructure,
             trees: Vec<VineTree>,
         }
         let state = State::deserialize(deserializer)?;
+        if state.format_version != Some(1) {
+            return Err(serde::de::Error::custom(
+                "unsupported or unversioned vine state; rscopulas 0.2 used a different pair orientation; refit or explicitly rebuild trees under the 0.3 contract",
+            ));
+        }
         let model = Self::from_trees(
             state.structure.kind,
             state.trees,

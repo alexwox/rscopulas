@@ -26,6 +26,27 @@ pub fn candidate_nus() -> Vec<f64> {
         .collect()
 }
 
+pub fn cdf(u: f64, v: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
+    // Student-t Plackett integral from the countermonotone limit rho=-1.
+    // Unlike Gaussian copulas, rho=0 is not independence for finite nu.
+    let dist = t_dist(nu)?;
+    let x = dist.inverse_cdf(u);
+    let y = dist.inverse_cdf(v);
+    let value = super::common::integrate_1d(
+        &|t| {
+            let r = t.sin();
+            let q = (x - y).powi(2) / (2.0 * (1.0 - r)) + (x + y).powi(2) / (2.0 * (1.0 + r));
+            Ok((-0.5 * nu * (q / nu).ln_1p()).exp())
+        },
+        -std::f64::consts::FRAC_PI_2,
+        rho.asin(),
+        1e-12,
+        18,
+    )? / (2.0 * std::f64::consts::PI);
+    let lower = (u + v - 1.0).max(0.0);
+    Ok((lower + value).clamp(lower, u.min(v)))
+}
+
 pub fn log_pdf(u1: f64, u2: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     if !rho.is_finite() || rho.abs() >= 1.0 || !nu.is_finite() || nu <= 0.0 {
         return Err(FitError::Failed {
@@ -81,4 +102,22 @@ pub fn inv_second_given_first(u1: f64, p: f64, rho: f64, nu: f64) -> Result<f64,
     let q = cond.inverse_cdf(p);
     let scale = (((nu + x * x) * (1.0 - rho * rho)) / (nu + 1.0)).sqrt();
     Ok(dist.cdf(rho * x + scale * q))
+}
+
+#[cfg(test)]
+mod cdf_tests {
+    #[test]
+    fn cdf_matches_independent_mvtnorm_tvpack_values() {
+        // R: pmvt(upper=qt(c(.1,.7),4), df=4, corr=matrix(c(1,r,r,1),2), algorithm=TVPACK(abseps=1e-12))
+        for (rho, expected) in [
+            (-0.9, 0.003555225659071),
+            (0.0, 0.065128123319298),
+            (0.8, 0.098293867703668),
+            (0.99, 0.099998560803398),
+        ] {
+            let value = super::cdf(0.1, 0.7, rho, 4.0).unwrap();
+            assert!((value - expected).abs() < 5e-12, "rho {rho}: {value}");
+            assert_eq!(value, super::cdf(0.7, 0.1, rho, 4.0).unwrap());
+        }
+    }
 }

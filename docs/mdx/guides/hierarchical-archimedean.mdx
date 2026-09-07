@@ -83,7 +83,7 @@ print("joint density available:", model.exact_loglik)
 
 `exact_loglik` identifies the flat joint-density path. `is_exact` describes whether the tree uses supported same-family nesting; it may be `True` for a nested Gumbel tree even though its joint density is unavailable.
 
-The default `fit_method="composite_mle"` optimizes pairwise scores at each node. `recursive_mle` is a compatibility alias. `tau_init` uses Kendall-tau inversion without optimization. `full_mle`, `smle`, and `dmle` raise an explicit unsupported-method error. No simulated likelihood is performed: `used_smle` is false and the fitted model's `mc_samples` is zero. `allow_experimental=False` rejects mixed-family fitted trees.
+The default `fit_method="composite_mle"` optimizes pairwise scores at each node. `recursive_mle` is a compatibility alias. `tau_init` uses Kendall-tau inversion without optimization. `full_mle`, `smle`, and `dmle` raise an explicit unsupported-method error. No simulated likelihood is performed: `used_smle` is false and `mc_samples` must be zero (its default); nonzero values are rejected. `allow_experimental=False` rejects mixed-family fitted trees.
 
 ## Sampling
 

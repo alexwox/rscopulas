@@ -61,6 +61,7 @@ pub struct HacFitOptions {
     pub fit_method: HacFitMethod,
     pub family_set: Vec<HacFamily>,
     pub collapse_eps: f64,
+    /// Reserved for unimplemented simulated likelihood. Must be zero.
     pub mc_samples: usize,
     pub allow_experimental: bool,
 }
@@ -73,7 +74,7 @@ impl Default for HacFitOptions {
             fit_method: HacFitMethod::CompositeMle,
             family_set: vec![HacFamily::Clayton, HacFamily::Frank, HacFamily::Gumbel],
             collapse_eps: 0.05,
-            mc_samples: 256,
+            mc_samples: 0,
             allow_experimental: true,
         }
     }

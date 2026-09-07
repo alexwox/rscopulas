@@ -28,7 +28,8 @@
             "pages": [
               "introduction",
               "quickstart-python",
-              "quickstart-rust"
+              "quickstart-rust",
+              "guides/migrating-to-0-3"
             ]
           },
           {
@@ -44,6 +45,7 @@
             "pages": [
               "guides/vine-copulas",
               "guides/pair-copulas",
+              "guides/factor-copulas",
               "guides/khoudraji",
               "guides/hierarchical-archimedean",
               "guides/visualization"

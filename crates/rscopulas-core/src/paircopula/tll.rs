@@ -187,15 +187,17 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
     // inputs drift from unit variance.
     let exponent = match method {
         TllOrder::Constant => -1.0 / 6.0, // classic Silverman 1.0·n^{-1/6} (p=0 in our convention)
-        TllOrder::Linear => -1.0 / 3.0,   // p=1, so -1/(2p+1) = -1/3
-        TllOrder::Quadratic => -1.0 / 5.0, // p=2, so -1/5
+        // vinecopulib specifies covariance bandwidth B. Our scalar is its
+        // square root h, so both the exponent and multiplier must be rooted.
+        TllOrder::Linear => -1.0 / 6.0,
+        TllOrder::Quadratic => -1.0 / 10.0,
     };
     let scale = match method {
         TllOrder::Constant => 1.0,
         // vinecopulib's `1.5` multiplier for local-polynomial orders; keeps
         // enough smoothing to counter the extra bias-variance that higher-
         // order corrections would otherwise introduce.
-        TllOrder::Linear | TllOrder::Quadratic => 1.5,
+        TllOrder::Linear | TllOrder::Quadratic => 1.5_f64.sqrt(),
     };
     let bandwidth = scale * sigma.max(1e-3) * n.powf(exponent);
 

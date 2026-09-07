@@ -542,7 +542,7 @@ class HierarchicalArchimedeanCopula(_BaseModel):
         structure_method: str = "agglomerative_tau_then_collapse",
         fit_method: str = "composite_mle",
         collapse_eps: float = 0.05,
-        mc_samples: int = 256,
+        mc_samples: int = 0,
         allow_experimental: bool = True,
         clip_eps: float = 1e-12,
         max_iter: int = 500,
@@ -950,10 +950,12 @@ class FactorCopula(_BaseModel):
     Khoudraji) can be used as a link.
 
     Gaussian links use the exact Gaussian joint density. Other links use
-    normal-scale Gauss-Legendre integration with successive-refinement checks
-    at relative tolerance 1e-7 (maximum 4096 nodes). ``quadrature_nodes`` is a
-    minimum budget. Non-convergence raises a numerical error. This can cost
-    more than fixed quadrature, especially during joint polishing.
+    normal-scale Gauss-Legendre integration with adaptive interval refinement.
+    ``quadrature_rel_tol`` controls the estimated relative error, and
+    ``quadrature_max_nodes`` caps integrand evaluations per row (defaults:
+    1e-7 and 4096). Exceeding that budget raises a numerical error.
+    ``adaptive_quadrature=False`` uses exactly ``quadrature_nodes`` with no
+    accuracy guarantee. These settings are stored with the fitted model.
 
     Fitting initializes from a normal-score pseudo-latent, refines link fits,
     and optionally polishes the joint likelihood by coordinate ascent.
@@ -975,6 +977,9 @@ class FactorCopula(_BaseModel):
         links: Sequence[dict[str, Any]],
         *,
         quadrature_nodes: int = 25,
+        adaptive_quadrature: bool = True,
+        quadrature_max_nodes: int = 4096,
+        quadrature_rel_tol: float = 1e-7,
     ) -> "FactorCopula":
         """Build a factor copula directly from pre-specified link dicts.
 
@@ -986,7 +991,10 @@ class FactorCopula(_BaseModel):
         """
         payload = [_serialize_pair_spec(dict(link)) for link in links]
         return cls(
-            _rscopulas._FactorCopula.from_links(payload, int(quadrature_nodes))
+            _rscopulas._FactorCopula.from_links(
+                payload, int(quadrature_nodes), adaptive_quadrature=adaptive_quadrature,
+                quadrature_max_nodes=int(quadrature_max_nodes), quadrature_rel_tol=float(quadrature_rel_tol),
+            )
         )
 
     @classmethod
@@ -998,6 +1006,9 @@ class FactorCopula(_BaseModel):
         include_rotations: bool = True,
         criterion: str = "aic",
         quadrature_nodes: int = 25,
+        adaptive_quadrature: bool = True,
+        quadrature_max_nodes: int = 4096,
+        quadrature_rel_tol: float = 1e-7,
         refine_iterations: int = 2,
         joint_polish_cycles: int = 5,
         joint_polish_rel_tol: float = 1e-6,
@@ -1023,9 +1034,15 @@ class FactorCopula(_BaseModel):
             ``"aic"`` or ``"bic"`` — used to pick between candidate link
             families at each observed variable.
         quadrature_nodes
-            Number of Gauss–Legendre nodes used for the latent integral.
-            Twenty-five is the ``CopulaModel`` default and is accurate to
-            ~1e-14 for well-behaved link families.
+            Minimum work in adaptive mode, or exact node count in fixed mode.
+        adaptive_quadrature
+            Refine the latent integral by estimated error (default True).
+            False trades accuracy checks for a fixed amount of work.
+        quadrature_max_nodes
+            Hard cap on integrand evaluations per row, including refinement
+            work. Applies throughout fitting and inference in adaptive mode.
+        quadrature_rel_tol
+            Target estimated relative error for adaptive integration.
         refine_iterations
             EM-style refinement passes after the initial sequential MLE.
             Two is the default and usually enough to correct the warm-start
@@ -1035,8 +1052,8 @@ class FactorCopula(_BaseModel):
             sweep optimises every link's free parameters jointly against
             the true quadrature-integrated factor log-likelihood. Set to
             ``0`` to disable the polish (reproduces the pre-polish fit for
-            benchmarking). Default ``5`` is enough to converge for
-            warm-started d ≤ 20 problems.
+            benchmarking). Default ``5`` caps the number of sweeps;
+            diagnostics report whether the stopping criterion was reached.
         joint_polish_rel_tol
             Relative-tolerance stop criterion for the polish sweep: any
             sweep that improves the log-likelihood by less than
@@ -1056,6 +1073,9 @@ class FactorCopula(_BaseModel):
             include_rotations=include_rotations,
             criterion=criterion,
             quadrature_nodes=int(quadrature_nodes),
+            adaptive_quadrature=adaptive_quadrature,
+            quadrature_max_nodes=int(quadrature_max_nodes),
+            quadrature_rel_tol=float(quadrature_rel_tol),
             refine_iterations=int(refine_iterations),
             joint_polish_cycles=int(joint_polish_cycles),
             joint_polish_rel_tol=float(joint_polish_rel_tol),
@@ -1090,6 +1110,18 @@ class FactorCopula(_BaseModel):
     def quadrature_nodes(self) -> int:
         """Gauss–Legendre quadrature size used for log-density evaluation."""
         return int(self._core.quadrature_nodes)
+
+    @property
+    def adaptive_quadrature(self) -> bool:
+        return bool(self._core.adaptive_quadrature)
+
+    @property
+    def quadrature_max_nodes(self) -> int:
+        return int(self._core.quadrature_max_nodes)
+
+    @property
+    def quadrature_rel_tol(self) -> float:
+        return float(self._core.quadrature_rel_tol)
 
     @property
     def layout(self) -> str:

@@ -155,6 +155,36 @@ pub(crate) struct PairBatchBuffers<'a> {
 }
 
 impl PairCopulaSpec {
+    /// Factor quadrature carries both tails in log form, avoiding loss of
+    /// relative precision when a latent probability rounds close to one.
+    pub(crate) fn log_pdf_from_log_probabilities(
+        &self,
+        mut log_u: [f64; 2],
+        log_survival: [f64; 2],
+    ) -> Option<f64> {
+        let mut log_s = log_survival;
+        if matches!(self.rotation, Rotation::R90 | Rotation::R180) {
+            std::mem::swap(&mut log_u[0], &mut log_s[0]);
+        }
+        if matches!(self.rotation, Rotation::R270 | Rotation::R180) {
+            std::mem::swap(&mut log_u[1], &mut log_s[1]);
+        }
+        match (&self.family, &self.params) {
+            (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
+                Some(clayton::log_pdf_from_logs(log_u[0], log_u[1], *theta))
+            }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                Some(bb1::log_pdf_from_logs(log_u[0], log_u[1], *theta, *delta))
+            }
+            (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
+                Some(gumbel::log_pdf_from_logs(log_u[0], log_u[1], *theta))
+            }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                Some(joe::log_pdf_from_log_survival(log_s[0], log_s[1], *theta))
+            }
+            _ => None,
+        }
+    }
     /// Validates the family and parameter domain before constructing a model.
     pub fn validate(&self) -> Result<(), CopulaError> {
         use PairCopulaFamily as F;
@@ -370,7 +400,9 @@ impl PairCopulaSpec {
                 .into());
             }
         };
-        if !base.is_finite() {
+        // A zero density is a valid row result. NaN and +infinity indicate a
+        // numerical failure and must not be silently converted into zero mass.
+        if base.is_nan() || base == f64::INFINITY {
             return Err(crate::errors::NumericalError::Failed {
                 reason: "pair density is not finite",
             }
@@ -729,23 +761,13 @@ impl PairCopulaSpec {
                 Ok((u1 * u2).clamp(0.0, 1.0))
             }
             (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
-                let sum = u1.powf(-*theta) + u2.powf(-*theta) - 1.0;
-                Ok(sum.max(0.0).powf(-1.0 / *theta).clamp(0.0, 1.0))
+                clayton::cdf(u1, u2, *theta)
             }
             (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
                 Ok(frank_cdf_stable(u1, u2, *theta).clamp(0.0, 1.0))
             }
-            (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
-                let term = ((-u1.ln()).powf(*theta) + (-u2.ln()).powf(*theta)).powf(1.0 / *theta);
-                Ok(f64::exp(-term).clamp(0.0, 1.0))
-            }
-            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
-                // C(u1, u2) = 1 - ((1-u1)^θ + (1-u2)^θ - (1-u1)^θ(1-u2)^θ)^(1/θ)
-                let a = (1.0 - u1).powf(*theta);
-                let b = (1.0 - u2).powf(*theta);
-                let s = a + b - a * b;
-                Ok((1.0 - s.max(0.0).powf(1.0 / *theta)).clamp(0.0, 1.0))
-            }
+            (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => gumbel::cdf(u1, u2, *theta),
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => joe::cdf(u1, u2, *theta),
             (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
                 bb1::cdf(u1, u2, *theta, *delta)
             }
@@ -765,10 +787,12 @@ impl PairCopulaSpec {
                 tawn::cdf(u1, u2, *theta, 1.0, *beta)
             }
             (PairCopulaFamily::Tll, PairCopulaParams::Tll(params)) => tll::cdf(u1, u2, params),
-            (PairCopulaFamily::Gaussian, PairCopulaParams::One(_))
-            | (PairCopulaFamily::StudentT, PairCopulaParams::Two(_, _))
-            | (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(_)) => {
-                integrate_cdf_from_h(self, u1, u2, clip_eps)
+            (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => gaussian::cdf(u1, u2, *rho),
+            (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
+                student_t::cdf(u1, u2, *rho, *nu)
+            }
+            (PairCopulaFamily::Khoudraji, PairCopulaParams::Khoudraji(params)) => {
+                khoudraji::cdf(u1, u2, params, clip_eps)
             }
             _ => Err(FitError::Failed {
                 reason: "pair-copula family/parameter combination is invalid",
@@ -815,29 +839,43 @@ fn frank_cdf_stable(u1: f64, u2: f64, theta: f64) -> f64 {
     (log_d - log_den) / theta
 }
 
-fn integrate_cdf_from_h(
-    spec: &PairCopulaSpec,
-    u1: f64,
-    u2: f64,
-    clip_eps: f64,
+pub(super) fn integrate_1d<F: Fn(f64) -> Result<f64, CopulaError>>(
+    f: &F,
+    lower: f64,
+    upper: f64,
+    tol: f64,
+    depth: usize,
 ) -> Result<f64, CopulaError> {
-    let upper = u2.clamp(clip_eps, 1.0 - clip_eps);
-    let lower = clip_eps;
-    let baseline = lower * spec.cond_first_given_second(u1, lower, clip_eps)?;
-    if upper <= lower {
-        return Ok(baseline.clamp(0.0, 1.0));
+    use std::sync::OnceLock;
+    type Rule = (Vec<f64>, Vec<f64>);
+    static RULES: OnceLock<(Rule, Rule)> = OnceLock::new();
+    let (small, large) = RULES.get_or_init(|| {
+        (
+            crate::math::gauss_legendre_01(8),
+            crate::math::gauss_legendre_01(16),
+        )
+    });
+    let integrate = |rule: &Rule| -> Result<f64, CopulaError> {
+        let mut total = 0.0;
+        for (&x, &w) in rule.0.iter().zip(&rule.1) {
+            total += w * f(lower + (upper - lower) * x)?;
+        }
+        Ok((upper - lower) * total)
+    };
+    let coarse = integrate(small)?;
+    let fine = integrate(large)?;
+    if (fine - coarse).abs() <= tol + 1e-11 * fine.abs() {
+        return Ok(fine);
     }
-
-    let steps = 32usize;
-    let step = (upper - lower) / steps as f64;
-    let mut total = spec.cond_first_given_second(u1, lower, clip_eps)?
-        + spec.cond_first_given_second(u1, upper, clip_eps)?;
-    for idx in 1..steps {
-        let value = lower + idx as f64 * step;
-        let weight = if idx % 2 == 0 { 2.0 } else { 4.0 };
-        total += weight * spec.cond_first_given_second(u1, value, clip_eps)?;
+    if depth == 0 {
+        return Err(crate::errors::NumericalError::Failed {
+            reason: "pair CDF quadrature did not converge",
+        }
+        .into());
     }
-    Ok((baseline + total * step / 3.0).clamp(0.0, 1.0))
+    let mid = (lower + upper) * 0.5;
+    Ok(integrate_1d(f, lower, mid, tol * 0.5, depth - 1)?
+        + integrate_1d(f, mid, upper, tol * 0.5, depth - 1)?)
 }
 
 /// Fits the best pair-copula specification for one bivariate edge.
@@ -1063,7 +1101,7 @@ fn fit_simple_family(
         PairCopulaFamily::Independence => PairCopulaParams::None,
         PairCopulaFamily::Gaussian => {
             let rho = gaussian::tau_to_rho(tau);
-            PairCopulaParams::One(rho.clamp(-0.98, 0.98))
+            PairCopulaParams::One(rho.clamp(-1.0 + f64::EPSILON, 1.0 - f64::EPSILON))
         }
         PairCopulaFamily::StudentT => {
             let mut best = None;

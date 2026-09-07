@@ -66,6 +66,7 @@ pub(crate) fn build_model_from_trees(
         &variable_order,
     )?;
     Ok(VineCopula {
+        format_version: 1,
         dim,
         structure: VineStructure {
             kind,

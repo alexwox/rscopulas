@@ -164,11 +164,12 @@ pub mod vine;
 pub use data::PseudoObs;
 pub use domain::{
     ClaytonCopula, Copula, CopulaFamily, CopulaModel, Device, EvalOptions, ExecPolicy,
-    FactorCopula, FactorFitOptions, FactorFitResult, FactorLayout, FitDiagnostics, FitOptions,
-    FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions,
-    HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, LikelihoodKind,
-    SampleOptions, SelectionCriterion, StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula,
-    VineEdge, VineFitOptions, VineStructure, VineStructureKind, VineTree,
+    FactorCopula, FactorFitOptions, FactorFitResult, FactorLayout, FactorQuadrature,
+    FitDiagnostics, FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily,
+    HacFitMethod, HacFitOptions, HacNode, HacStructureMethod, HacTree,
+    HierarchicalArchimedeanCopula, LikelihoodKind, SampleOptions, SelectionCriterion,
+    StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge, VineFitOptions,
+    VineStructure, VineStructureKind, VineTree,
 };
 pub use errors::{BackendError, CopulaError, FitError, InputError, NumericalError};
 pub use paircopula::{
