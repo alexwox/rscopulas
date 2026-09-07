@@ -896,9 +896,15 @@ pub fn fit_pair_copula(
         candidates.len(),
     )?;
     let fits = parallel_try_map_range_collect(candidates.len(), strategy, |idx| {
-        finalize_pair_fit(candidates[idx].clone(), u1, u2, options)
+        match finalize_pair_fit(candidates[idx].clone(), u1, u2, options) {
+            Ok(fit) if fit.loglik.is_finite() => Ok(Some(fit)),
+            // A numerically unusable family must not prevent another valid
+            // candidate from winning. Input and backend failures still surface.
+            Ok(_) | Err(CopulaError::Numerical(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
     })?;
-    let best = fits.into_iter().min_by(|left, right| {
+    let best = fits.into_iter().flatten().min_by(|left, right| {
         criterion_value(left, options.criterion)
             .total_cmp(&criterion_value(right, options.criterion))
     });
