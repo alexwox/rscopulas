@@ -2,6 +2,20 @@ use ndarray::{Array2, ArrayView2};
 
 use crate::errors::InputError;
 
+pub fn validate_clip_eps(eps: f64) -> Result<(), InputError> {
+    if !eps.is_finite() || eps <= 0.0 || eps >= 0.5 || 1.0 - eps == 1.0 {
+        return Err(InputError::InvalidClipEpsilon);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_probability(value: f64) -> Result<(), InputError> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(InputError::InvalidProbability);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct PseudoObs {
     values: Array2<f64>,

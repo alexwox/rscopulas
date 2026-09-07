@@ -58,6 +58,8 @@ def _serialize_pair_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "rotation": str(spec.get("rotation", "R0")),
         "parameters": [float(value) for value in spec.get("parameters", spec.get("params", []))],
     }
+    if "state" in spec:
+        payload["state"] = spec["state"]
     if payload["family"] == "khoudraji":
         payload["shape_1"] = float(spec["shape_1"])
         payload["shape_2"] = float(spec["shape_2"])
@@ -76,6 +78,8 @@ def _serialize_vine_edge(edge: VineEdgeInfo | dict[str, Any]) -> dict[str, Any]:
             "rotation": edge.rotation,
             "parameters": list(edge.parameters),
         }
+        if edge.state is not None:
+            payload["state"] = edge.state
         if edge.family == "khoudraji":
             payload["shape_1"] = edge.shape_1
             payload["shape_2"] = edge.shape_2
@@ -92,6 +96,8 @@ def _serialize_vine_edge(edge: VineEdgeInfo | dict[str, Any]) -> dict[str, Any]:
             "rotation": str(edge.get("rotation", "R0")),
             "parameters": _edge_parameters(edge),
         }
+        if "state" in edge:
+            payload["state"] = edge["state"]
         if payload["family"] == "khoudraji":
             payload["shape_1"] = float(edge["shape_1"])
             payload["shape_2"] = float(edge["shape_2"])
@@ -122,6 +128,7 @@ class FitDiagnostics:
     bic: float
     converged: bool
     n_iter: int
+    likelihood_kind: str = "joint"
 
     @classmethod
     def _from_core(cls, diagnostics: Any) -> "FitDiagnostics":
@@ -131,6 +138,7 @@ class FitDiagnostics:
             bic=float(diagnostics.bic),
             converged=bool(diagnostics.converged),
             n_iter=int(diagnostics.n_iter),
+            likelihood_kind=str(diagnostics.likelihood_kind),
         )
 
 
@@ -158,6 +166,7 @@ class FactorFitDiagnostics:
     converged: bool
     n_iter: int
     std_errors: tuple[float, ...]
+    likelihood_kind: str = "joint"
 
     @classmethod
     def _build(cls, diagnostics: Any, std_errors: Any) -> "FactorFitDiagnostics":
@@ -167,6 +176,7 @@ class FactorFitDiagnostics:
             bic=float(diagnostics.bic),
             converged=bool(diagnostics.converged),
             n_iter=int(diagnostics.n_iter),
+            likelihood_kind=str(diagnostics.likelihood_kind),
             std_errors=tuple(float(value) for value in std_errors),
         )
 
@@ -206,6 +216,7 @@ class VineEdgeInfo:
     shape_2: float | None = None
     base_copula_1: dict[str, Any] | None = None
     base_copula_2: dict[str, Any] | None = None
+    state: dict[str, Any] | None = None
 
     @classmethod
     def _from_core(cls, payload: dict[str, Any]) -> "VineEdgeInfo":
@@ -216,6 +227,7 @@ class VineEdgeInfo:
             family=str(payload["family"]),
             rotation=str(payload["rotation"]),
             parameters=tuple(float(value) for value in payload["parameters"]),
+            state=payload.get("state"),
             shape_1=None if payload.get("shape_1") is None else float(payload["shape_1"]),
             shape_2=None if payload.get("shape_2") is None else float(payload["shape_2"]),
             base_copula_1=None if payload.get("base_copula_1") is None else dict(payload["base_copula_1"]),
@@ -273,12 +285,14 @@ class PairCopula:
         parameters: Sequence[float] = (),
         *,
         rotation: str = "R0",
+        state: dict[str, Any] | None = None,
     ) -> "PairCopula":
         return cls(
             _rscopulas._PairCopula.from_spec(
                 str(family),
                 parameters=_parameter_values(parameters),
                 rotation=str(rotation),
+                state=state,
             )
         )
 
@@ -291,10 +305,9 @@ class PairCopula:
         method: str = "constant",
     ) -> "PairCopula":
         """Fit a nonparametric TLL (Transformation Local Likelihood) pair
-        copula from pseudo-observations. The current implementation supports
-        ``method='constant'`` only (Gaussian-kernel density estimation on
-        Φ⁻¹-transformed inputs); ``'linear'`` and ``'quadratic'`` are reserved
-        for future local-polynomial orders and currently raise an error.
+        copula using ``constant``, ``linear``, or ``quadratic`` local likelihood.
+        The fitted grid is normalized to uniform margins; ``spec["state"]``
+        preserves it for reconstruction with :meth:`from_spec`.
         """
         return cls(
             _rscopulas._PairCopula.fit_tll(
@@ -507,6 +520,14 @@ class GumbelCopula(_BaseModel):
 
 
 class HierarchicalArchimedeanCopula(_BaseModel):
+    def composite_log_pdf(self, data: npt.ArrayLike, *, clip_eps: float = 1e-12) -> npt.NDArray[np.float64]:
+        """Pairwise composite score, which is not a normalized joint density.
+
+        Nested HACs currently support this score and sampling. ``log_pdf``
+        requires an exact, flat HAC. Full/simulated MLE methods are unsupported.
+        """
+        return np.asarray(self._core.composite_log_pdf(_as_float_matrix(data), clip_eps=clip_eps))
+
     @classmethod
     def from_tree(cls, tree: int | dict[str, Any]) -> "HierarchicalArchimedeanCopula":
         return cls(_rscopulas._HierarchicalArchimedeanCopula.from_tree(tree))
@@ -519,7 +540,7 @@ class HierarchicalArchimedeanCopula(_BaseModel):
         tree: int | dict[str, Any] | None = None,
         family_set: Sequence[str] | None = None,
         structure_method: str = "agglomerative_tau_then_collapse",
-        fit_method: str = "recursive_mle",
+        fit_method: str = "composite_mle",
         collapse_eps: float = 0.05,
         mc_samples: int = 256,
         allow_experimental: bool = True,
@@ -790,8 +811,8 @@ class VineCopula(_BaseModel):
 
         ``variable_order[0]`` is the Rosenblatt anchor: the first variable
         simulated when traversing the fitted vine. To enable exact conditional
-        sampling on a column X, fit the vine with ``fit_c(order=[X, ...])`` or
-        ``fit_d(order=[X, ...])`` so that ``variable_order[0] == X``.
+        sampling on a column X, fit the vine with ``fit_c(order=[..., X])`` or
+        ``fit_d(order=[..., X])`` so that ``variable_order[0] == X``.
         """
         return [int(value) for value in self._core.variable_order()]
 
@@ -843,7 +864,7 @@ class VineCopula(_BaseModel):
             of length ``n`` in ``(0, 1)``. The provided column indices must
             form a prefix of :attr:`variable_order` — i.e. they must equal
             ``variable_order[0:k]`` as a set for some ``k``. Pin a variable
-            there by fitting with ``fit_c(order=[X, ...])``.
+            there by fitting with ``fit_c(order=[..., X])``.
         n
             Number of samples.
         seed
@@ -928,14 +949,17 @@ class FactorCopula(_BaseModel):
     (Gaussian, Clayton, Frank, Gumbel, Joe, BB1/6/7/8, Tawn1/2, TLL,
     Khoudraji) can be used as a link.
 
-    The log-density is evaluated via an ``n``-point Gauss–Legendre rule on
-    ``[0, 1]`` (default ``n = 25``, matching Joe's ``CopulaModel`` R package).
-    Fitting uses a two-stage sequential MLE: a normal-score projection
-    supplies a pseudo-latent, each link is fit against it, then
-    ``refine_iterations`` passes of EM-style refinement (posterior mean of
-    ``V | U`` under the current fit → rank-normalise → refit) polish the
-    estimates. For a strict joint MLE (higher accuracy at the cost of a
-    multi-dim optimiser dependency) see the follow-up in the phase-5 plan.
+    Gaussian links use the exact Gaussian joint density. Other links use
+    normal-scale Gauss-Legendre integration with successive-refinement checks
+    at relative tolerance 1e-7 (maximum 4096 nodes). ``quadrature_nodes`` is a
+    minimum budget. Non-convergence raises a numerical error. This can cost
+    more than fixed quadrature, especially during joint polishing.
+
+    Fitting initializes from a normal-score pseudo-latent, refines link fits,
+    and optionally polishes the joint likelihood by coordinate ascent.
+    ``converged`` reports the polish stopping condition; it is false when
+    polishing is disabled. Standard errors use a numerical Hessian and can
+    be NaN when information is not identifiable or evaluation fails.
 
     Example
     -------

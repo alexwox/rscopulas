@@ -3,9 +3,9 @@
 //! log-density at interior points and that effective_df is ordered TLL0 <
 //! TLL1 < TLL2 on identical data.
 
-use rand::{SeedableRng, rngs::StdRng};
-use rand::distr::StandardUniform;
 use rand::Rng;
+use rand::distr::StandardUniform;
+use rand::{SeedableRng, rngs::StdRng};
 
 use rscopulas::{
     PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, TllOrder, TllParams, tll_fit,
@@ -49,9 +49,9 @@ fn tll_constant_linear_quadratic_all_produce_finite_fits() {
     let (u1, u2) = gaussian_copula_sample(1000, 0.5, 42);
     for order in [TllOrder::Constant, TllOrder::Linear, TllOrder::Quadratic] {
         let params = tll_fit(&u1, &u2, order).expect("fit should succeed");
-        assert!(params.bandwidth > 0.0);
-        assert!(params.effective_df >= 1.0);
-        assert!(params.effective_df.is_finite());
+        assert!(params.bandwidth() > 0.0);
+        assert!(params.effective_df() >= 1.0);
+        assert!(params.effective_df().is_finite());
     }
 }
 
@@ -66,7 +66,7 @@ fn tll_effective_df_is_finite_and_in_range() {
     let (u1, u2) = gaussian_copula_sample(n, 0.4, 7);
     for order in [TllOrder::Constant, TllOrder::Linear, TllOrder::Quadratic] {
         let params = tll_fit(&u1, &u2, order).unwrap();
-        let df = params.effective_df;
+        let df = params.effective_df();
         assert!(df.is_finite(), "{order:?} df {df} not finite");
         assert!(df >= 1.0, "{order:?} df {df} below floor");
         assert!(df < n as f64, "{order:?} df {df} saturated at n cap");

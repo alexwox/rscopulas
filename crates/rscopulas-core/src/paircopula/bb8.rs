@@ -13,57 +13,51 @@ use crate::errors::{CopulaError, FitError};
 //                     · (β - x_u x_v / θ) / β².
 // Inverse h-functions fall back to bisection.
 
-fn prep(u1: f64, u2: f64, theta: f64, delta: f64) -> (f64, f64, f64) {
-    let beta = 1.0 - (1.0 - delta).powf(theta);
-    let x_u = 1.0 - (1.0 - delta * u1).powf(theta);
-    let x_v = 1.0 - (1.0 - delta * u2).powf(theta);
-    (beta, x_u, x_v)
+struct Terms {
+    lb: f64,
+    lx: [f64; 2],
+    lu: [f64; 2],
+    ld: f64,
+}
+fn prep(u: f64, v: f64, theta: f64, delta: f64) -> Terms {
+    use crate::math::{log1mexp, logaddexp};
+    let lu = [(-delta * u).ln_1p(), (-delta * v).ln_1p()];
+    let log_b_tail = theta * (-delta).ln_1p();
+    let lb = log1mexp(log_b_tail);
+    let lx = [log1mexp(theta * lu[0]), log1mexp(theta * lu[1])];
+    // beta - x_u*x_v = (1-x_u)*x_v + ((1-delta*v)^theta - (1-delta)^theta).
+    let ld = logaddexp(
+        theta * lu[0] + lx[1],
+        theta * lu[1] + log1mexp(log_b_tail - theta * lu[1]),
+    ) - lb;
+    Terms { lb, lx, lu, ld }
 }
 
-pub fn log_pdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
-    if !theta.is_finite() || theta < 1.0 {
+pub fn log_pdf(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    if !theta.is_finite() || theta < 1.0 || !delta.is_finite() || delta <= 0.0 || delta > 1.0 {
         return Err(FitError::Failed {
-            reason: "bb8 pair theta must be at least 1",
+            reason: "bb8 requires theta >= 1 and delta in (0, 1]",
         }
         .into());
     }
-    if !delta.is_finite() || delta <= 0.0 || delta > 1.0 {
-        return Err(FitError::Failed {
-            reason: "bb8 pair delta must lie in (0, 1]",
-        }
-        .into());
-    }
-    let (beta, x_u, x_v) = prep(u1, u2, theta, delta);
-    let d_val = 1.0 - x_u * x_v / beta;
-    let numer = beta - x_u * x_v / theta;
+    let t = prep(u, v, theta, delta);
+    let lnumer =
+        t.lb + crate::math::logaddexp(crate::math::log1mexp(-theta.ln()), t.ld - theta.ln());
     Ok(theta.ln()
         + delta.ln()
-        + (theta - 1.0) * ((1.0 - delta * u1).ln() + (1.0 - delta * u2).ln())
-        + (1.0 / theta - 2.0) * d_val.ln()
-        + numer.ln()
-        - 2.0 * beta.ln())
+        + (theta - 1.0) * (t.lu[0] + t.lu[1])
+        + (1.0 / theta - 2.0) * t.ld
+        + lnumer
+        - 2.0 * t.lb)
 }
 
-pub fn cond_first_given_second(
-    u1: f64,
-    u2: f64,
-    theta: f64,
-    delta: f64,
-) -> Result<f64, CopulaError> {
-    let (beta, x_u, x_v) = prep(u1, u2, theta, delta);
-    let d_val = 1.0 - x_u * x_v / beta;
-    Ok(x_u * (1.0 - delta * u2).powf(theta - 1.0) * d_val.powf(1.0 / theta - 1.0) / beta)
+pub fn cond_first_given_second(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    let t = prep(u, v, theta, delta);
+    Ok((t.lx[0] + (theta - 1.0) * t.lu[1] + (1.0 / theta - 1.0) * t.ld - t.lb).exp())
 }
 
-pub fn cond_second_given_first(
-    u1: f64,
-    u2: f64,
-    theta: f64,
-    delta: f64,
-) -> Result<f64, CopulaError> {
-    let (beta, x_u, x_v) = prep(u1, u2, theta, delta);
-    let d_val = 1.0 - x_u * x_v / beta;
-    Ok(x_v * (1.0 - delta * u1).powf(theta - 1.0) * d_val.powf(1.0 / theta - 1.0) / beta)
+pub fn cond_second_given_first(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    cond_first_given_second(v, u, theta, delta)
 }
 
 pub fn inv_first_given_second(
@@ -106,8 +100,6 @@ pub fn inv_second_given_first(
     Ok(0.5 * (low + high))
 }
 
-pub fn cdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
-    let (beta, x_u, x_v) = prep(u1, u2, theta, delta);
-    let d_val = 1.0 - x_u * x_v / beta;
-    Ok(((1.0 - d_val.max(0.0).powf(1.0 / theta)) / delta).clamp(0.0, 1.0))
+pub fn cdf(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
+    Ok(-(prep(u, v, theta, delta).ld / theta).exp_m1() / delta)
 }

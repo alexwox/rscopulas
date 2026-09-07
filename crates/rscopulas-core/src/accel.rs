@@ -133,6 +133,28 @@ pub fn evaluate_gaussian_pair_batch(
     device: Device,
     request: GaussianPairBatchRequest<'_>,
 ) -> Result<GaussianPairBatchResult, DispatchError> {
+    if request.u1.len() != request.u2.len()
+        || crate::data::validate_clip_eps(request.clip_eps).is_err()
+        || !request.rho.is_finite()
+        || request.rho.abs() >= 1.0
+        || request
+            .u1
+            .iter()
+            .chain(request.u2)
+            .any(|&u| crate::data::validate_probability(u).is_err())
+    {
+        return Err(DispatchError::Runtime {
+            backend: "gaussian pair",
+            reason: "invalid Gaussian pair batch request".into(),
+        });
+    }
+    if request.u1.is_empty() {
+        return Ok(GaussianPairBatchResult {
+            log_pdf: vec![],
+            cond_on_first: vec![],
+            cond_on_second: vec![],
+        });
+    }
     match device {
         Device::Cpu => Err(DispatchError::OperationUnsupported {
             backend: "cpu",

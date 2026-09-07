@@ -14,6 +14,10 @@ pub enum CopulaError {
 
 #[derive(Debug, Error)]
 pub enum InputError {
+    #[error("clip_eps must be finite and in (0, 0.5), with 1 - clip_eps representably below 1")]
+    InvalidClipEpsilon,
+    #[error("probabilities must be finite and lie in [0, 1]")]
+    InvalidProbability,
     #[error("expected a 2D array of pseudo-observations")]
     ExpectedMatrix,
     #[error("expected at least one observation")]
@@ -40,6 +44,8 @@ pub enum FitError {
 
 #[derive(Debug, Error)]
 pub enum NumericalError {
+    #[error("numerical evaluation failed: {reason}")]
+    Failed { reason: &'static str },
     #[error("matrix is not a valid correlation matrix")]
     InvalidCorrelationMatrix,
     #[error("matrix decomposition failed")]

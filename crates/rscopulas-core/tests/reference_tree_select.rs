@@ -9,9 +9,9 @@
 //!     to the Tau-based fit on strongly non-monotone data).
 
 use ndarray::Array2;
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::{SeedableRng, rngs::StdRng};
-use rand::Rng;
 
 use rscopulas::{
     PairCopulaFamily, PseudoObs, SelectionCriterion, TreeAlgorithm, TreeCriterion, VineCopula,

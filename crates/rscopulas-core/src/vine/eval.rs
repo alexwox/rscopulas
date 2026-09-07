@@ -24,6 +24,7 @@ impl VineCopula {
         exec: ExecPolicy,
         clip_eps: f64,
     ) -> Result<Vec<f64>, CopulaError> {
+        crate::data::validate_clip_eps(clip_eps)?;
         if data.dim() != self.dim {
             return Err(FitError::Failed {
                 reason: "input dimension does not match vine dimension",

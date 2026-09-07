@@ -30,6 +30,7 @@ impl ClaytonCopula {
 
     /// Fits a Clayton copula from the mean pairwise Kendall tau.
     pub fn fit(data: &PseudoObs, options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        options.validate()?;
         let mean_tau = fit_mean_tau("Clayton", data, options)?;
         let theta = 2.0 * mean_tau / (1.0 - mean_tau);
         let model = Self::new(data.dim(), theta)?;
@@ -52,6 +53,7 @@ impl CopulaModel for ClaytonCopula {
     }
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
+        options.validate()?;
         validate_input_dim(self.dim, data)?;
 
         let dim = self.dim as f64;
@@ -107,6 +109,7 @@ impl FrankCopula {
 
     /// Fits a Frank copula from the mean pairwise Kendall tau.
     pub fn fit(data: &PseudoObs, options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        options.validate()?;
         let target_tau = fit_mean_tau("Frank", data, options)?;
         let theta = frank::invert_tau(target_tau, "Frank tau inversion failed to bracket root")?;
         let model = Self::new(data.dim(), theta)?;
@@ -129,26 +132,26 @@ impl CopulaModel for FrankCopula {
     }
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
+        options.validate()?;
         validate_input_dim(self.dim, data)?;
 
         let dim = self.dim;
         let theta = self.theta;
-        let a = 1.0 - (-theta).exp();
+        let log_a = crate::math::log1mexp(-theta);
         evaluate_density_rows(data, options, move |row| {
+            if theta < 1e-10 {
+                return Ok(0.0);
+            }
             let clipped = clipped_row(row, options.clip_eps);
-            let t = clipped
-                .iter()
-                .map(|value| {
-                    let numerator = (-theta * value).exp_m1().abs();
-                    let denominator = (-theta).exp_m1().abs();
-                    -(numerator / denominator).ln()
-                })
-                .sum::<f64>();
-            let q = a * (-t).exp();
-            let log_abs_derivative = frank::log_abs_generator_derivative(dim, q, theta);
+            let log_q = log_a
+                + clipped
+                    .iter()
+                    .map(|value| crate::math::log1mexp(-theta * value) - log_a)
+                    .sum::<f64>();
+            let log_abs_derivative = frank::log_abs_generator_derivative(dim, log_q, theta);
             let log_phi = clipped
                 .iter()
-                .map(|value| theta.ln() - (theta * value).exp_m1().ln())
+                .map(|value| theta.ln() - theta * value - crate::math::log1mexp(-theta * value))
                 .sum::<f64>();
             Ok(log_abs_derivative + log_phi)
         })
@@ -161,15 +164,14 @@ impl CopulaModel for FrankCopula {
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
         resolve_strategy(options.exec, Operation::Sample, n)?;
-        let p = 1.0 - (-self.theta).exp();
         let mut samples = Array2::zeros((n, self.dim));
 
         for row_idx in 0..n {
-            let frailty = sample_log_series(rng, p);
+            let log_frailty = frank::sample_log_frailty(rng, self.theta);
             for col_idx in 0..self.dim {
                 let exponential = rng.sample::<f64, _>(Exp1);
                 samples[(row_idx, col_idx)] =
-                    frank::generator(exponential / frailty as f64, self.theta);
+                    frank::generator_from_log_argument(exponential.ln() - log_frailty, self.theta);
             }
         }
 
@@ -193,6 +195,7 @@ impl GumbelHougaardCopula {
 
     /// Fits a Gumbel-Hougaard copula from the mean pairwise Kendall tau.
     pub fn fit(data: &PseudoObs, options: &FitOptions) -> Result<FitResult<Self>, CopulaError> {
+        options.validate()?;
         let mean_tau = fit_mean_tau("Gumbel", data, options)?;
         let theta = 1.0 / (1.0 - mean_tau);
         let model = Self::new(data.dim(), theta)?;
@@ -215,6 +218,7 @@ impl CopulaModel for GumbelHougaardCopula {
     }
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
+        options.validate()?;
         validate_input_dim(self.dim, data)?;
 
         let alpha = 1.0 / self.theta;
@@ -309,6 +313,7 @@ where
         .sum::<f64>();
     let n_obs = data.n_obs() as f64;
     let diagnostics = super::FitDiagnostics {
+        likelihood_kind: crate::domain::LikelihoodKind::Joint,
         loglik,
         aic: 2.0 - 2.0 * loglik,
         bic: n_obs.ln() - 2.0 * loglik,
@@ -373,24 +378,6 @@ where
         let values = row.iter().copied().collect::<Vec<_>>();
         evaluator(&values)
     })
-}
-
-fn sample_log_series<R: Rng + ?Sized>(rng: &mut R, p: f64) -> usize {
-    let normalizer = -1.0 / (1.0 - p).ln();
-    let threshold: f64 = rng.random();
-    let mut cumulative = 0.0;
-    let mut probability = normalizer * p;
-    let mut k = 1usize;
-
-    loop {
-        cumulative += probability;
-        if threshold <= cumulative {
-            return k;
-        }
-
-        k += 1;
-        probability *= p * (k as f64 - 1.0) / k as f64;
-    }
 }
 
 fn sample_positive_stable<R: Rng + ?Sized>(rng: &mut R, alpha: f64) -> f64 {

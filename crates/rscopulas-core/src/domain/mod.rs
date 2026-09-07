@@ -8,7 +8,7 @@ mod vine;
 pub use archimedean::{ClaytonCopula, FrankCopula, GumbelHougaardCopula};
 pub use common::{
     Copula, CopulaFamily, CopulaModel, Device, EvalOptions, ExecPolicy, FitDiagnostics, FitOptions,
-    SampleOptions,
+    LikelihoodKind, SampleOptions,
 };
 pub use elliptical::{GaussianCopula, StudentTCopula};
 pub use factor::{FactorCopula, FactorFitOptions, FactorFitResult, FactorLayout};

@@ -8,8 +8,10 @@
 //!     c(u_1, …, u_d) = ∫₀¹  ∏_{j=1..d}  c_{U_j,V}(u_j, v)  dv,
 //! ```
 //!
-//! and is evaluated via an `n`-point Gauss–Legendre rule on `[0, 1]`
-//! (default `n = 25`, matching Joe's `CopulaModel` R package).
+//! Gaussian links use an exact Gaussian density. Other links use normal-scale
+//! Gauss-Legendre quadrature on [-8,8], doubling the node count until successive
+//! log densities agree to 1e-7 twice (at most 4096 nodes). Failure to converge
+//! returns a numerical error. The requested node count is a minimum budget.
 //!
 //! Extensions (Nested2F, Structured, BiFactor) are intentionally deferred —
 //! adding them only requires extending the `FactorLayout` enum and
@@ -25,7 +27,7 @@ use statrs::distribution::{ContinuousCDF, Normal};
 use crate::{
     data::PseudoObs,
     errors::{CopulaError, FitError},
-    math::{coord_ascent_maximise, gauss_legendre_01, inverse, numerical_hessian},
+    math::{coord_ascent_with_diagnostics, gauss_legendre_01, inverse, numerical_hessian},
     paircopula::{
         PairCopulaFamily, PairCopulaSpec, decode_params, encode_brackets, encode_jacobian,
         encode_params, fit_pair_copula,
@@ -134,7 +136,7 @@ impl Default for FactorFitOptions {
 ///
 /// The model stores one `PairCopulaSpec` per observed variable, giving the
 /// joint density via quadrature over the single latent factor.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FactorCopula {
     dim: usize,
     layout: FactorLayout,
@@ -142,6 +144,27 @@ pub struct FactorCopula {
     /// bivariate copula between variable `j` and the common latent factor.
     links: Vec<PairCopulaSpec>,
     quadrature_nodes: usize,
+}
+
+impl<'de> Deserialize<'de> for FactorCopula {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct State {
+            dim: usize,
+            layout: FactorLayout,
+            links: Vec<PairCopulaSpec>,
+            quadrature_nodes: usize,
+        }
+        let state = State::deserialize(deserializer)?;
+        let model = Self::basic_1f(state.links, state.quadrature_nodes)
+            .map_err(serde::de::Error::custom)?;
+        if model.dim != state.dim || model.layout != state.layout {
+            return Err(serde::de::Error::custom(
+                "factor dimension or layout disagrees with its links",
+            ));
+        }
+        Ok(model)
+    }
 }
 
 impl FactorCopula {
@@ -156,11 +179,14 @@ impl FactorCopula {
             }
             .into());
         }
-        if quadrature_nodes < 3 {
+        if !(3..=4096).contains(&quadrature_nodes) {
             return Err(FitError::Failed {
-                reason: "factor copula quadrature requires at least three nodes",
+                reason: "factor copula quadrature requires at least three nodes and at most 4096",
             }
             .into());
+        }
+        for link in &links {
+            link.validate()?;
         }
         Ok(Self {
             dim: links.len(),
@@ -176,13 +202,20 @@ impl FactorCopula {
     ///
     /// The final log-likelihood reported in `FitDiagnostics` is the true
     /// factor-copula log-likelihood (evaluated with the fitted links and the
-    /// same Gauss–Legendre rule used at inference), not the per-link sum —
-    /// so AIC/BIC comparisons against other models (vines, HAC, elliptical)
-    /// are apples-to-apples.
+    /// same error checks used at inference), not the per-link sum.
+    /// Ordinary AIC/BIC uses this joint likelihood. Nested HAC composite
+    /// scores cannot be compared using ordinary likelihood criteria.
     pub fn fit(
         data: &PseudoObs,
         options: &FactorFitOptions,
     ) -> Result<FactorFitResult, CopulaError> {
+        options.base.validate()?;
+        if !options.joint_polish_rel_tol.is_finite() || options.joint_polish_rel_tol <= 0.0 {
+            return Err(FitError::Failed {
+                reason: "polish tolerance must be finite and positive",
+            }
+            .into());
+        }
         match options.layout {
             FactorLayout::Basic1F => fit_basic_1f(data, options),
         }
@@ -205,7 +238,7 @@ impl FactorCopula {
         &self.links
     }
 
-    /// Number of Gauss–Legendre nodes used by `log_pdf`.
+    /// Minimum Gauss-Legendre node budget used by `log_pdf`.
     pub fn quadrature_nodes(&self) -> usize {
         self.quadrature_nodes
     }
@@ -218,24 +251,40 @@ impl FactorCopula {
         obs: &[f64],
         nodes: &[f64],
         weights: &[f64],
+        normal_nodes: &[f64],
         clip_eps: f64,
     ) -> Result<f64, CopulaError> {
         // Integrand at v: ∏_j c_j(u_j, v) = exp(Σ_j log c_j(u_j, v)).
         // So log ∫ = log Σ_q w_q exp(Σ_j log c_j(u_j, v_q)) — classical
         // log-sum-exp with `log w_q` added to the per-node accumulation.
-        let mut log_terms = Vec::with_capacity(nodes.len());
-        for (v, w) in nodes.iter().zip(weights.iter()) {
-            let mut s = w.ln();
-            for (j, link) in self.links.iter().enumerate() {
-                let contrib = link.log_pdf(obs[j], *v, clip_eps)?;
-                s += contrib;
-                if !s.is_finite() {
-                    // Short-circuit: any one link evaluating to -∞ kills the
-                    // whole quadrature contribution at this node.
-                    break;
+        let mut log_terms: Vec<f64> = weights.iter().map(|w| w.ln()).collect();
+        for (j, link) in self.links.iter().enumerate() {
+            // Quantiles of each observation and node are invariant across the
+            // other axis. Reuse them in mixed-family models as well.
+            if let (PairCopulaFamily::Gaussian, crate::paircopula::PairCopulaParams::One(rho)) =
+                (link.family, &link.params)
+            {
+                let rho = if matches!(
+                    link.rotation,
+                    crate::paircopula::Rotation::R90 | crate::paircopula::Rotation::R270
+                ) {
+                    -*rho
+                } else {
+                    *rho
+                };
+                let z = Normal::new(0.0, 1.0)
+                    .unwrap()
+                    .inverse_cdf(obs[j].clamp(clip_eps, 1.0 - clip_eps));
+                let variance = 1.0 - rho * rho;
+                for (term, &v) in log_terms.iter_mut().zip(normal_nodes) {
+                    *term += -0.5 * variance.ln()
+                        - (rho * rho * (z * z + v * v) - 2.0 * rho * z * v) / (2.0 * variance);
+                }
+            } else if link.family != PairCopulaFamily::Independence {
+                for (term, &v) in log_terms.iter_mut().zip(nodes) {
+                    *term += link.log_pdf(obs[j], v, clip_eps)?;
                 }
             }
-            log_terms.push(s);
         }
         Ok(log_sum_exp(&log_terms))
     }
@@ -251,6 +300,12 @@ impl CopulaModel for FactorCopula {
     }
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
+        options.validate()?;
+        crate::backend::resolve_strategy(
+            options.exec,
+            crate::backend::Operation::DensityEval,
+            data.n_obs(),
+        )?;
         let view = data.as_view();
         if view.ncols() != self.dim {
             return Err(FitError::Failed {
@@ -258,26 +313,127 @@ impl CopulaModel for FactorCopula {
             }
             .into());
         }
-        // Compute quadrature once per call and reuse across observations — the
-        // rule is observation-independent.
-        let (nodes, weights) = gauss_legendre_01(self.quadrature_nodes);
-        let mut out = Vec::with_capacity(view.nrows());
-        let mut obs = vec![0.0_f64; self.dim];
-        for row in view.rows() {
-            for (dst, src) in obs.iter_mut().zip(row.iter()) {
-                *dst = *src;
-            }
-            out.push(self.log_pdf_single(&obs, &nodes, &weights, options.clip_eps)?);
+        if self
+            .links
+            .iter()
+            .filter(|link| link.family != PairCopulaFamily::Independence)
+            .count()
+            <= 1
+        {
+            return Ok(vec![0.0; data.n_obs()]);
         }
-        Ok(out)
+        // Gaussian links have an exact Gaussian integral; use it rather than
+        // attempting to resolve a very narrow latent posterior on a fixed grid.
+        let loadings: Option<Vec<f64>> = self
+            .links
+            .iter()
+            .map(|link| {
+                use crate::paircopula::{PairCopulaParams as P, Rotation};
+                match (&link.family, &link.params) {
+                    (PairCopulaFamily::Independence, P::None) => Some(0.0),
+                    (PairCopulaFamily::Gaussian, P::One(rho)) => {
+                        Some(if matches!(link.rotation, Rotation::R90 | Rotation::R270) {
+                            -*rho
+                        } else {
+                            *rho
+                        })
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        if let Some(loadings) = loadings {
+            let mut correlation = Array2::eye(self.dim);
+            for i in 0..self.dim {
+                for j in 0..i {
+                    correlation[(i, j)] = loadings[i] * loadings[j];
+                    correlation[(j, i)] = correlation[(i, j)];
+                }
+            }
+            return super::GaussianCopula::new(correlation)?.log_pdf(data, options);
+        }
+        let observations: Vec<Vec<f64>> = view.rows().into_iter().map(|row| row.to_vec()).collect();
+        let mut previous = vec![f64::NEG_INFINITY; observations.len()];
+        let mut agreement = vec![0; observations.len()];
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let mut breaks = vec![-8.0, 8.0];
+        for link in &self.links {
+            if let crate::paircopula::PairCopulaParams::Tll(params) = &link.params {
+                for &knot in params.second_margin_knots() {
+                    let v = if matches!(
+                        link.rotation,
+                        crate::paircopula::Rotation::R180 | crate::paircopula::Rotation::R270
+                    ) {
+                        1.0 - knot
+                    } else {
+                        knot
+                    };
+                    if v > 0.0 && v < 1.0 {
+                        let z = normal.inverse_cdf(v);
+                        if z > -8.0 && z < 8.0 {
+                            breaks.push(z);
+                        }
+                    }
+                }
+            }
+        }
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+        let segments = breaks.len() - 1;
+        let max_nodes = (4096 / segments).max(2);
+        let mut nodes_count = self
+            .quadrature_nodes
+            .div_ceil(segments)
+            .clamp(2, (max_nodes / 4).max(2));
+        loop {
+            let (nodes, weights) = if segments == 1 {
+                factor_quadrature(nodes_count)
+            } else {
+                segmented_factor_quadrature(nodes_count, &breaks)
+            };
+            let normal_nodes: Vec<f64> = nodes
+                .iter()
+                .map(|v| normal.inverse_cdf(v.clamp(options.clip_eps, 1.0 - options.clip_eps)))
+                .collect();
+            for (idx, obs) in observations.iter().enumerate() {
+                if agreement[idx] >= 2 {
+                    continue;
+                }
+                let value =
+                    self.log_pdf_single(obs, &nodes, &weights, &normal_nodes, options.clip_eps)?;
+                if !value.is_finite() {
+                    return Err(crate::errors::NumericalError::Failed {
+                        reason: "factor density is not finite",
+                    }
+                    .into());
+                }
+                agreement[idx] = if (value - previous[idx]).abs() < 1e-7 {
+                    agreement[idx] + 1
+                } else {
+                    0
+                };
+                previous[idx] = value;
+            }
+            if nodes.len() >= self.quadrature_nodes && agreement.iter().all(|&count| count >= 2) {
+                return Ok(previous);
+            }
+            if nodes_count == max_nodes {
+                return Err(crate::errors::NumericalError::Failed {
+                    reason: "factor quadrature did not converge to relative tolerance 1e-7",
+                }
+                .into());
+            }
+            nodes_count = (2 * nodes_count).min(max_nodes);
+        }
     }
 
     fn sample<R: Rng + ?Sized>(
         &self,
         n: usize,
         rng: &mut R,
-        _options: &SampleOptions,
+        options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
+        crate::backend::resolve_strategy(options.exec, crate::backend::Operation::Sample, n)?;
         // Latent-first sampling: draw V = v, then for each observed j draw a
         // fresh uniform p and set U_j = h_{1|2}^{-1}(p | v; link_j).
         // This is exactly the conditional-inverse construction used by vines
@@ -295,6 +451,51 @@ impl CopulaModel for FactorCopula {
         }
         Ok(out)
     }
+}
+
+fn segmented_factor_quadrature(n: usize, breaks: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let (unit_nodes, unit_weights) = gauss_legendre_01(n);
+    let normal = Normal::new(0.0, 1.0).unwrap();
+    let mut nodes = Vec::with_capacity(n * (breaks.len() - 1));
+    let mut weights = Vec::with_capacity(nodes.capacity());
+    for interval in breaks.windows(2) {
+        let width = interval[1] - interval[0];
+        for (&node, &weight) in unit_nodes.iter().zip(&unit_weights) {
+            let z = interval[0] + width * node;
+            nodes.push(normal.cdf(z));
+            weights
+                .push(weight * width * (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt());
+        }
+    }
+    (nodes, weights)
+}
+
+/// Normal-scale quadrature resolves the latent tails without an endpoint cutoff
+/// at the first probability-scale Gauss node. Cache observation-independent rules.
+fn factor_quadrature(n: usize) -> (Vec<f64>, Vec<f64>) {
+    use std::{
+        collections::BTreeMap,
+        sync::{Mutex, OnceLock},
+    };
+    type Rules = BTreeMap<usize, (Vec<f64>, Vec<f64>)>;
+    static RULES: OnceLock<Mutex<Rules>> = OnceLock::new();
+    let cache = RULES.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .entry(n)
+        .or_insert_with(|| {
+            let normal = Normal::new(0.0, 1.0).unwrap();
+            let (mut nodes, mut weights) = gauss_legendre_01(n);
+            for (node, weight) in nodes.iter_mut().zip(weights.iter_mut()) {
+                let z = 16.0 * *node - 8.0;
+                *node = normal.cdf(z);
+                *weight *= 16.0 * (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt();
+            }
+            (nodes, weights)
+        })
+        .clone()
 }
 
 fn fit_basic_1f(
@@ -378,7 +579,9 @@ fn fit_basic_1f(
     // if the refined fit fails to improve (safety against pathological data
     // where the refinement would otherwise degrade the model).
     let mut best_loglik = factor_log_likelihood(&model, data, options.base.clip_eps)?;
+    let mut n_iter = 1;
     for _ in 0..options.refine_iterations {
+        n_iter += 1;
         let posterior = posterior_latent_mean(&model, data, clip)?;
         v_pseudo = rank_normalise_01(&posterior, clip);
         let refined_links = fit_links_against_latent(&columns, &v_pseudo, &vine_options)?;
@@ -406,14 +609,17 @@ fn fit_basic_1f(
     // The bail-out guard mirrors the EM pattern above: accept the polished
     // fit only if it strictly improves the log-likelihood, never worse.
     let mut polished_loglik = best_loglik;
+    let mut converged = false;
     if options.joint_polish_cycles > 0 {
-        let (candidate_model, candidate_loglik) = polish_factor_model(
+        let (candidate_model, candidate_loglik, cycles, stopped) = polish_factor_model(
             &model,
             data,
             options.base.clip_eps,
             options.joint_polish_rel_tol,
             options.joint_polish_cycles,
         )?;
+        n_iter += cycles;
+        converged = stopped;
         if candidate_loglik > polished_loglik {
             polished_loglik = candidate_loglik;
             model = candidate_model;
@@ -446,11 +652,12 @@ fn fit_basic_1f(
     Ok(FactorFitResult {
         model,
         diagnostics: FitDiagnostics {
+            likelihood_kind: crate::domain::LikelihoodKind::Joint,
             loglik,
             aic,
             bic,
-            converged: true,
-            n_iter: 1 + options.refine_iterations + options.joint_polish_cycles,
+            converged,
+            n_iter,
         },
         std_errors,
     })
@@ -490,7 +697,8 @@ fn factor_log_likelihood(
 }
 
 /// Posterior mean `E[V | U_i]` under the current factor-copula fit, evaluated
-/// via the same Gauss–Legendre rule used at inference. Returns one value per
+/// via a fixed probability-scale rule for initialization/refinement only.
+/// Candidate acceptance and joint polishing use the checked density. Returns one value per
 /// observation, in `[0, 1]`.
 fn posterior_latent_mean(
     model: &FactorCopula,
@@ -551,13 +759,16 @@ fn polish_factor_model(
     clip_eps: f64,
     rel_tol: f64,
     max_cycles: usize,
-) -> Result<(FactorCopula, f64), CopulaError> {
-    let per_link_counts: Vec<usize> =
-        model.links.iter().map(|link| encode_params(link).len()).collect();
+) -> Result<(FactorCopula, f64, usize, bool), CopulaError> {
+    let per_link_counts: Vec<usize> = model
+        .links
+        .iter()
+        .map(|link| encode_params(link).len())
+        .collect();
     let total_polishable: usize = per_link_counts.iter().sum();
     if total_polishable == 0 {
         let loglik = factor_log_likelihood(model, data, clip_eps)?;
-        return Ok((model.clone(), loglik));
+        return Ok((model.clone(), loglik, 0, true));
     }
 
     let mut x0 = Vec::with_capacity(total_polishable);
@@ -580,12 +791,16 @@ fn polish_factor_model(
         }
     };
 
-    let (x_polished, polished_loglik) =
-        coord_ascent_maximise(&x0, &brackets, rel_tol, max_cycles, 60, evaluate);
+    let (x_polished, polished_loglik, cycles, converged) =
+        coord_ascent_with_diagnostics(&x0, &brackets, rel_tol, max_cycles, 60, evaluate);
 
-    let polished_model =
-        build_model_from_flat(&template_links, &per_link_counts, quadrature_nodes, &x_polished)?;
-    Ok((polished_model, polished_loglik))
+    let polished_model = build_model_from_flat(
+        &template_links,
+        &per_link_counts,
+        quadrature_nodes,
+        &x_polished,
+    )?;
+    Ok((polished_model, polished_loglik, cycles, converged))
 }
 
 /// Delta-method standard errors for every polished link parameter.
@@ -637,6 +852,13 @@ fn factor_standard_errors(model: &FactorCopula, data: &PseudoObs, clip_eps: f64)
     // below 1e-5 for typical n. Users with unusual scales can adjust via the
     // options struct in a future patch.
     let hess = numerical_hessian(&x_star, 1e-4, evaluate);
+    let coarser = numerical_hessian(&x_star, 2e-4, evaluate);
+    if hess.iter().zip(coarser.iter()).any(|(a, b)| {
+        !a.is_finite() || !b.is_finite() || (a - b).abs() > 0.01 * (1.0 + a.abs().max(b.abs()))
+    }) {
+        return vec![f64::NAN; p];
+    }
+
     // Observed Fisher information is the Hessian of the *negative* log-
     // likelihood; since `hess` is the Hessian of the (unnegated) log-
     // likelihood, the Fisher information matrix is `-hess`.
@@ -645,6 +867,9 @@ fn factor_standard_errors(model: &FactorCopula, data: &PseudoObs, clip_eps: f64)
         for j in 0..p {
             neg_hess[(i, j)] = -hess[(i, j)];
         }
+    }
+    if crate::math::cholesky(&neg_hess).is_err() {
+        return vec![f64::NAN; p];
     }
     match inverse(&neg_hess) {
         Ok(cov) => (0..p)

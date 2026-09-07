@@ -37,8 +37,8 @@ pub(super) fn pickands_a_prime(t: f64, theta: f64, alpha: f64, beta: f64) -> f64
     // A'(t) = (α - β) + p^(1/θ - 1) · [β^θ t^(θ-1) - α^θ (1-t)^(θ-1)]
     // where p = (α(1-t))^θ + (β t)^θ.
     let p = (alpha * (1.0 - t)).powf(theta) + (beta * t).powf(theta);
-    let q = beta.powf(theta) * t.powf(theta - 1.0)
-        - alpha.powf(theta) * (1.0 - t).powf(theta - 1.0);
+    let q =
+        beta.powf(theta) * t.powf(theta - 1.0) - alpha.powf(theta) * (1.0 - t).powf(theta - 1.0);
     (alpha - beta) + p.powf(1.0 / theta - 1.0) * q
 }
 
@@ -47,10 +47,10 @@ pub(super) fn pickands_a_double_prime(t: f64, theta: f64, alpha: f64, beta: f64)
     //   R = β^θ t^(θ-2) + α^θ (1-t)^(θ-2)
     //   Q = β^θ t^(θ-1) - α^θ (1-t)^(θ-1)
     let p = (alpha * (1.0 - t)).powf(theta) + (beta * t).powf(theta);
-    let q = beta.powf(theta) * t.powf(theta - 1.0)
-        - alpha.powf(theta) * (1.0 - t).powf(theta - 1.0);
-    let r = beta.powf(theta) * t.powf(theta - 2.0)
-        + alpha.powf(theta) * (1.0 - t).powf(theta - 2.0);
+    let q =
+        beta.powf(theta) * t.powf(theta - 1.0) - alpha.powf(theta) * (1.0 - t).powf(theta - 1.0);
+    let r =
+        beta.powf(theta) * t.powf(theta - 2.0) + alpha.powf(theta) * (1.0 - t).powf(theta - 2.0);
     (theta - 1.0) * p.powf(1.0 / theta - 2.0) * (p * r - q * q)
 }
 
@@ -76,13 +76,7 @@ fn validate_params(theta: f64, alpha: f64, beta: f64) -> Result<(), CopulaError>
     Ok(())
 }
 
-pub fn log_pdf(
-    u1: f64,
-    u2: f64,
-    theta: f64,
-    alpha: f64,
-    beta: f64,
-) -> Result<f64, CopulaError> {
+pub fn log_pdf(u1: f64, u2: f64, theta: f64, alpha: f64, beta: f64) -> Result<f64, CopulaError> {
     validate_params(theta, alpha, beta)?;
     let (z, t) = t_from_logs(u1, u2);
     let a = pickands_a(t, theta, alpha, beta);
@@ -168,13 +162,7 @@ pub fn inv_second_given_first(
     Ok(0.5 * (low + high))
 }
 
-pub fn cdf(
-    u1: f64,
-    u2: f64,
-    theta: f64,
-    alpha: f64,
-    beta: f64,
-) -> Result<f64, CopulaError> {
+pub fn cdf(u1: f64, u2: f64, theta: f64, alpha: f64, beta: f64) -> Result<f64, CopulaError> {
     validate_params(theta, alpha, beta)?;
     let (z, t) = t_from_logs(u1, u2);
     let a = pickands_a(t, theta, alpha, beta);

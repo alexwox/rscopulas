@@ -96,8 +96,8 @@ pub struct VineFitOptions {
     /// Algorithm used to build each tree from the weighted candidate graph.
     pub tree_algorithm: TreeAlgorithm,
     /// When `true` and `criterion = Mbicv { .. }`, truncation depth is
-    /// selected automatically by running trees until cumulative mBICV stops
-    /// improving; see [`SelectionCriterion::Mbicv`]. Ignored when the
+    /// selected from the global minimum over all prefixes up to the cap;
+    /// see [`SelectionCriterion::Mbicv`]. Ignored when the
     /// criterion is `Aic` or `Bic`.
     pub select_trunc_lvl: bool,
     /// RNG seed used by the stochastic tree algorithms. Ignored by the
@@ -119,6 +119,25 @@ impl Default for VineFitOptions {
             select_trunc_lvl: false,
             rng_seed: None,
         }
+    }
+}
+
+impl VineFitOptions {
+    pub fn validate(&self, dim: usize) -> Result<(), CopulaError> {
+        self.base.validate()?;
+        if self.family_set.is_empty()
+            || self.truncation_level.is_some_and(|level| level >= dim)
+            || self
+                .independence_threshold
+                .is_some_and(|t| !t.is_finite() || !(0.0..=1.0).contains(&t))
+            || matches!(self.criterion, SelectionCriterion::Mbicv { psi0 } if !psi0.is_finite() || psi0 <= 0.0 || psi0 >= 1.0)
+        {
+            return Err(FitError::Failed {
+                reason: "invalid vine fitting options",
+            }
+            .into());
+        }
+        Ok(())
     }
 }
 
@@ -207,9 +226,7 @@ impl VineCopula {
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
         reject_non_default_tree_algorithm(options, "C")?;
-        let (trees, diagnostics) = fit_canonical_vine(data, order, VineStructureKind::C, options)?;
-        let model = build_model_from_trees(VineStructureKind::C, trees, options.truncation_level)?;
-        Ok(FitResult { model, diagnostics })
+        fit_canonical_vine(data, order, VineStructureKind::C, options)
     }
 
     /// Fits a simplified D-vine with pair-copula selection on each edge.
@@ -232,9 +249,7 @@ impl VineCopula {
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
         reject_non_default_tree_algorithm(options, "D")?;
-        let (trees, diagnostics) = fit_canonical_vine(data, order, VineStructureKind::D, options)?;
-        let model = build_model_from_trees(VineStructureKind::D, trees, options.truncation_level)?;
-        Ok(FitResult { model, diagnostics })
+        fit_canonical_vine(data, order, VineStructureKind::D, options)
     }
 
     /// Fits a simplified R-vine using a Dissmann-style maximum spanning tree procedure.
@@ -242,13 +257,13 @@ impl VineCopula {
         data: &PseudoObs,
         options: &VineFitOptions,
     ) -> Result<FitResult<Self>, CopulaError> {
+        options.validate(data.dim())?;
         let user_cap = options.truncation_level.unwrap_or(data.dim() - 1);
         let columns = collect_column_data(data);
         let mut graph = initialize_first_graph(data, &columns, options)?;
         let mut internal_trees = Vec::with_capacity(data.dim() - 1);
         let mut public_trees = Vec::with_capacity(data.dim() - 1);
         let mut per_tree_stats: Vec<TreeStats> = Vec::with_capacity(data.dim() - 1);
-        let mut total_loglik = 0.0;
         let mut n_iter = 0usize;
         let mut rng = rng_from_seed(options.rng_seed);
 
@@ -276,13 +291,11 @@ impl VineCopula {
                 .iter()
                 .filter(|edge| edge.spec.family != PairCopulaFamily::Independence)
                 .count();
-            total_loglik += tree_loglik;
             n_iter += fitted.len();
             per_tree_stats.push(TreeStats {
                 loglik: tree_loglik,
                 df: tree_df,
                 non_indep,
-                total_pairs: fitted.len(),
             });
             public_trees.push(VineTree {
                 level,
@@ -326,56 +339,14 @@ impl VineCopula {
             .into());
         }
 
-        // Auto-truncation via mBICV. Walks backward from the full fit,
-        // dropping trees whose mBICV contribution is positive (i.e. adding
-        // them hurts the total criterion more than it helps). The user cap
-        // `options.truncation_level` is a strict upper bound.
-        let n_obs = data.n_obs() as f64;
-        let auto_trunc_level = auto_truncate_mbicv(
+        finish_vine_fit(
+            data,
+            VineStructureKind::R,
+            public_trees,
             &per_tree_stats,
-            &options.criterion,
-            options.select_trunc_lvl,
-            user_cap,
-            n_obs,
-        );
-
-        // Apply truncation: replace every edge at level > auto_trunc_level
-        // with Independence, and drop its loglik contribution. This reuses
-        // the existing "fill with Independence" representation so that the
-        // downstream model builder doesn't need to know about mBICV at all.
-        if auto_trunc_level < public_trees.len() {
-            for level_idx in auto_trunc_level..public_trees.len() {
-                total_loglik -= per_tree_stats[level_idx].loglik;
-                for edge in &mut public_trees[level_idx].edges {
-                    edge.copula = PairCopulaSpec::independence();
-                }
-            }
-        }
-
-        // The model's `truncation_level` records the *effective* truncation
-        // (min of user cap and auto-selected cap). `None` means "no
-        // truncation applied" — only set this when trees run to full depth.
-        let effective_trunc = if auto_trunc_level == public_trees.len() {
-            options.truncation_level
-        } else {
-            Some(auto_trunc_level)
-        };
-
-        let model = build_model_from_trees(VineStructureKind::R, public_trees, effective_trunc)?;
-        let parameter_count = model
-            .trees
-            .iter()
-            .flat_map(|tree| tree.edges.iter())
-            .map(|edge| edge.copula.parameter_count() as f64)
-            .sum::<f64>();
-        let diagnostics = crate::domain::FitDiagnostics {
-            loglik: total_loglik,
-            aic: 2.0 * parameter_count - 2.0 * total_loglik,
-            bic: parameter_count * n_obs.ln() - 2.0 * total_loglik,
-            converged: true,
             n_iter,
-        };
-        Ok(FitResult { model, diagnostics })
+            options,
+        )
     }
 }
 
@@ -385,15 +356,11 @@ struct TreeStats {
     loglik: f64,
     df: f64,
     non_indep: usize,
-    total_pairs: usize,
 }
 
-/// Computes per-tree mBICV contributions and returns the largest truncation
-/// level `L` (number of trees to retain) such that including trees `1..=L`
-/// minimises cumulative mBICV, clamped at `user_cap`.
-///
-/// When `select` is false or the criterion is not `Mbicv`, this returns the
-/// user cap unchanged — i.e. the pre-this-change behaviour.
+/// Selects the prefix with minimum full-model mBICV. Discarded trees
+/// contribute the independence prior; compare each fitted tree to that
+/// baseline, retaining the shortest prefix on a tie.
 fn auto_truncate_mbicv(
     stats: &[TreeStats],
     criterion: &SelectionCriterion,
@@ -405,34 +372,59 @@ fn auto_truncate_mbicv(
         SelectionCriterion::Mbicv { psi0 } if select => *psi0,
         _ => return user_cap.min(stats.len()),
     };
-    if !(0.0..1.0).contains(&psi0) || stats.is_empty() {
-        return user_cap.min(stats.len());
-    }
-
-    // Per-tree mBICV: `-2·ll_t + log(n)·df_t − 2·log_prior_t`, with
-    // `log_prior_t = q_t·log(ψ₀^(t+1)) + (M_t − q_t)·log(1 − ψ₀^(t+1))`.
-    // Tree index `t` in the paper's notation is 0-based; we use 1-based
-    // levels here, so the depth exponent is `level` rather than `level + 1`.
-    let contributions: Vec<f64> = stats
-        .iter()
-        .enumerate()
-        .map(|(idx, tree)| {
-            let level = idx + 1;
-            let psi_level = psi0.powi(level as i32);
-            let q = tree.non_indep as f64;
-            let mt = tree.total_pairs as f64;
-            let log_prior = q * psi_level.ln() + (mt - q) * (1.0 - psi_level).ln();
-            -2.0 * tree.loglik + n_obs.ln() * tree.df - 2.0 * log_prior
-        })
-        .collect();
-
-    // Walk backwards: drop any tail tree whose contribution is positive.
-    // Bounded above by the user cap.
-    let mut selected = contributions.len().min(user_cap);
-    while selected > 0 && contributions[selected - 1] > 0.0 {
-        selected -= 1;
+    let mut cumulative = 0.0;
+    let mut best_score = 0.0;
+    let mut selected = 0;
+    for (idx, tree) in stats.iter().take(user_cap).enumerate() {
+        let log_psi = (idx + 1) as f64 * psi0.ln();
+        let log_independence = (-log_psi.exp()).ln_1p();
+        let prior_difference = if tree.non_indep == 0 {
+            0.0
+        } else {
+            tree.non_indep as f64 * (log_psi - log_independence)
+        };
+        cumulative += -2.0 * tree.loglik + n_obs.ln() * tree.df - 2.0 * prior_difference;
+        if cumulative < best_score - 1e-10 {
+            best_score = cumulative;
+            selected = idx + 1;
+        }
     }
     selected
+}
+
+fn finish_vine_fit(
+    data: &PseudoObs,
+    kind: VineStructureKind,
+    trees: Vec<VineTree>,
+    stats: &[TreeStats],
+    n_iter: usize,
+    options: &VineFitOptions,
+) -> Result<FitResult<VineCopula>, CopulaError> {
+    let cap = options.truncation_level.unwrap_or(data.dim() - 1);
+    let level = auto_truncate_mbicv(
+        stats,
+        &options.criterion,
+        options.select_trunc_lvl,
+        cap,
+        data.n_obs() as f64,
+    );
+    let truncation = if options.truncation_level.is_some() || level < trees.len() {
+        Some(level)
+    } else {
+        None
+    };
+    let model = build_model_from_trees(kind, trees, truncation)?;
+    let loglik: f64 = stats.iter().take(level).map(|tree| tree.loglik).sum();
+    let parameters: f64 = stats.iter().take(level).map(|tree| tree.df).sum();
+    let diagnostics = crate::domain::FitDiagnostics {
+        likelihood_kind: crate::domain::LikelihoodKind::Joint,
+        loglik,
+        aic: 2.0 * parameters - 2.0 * loglik,
+        bic: parameters * (data.n_obs() as f64).ln() - 2.0 * loglik,
+        converged: true,
+        n_iter,
+    };
+    Ok(FitResult { model, diagnostics })
 }
 
 #[derive(Clone)]
@@ -459,11 +451,12 @@ fn fit_canonical_vine(
     order: &[usize],
     kind: VineStructureKind,
     options: &VineFitOptions,
-) -> Result<(Vec<VineTree>, crate::domain::FitDiagnostics), CopulaError> {
+) -> Result<FitResult<VineCopula>, CopulaError> {
+    options.validate(data.dim())?;
     validate_order(order, data.dim())?;
     let mut internal_trees = Vec::with_capacity(data.dim() - 1);
     let mut public_trees = Vec::with_capacity(data.dim() - 1);
-    let mut total_loglik = 0.0;
+    let mut stats = Vec::new();
     let mut iterations = 0usize;
 
     let edge_defs = match kind {
@@ -500,8 +493,11 @@ fn fit_canonical_vine(
                 )?
             };
 
-            let fit = fit_pair_copula(left_data.as_ref(), right_data.as_ref(), options)?;
-            total_loglik += fit.loglik;
+            let fit = if tree.level > options.truncation_level.unwrap_or(data.dim() - 1) {
+                truncated_pair_fit(&left_data, &right_data)
+            } else {
+                fit_pair_copula(left_data.as_ref(), right_data.as_ref(), options)?
+            };
             iterations += 1;
             fitted_edges.push(FittedGraphEdge {
                 conditioned: edge.conditioned,
@@ -514,6 +510,17 @@ fn fit_canonical_vine(
             });
         }
 
+        stats.push(TreeStats {
+            loglik: fitted_edges.iter().map(|edge| edge.loglik).sum(),
+            df: fitted_edges
+                .iter()
+                .map(|edge| edge.spec.parameter_count() as f64)
+                .sum(),
+            non_indep: fitted_edges
+                .iter()
+                .filter(|edge| edge.spec.family != PairCopulaFamily::Independence)
+                .count(),
+        });
         public_trees.push(VineTree {
             level: tree.level,
             edges: fitted_edges
@@ -540,20 +547,7 @@ fn fit_canonical_vine(
         });
     }
 
-    let n_obs = data.n_obs() as f64;
-    let parameter_count = public_trees
-        .iter()
-        .flat_map(|tree| tree.edges.iter())
-        .map(|edge| edge.copula.parameter_count() as f64)
-        .sum::<f64>();
-    let diagnostics = crate::domain::FitDiagnostics {
-        loglik: total_loglik,
-        aic: 2.0 * parameter_count - 2.0 * total_loglik,
-        bic: parameter_count * n_obs.ln() - 2.0 * total_loglik,
-        converged: true,
-        n_iter: iterations,
-    };
-    Ok((public_trees, diagnostics))
+    finish_vine_fit(data, kind, public_trees, &stats, iterations, options)
 }
 
 fn resolve_internal_conditional(
@@ -748,11 +742,7 @@ fn prim_max_spanning_tree(graph: &Graph) -> Result<Vec<GraphEdge>, CopulaError> 
             let new_edge = &graph.edges[new_idx];
             let (a, b) = new_edge.endpoints;
             if in_tree[a] ^ in_tree[b] {
-                heap.push((
-                    WeightKey(new_edge.weight),
-                    (a, b),
-                    new_idx,
-                ));
+                heap.push((WeightKey(new_edge.weight), (a, b), new_idx));
             }
         }
         if selected.len() + 1 == n {
@@ -843,10 +833,8 @@ fn wilson_spanning_tree(
     }
 
     let mut selected = Vec::with_capacity(n.saturating_sub(1));
-    for v in 0..n {
-        if let Some(edge_idx) = entry_edge[v] {
-            selected.push(graph.edges[edge_idx].clone());
-        }
+    for &edge_idx in entry_edge.iter().flatten() {
+        selected.push(graph.edges[edge_idx].clone());
     }
     if selected.len() + 1 != n {
         return Err(FitError::Failed {
@@ -1154,14 +1142,9 @@ fn build_next_graph(
     let mut edges = Vec::new();
     for left in 0..vertices.len() {
         for right in (left + 1)..vertices.len() {
-            if let Some(edge) = edge_info(
-                left,
-                right,
-                &vertices,
-                previous,
-                truncated,
-                tree_criterion,
-            )? {
+            if let Some(edge) =
+                edge_info(left, right, &vertices, previous, truncated, tree_criterion)?
+            {
                 edges.push(edge);
             }
         }
@@ -1391,7 +1374,7 @@ fn c_vine_gaussian_specs(
             specs.push(PairCopulaSpec {
                 family: PairCopulaFamily::Gaussian,
                 rotation: Rotation::R0,
-                params: PairCopulaParams::One(rho.clamp(-0.98, 0.98)),
+                params: PairCopulaParams::One(rho),
             });
         }
     }
@@ -1413,7 +1396,7 @@ fn d_vine_gaussian_specs(
             specs.push(PairCopulaSpec {
                 family: PairCopulaFamily::Gaussian,
                 rotation: Rotation::R0,
-                params: PairCopulaParams::One(rho.clamp(-0.98, 0.98)),
+                params: PairCopulaParams::One(rho),
             });
         }
     }
@@ -1483,5 +1466,48 @@ impl DisjointSet {
             self.rank[left_root] += 1;
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod truncation_contracts {
+    use super::*;
+    #[test]
+    fn mbicv_selects_global_prefix_minimum() {
+        // Costs relative to the all-independent model: [-100, 20, -1].
+        let stats = [50.0, -10.0, 0.5].map(|loglik| TreeStats {
+            loglik,
+            df: 0.0,
+            non_indep: 0,
+        });
+        assert_eq!(
+            auto_truncate_mbicv(
+                &stats,
+                &SelectionCriterion::Mbicv { psi0: 0.5 },
+                true,
+                3,
+                100.0
+            ),
+            1
+        );
+    }
+    #[test]
+    fn mbicv_includes_the_discarded_independence_prior() {
+        // At psi=.9 the prior favors a non-independent first-tree edge.
+        let stats = [TreeStats {
+            loglik: 0.5,
+            df: 1.0,
+            non_indep: 1,
+        }];
+        assert_eq!(
+            auto_truncate_mbicv(
+                &stats,
+                &SelectionCriterion::Mbicv { psi0: 0.9 },
+                true,
+                1,
+                100.0
+            ),
+            1
+        );
     }
 }

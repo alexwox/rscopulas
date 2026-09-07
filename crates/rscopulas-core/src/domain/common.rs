@@ -55,6 +55,19 @@ impl Default for FitOptions {
     }
 }
 
+impl FitOptions {
+    pub fn validate(&self) -> Result<(), CopulaError> {
+        crate::data::validate_clip_eps(self.clip_eps)?;
+        if self.max_iter == 0 {
+            return Err(crate::errors::FitError::Failed {
+                reason: "max_iter must be positive",
+            }
+            .into());
+        }
+        Ok(())
+    }
+}
+
 /// Options shared by density evaluation routines.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalOptions {
@@ -73,6 +86,12 @@ impl Default for EvalOptions {
             exec: ExecPolicy::Auto,
             clip_eps: 1e-12,
         }
+    }
+}
+
+impl EvalOptions {
+    pub fn validate(&self) -> Result<(), CopulaError> {
+        Ok(crate::data::validate_clip_eps(self.clip_eps)?)
     }
 }
 
@@ -95,8 +114,19 @@ impl Default for SampleOptions {
 }
 
 /// Common diagnostics returned alongside fitted models.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LikelihoodKind {
+    #[default]
+    Joint,
+    Composite,
+}
+
+/// Composite scores are explicitly labelled and have no ordinary AIC/BIC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FitDiagnostics {
+    #[serde(default)]
+    pub likelihood_kind: LikelihoodKind,
     pub loglik: f64,
     pub aic: f64,
     pub bic: f64,

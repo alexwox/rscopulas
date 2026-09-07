@@ -46,7 +46,7 @@ pub struct VineStructure {
 }
 
 /// Fitted vine copula together with its structural matrices.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VineCopula {
     pub(crate) dim: usize,
     pub(crate) structure: VineStructure,
@@ -59,6 +59,30 @@ pub struct VineCopula {
     pub(crate) cond_indirect: Array2<bool>,
     #[serde(skip, default)]
     pub(crate) runtime: CompiledVineRuntime,
+}
+
+impl<'de> Deserialize<'de> for VineCopula {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct State {
+            dim: usize,
+            structure: VineStructure,
+            trees: Vec<VineTree>,
+        }
+        let state = State::deserialize(deserializer)?;
+        let model = Self::from_trees(
+            state.structure.kind,
+            state.trees,
+            state.structure.truncation_level,
+        )
+        .map_err(serde::de::Error::custom)?;
+        if state.dim != model.dim || state.structure.matrix != model.structure.matrix {
+            return Err(serde::de::Error::custom(
+                "serialized vine dimension or matrix disagrees with its trees",
+            ));
+        }
+        Ok(model)
+    }
 }
 
 impl VineCopula {

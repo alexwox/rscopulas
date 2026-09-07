@@ -399,8 +399,8 @@ mod tests {
     use crate::PseudoObs;
 
     use super::{
-        hoeffding_d_bivariate, kendall_tau_matrix, spearman_rho_bivariate,
-        try_hoeffding_d_matrix, try_spearman_rho_matrix,
+        hoeffding_d_bivariate, kendall_tau_matrix, spearman_rho_bivariate, try_hoeffding_d_matrix,
+        try_spearman_rho_matrix,
     };
 
     #[test]
@@ -436,7 +436,7 @@ mod tests {
         let y = [5.0_f64, 6.0, 7.0, 8.0, 7.0];
         // spearmanr((1,2,3,4,5), (5,6,7,8,7)) → rho ≈ 0.82078
         let rho = spearman_rho_bivariate(&x, &y).unwrap();
-        assert!((rho - 0.82078268166812329).abs() < 1e-10, "rho = {rho}");
+        assert!((rho - 0.820_782_681_668_123_3).abs() < 1e-10, "rho = {rho}");
     }
 
     #[test]
@@ -446,7 +446,10 @@ mod tests {
         let x: Vec<f64> = (0..20).map(|i| i as f64 / 19.0).collect();
         let y: Vec<f64> = x.iter().map(|u| (u - 0.5).powi(2)).collect();
         let rho = spearman_rho_bivariate(&x, &y).unwrap();
-        assert!(rho.abs() < 0.2, "expected weak Spearman under U-shape, got {rho}");
+        assert!(
+            rho.abs() < 0.2,
+            "expected weak Spearman under U-shape, got {rho}"
+        );
         let d = hoeffding_d_bivariate(&x, &y).unwrap();
         assert!(d > 0.1, "Hoeffding D should flag U-shape, got {d}");
     }

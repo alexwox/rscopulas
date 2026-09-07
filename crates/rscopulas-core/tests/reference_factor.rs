@@ -85,10 +85,8 @@ fn factor_copula_rejects_too_few_variables() {
 
 #[test]
 fn factor_copula_rejects_too_few_quadrature_nodes() {
-    let err =
-        FactorCopula::basic_1f(vec![gaussian_link(0.5), gaussian_link(0.5)], 1).expect_err(
-            "too few quadrature nodes must fail",
-        );
+    let err = FactorCopula::basic_1f(vec![gaussian_link(0.5), gaussian_link(0.5)], 1)
+        .expect_err("too few quadrature nodes must fail");
     assert!(err.to_string().contains("three nodes"));
 }
 
@@ -412,11 +410,8 @@ fn factor_copula_fit_recovers_frank_parameters() {
     // Frank is symmetric (no tail dependence), so the sequential warm start
     // is already close — but the polish should still not degrade the fit,
     // and parameter recovery should be within Fisher-info-sized SEs.
-    let truth = FactorCopula::basic_1f(
-        vec![frank_link(4.0), frank_link(6.0), frank_link(8.0)],
-        25,
-    )
-    .expect("reference model should be valid");
+    let truth = FactorCopula::basic_1f(vec![frank_link(4.0), frank_link(6.0), frank_link(8.0)], 25)
+        .expect("reference model should be valid");
 
     let mut rng = StdRng::seed_from_u64(303);
     let sample = truth
@@ -485,7 +480,10 @@ fn factor_copula_polish_never_degrades_loglik_vs_refinement_only() {
     // The polish should produce SEs; the no-polish path still computes the
     // Hessian at the refined fit, so it should also produce a vector of
     // matching length (may contain NaN entries for off-manifold MLEs).
-    assert_eq!(fit_polished.std_errors.len(), fit_refinement.std_errors.len());
+    assert_eq!(
+        fit_polished.std_errors.len(),
+        fit_refinement.std_errors.len()
+    );
 }
 
 #[test]
@@ -558,8 +556,9 @@ fn factor_copula_fit_vs_independence_baseline() {
 #[test]
 fn factor_copula_log_pdf_rejects_wrong_dimension() {
     let model = reference_model(); // dim = 5
-    let wrong = PseudoObs::new(Array2::from_shape_vec((3, 2), vec![0.3, 0.4, 0.5, 0.6, 0.7, 0.8]).unwrap())
-        .expect("2D sample should be valid");
+    let wrong =
+        PseudoObs::new(Array2::from_shape_vec((3, 2), vec![0.3, 0.4, 0.5, 0.6, 0.7, 0.8]).unwrap())
+            .expect("2D sample should be valid");
     let err = model
         .log_pdf(&wrong, &Default::default())
         .expect_err("dimension mismatch should error");
