@@ -295,7 +295,7 @@ samples = manual.sample(100, seed=0)
 
 ## HierarchicalArchimedeanCopula
 
-A nested Archimedean copula that supports a hierarchical tree structure where different subtrees can use different Archimedean families. Density evaluation uses an exact exchangeable path for single-fan Archimedean trees; nested trees use a composite pair-copula evaluation.
+A nested Archimedean copula that supports a hierarchical tree structure where different subtrees can use different Archimedean families. Density evaluation uses an exact exchangeable path for single-fan Archimedean trees; nested trees require explicit `composite_log_pdf(data)` scoring. Their `log_pdf(data)` raises an unsupported-density error.
 
 <Warning>
 Mixed-family nesting (different Archimedean family on a child node than on its parent) uses a numerical frailty sampler that can degenerate near the boundary. Do not rely on `sample()` for mixed-family trees until the implementation is stabilized.
@@ -333,8 +333,8 @@ Fit the copula to pseudo-observations. In addition to the shared `clip_eps` and 
   Algorithm used to infer the hierarchical nesting structure.
 </ParamField>
 
-<ParamField body="fit_method" type="str" default='"recursive_mle"'>
-  Parameter estimation method.
+<ParamField body="fit_method" type="str" default='"composite_mle"'>
+  `composite_mle` fits pairwise scores; `recursive_mle` is its compatibility alias. `tau_init` performs tau inversion. `full_mle`, `smle`, and `dmle` are not implemented and raise an error.
 </ParamField>
 
 <ParamField body="collapse_eps" type="float" default="0.05">
@@ -342,7 +342,7 @@ Fit the copula to pseudo-observations. In addition to the shared `clip_eps` and 
 </ParamField>
 
 <ParamField body="mc_samples" type="int" default="256">
-  Number of Monte Carlo samples used for likelihood approximation in nested settings.
+  Reserved compatibility option. Simulated likelihood is not implemented; fitted models report zero samples.
 </ParamField>
 
 <ParamField body="allow_experimental" type="bool" default="True">
@@ -352,7 +352,7 @@ Fit the copula to pseudo-observations. In addition to the shared `clip_eps` and 
 ### Properties
 
 <ResponseField name="is_exact" type="bool">
-  `True` when the model uses the exact density path (single Archimedean fan).
+  `True` for supported same-family nesting. Use `exact_loglik` to check joint-density availability.
 </ResponseField>
 
 <ResponseField name="exact_loglik" type="bool">

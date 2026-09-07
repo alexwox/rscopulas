@@ -50,6 +50,9 @@ function SmartLink({
   children: ReactNode;
   className?: string;
 }) {
+  if (href.startsWith("#")) {
+    return <a href={href} className={className}>{children}</a>;
+  }
   if (href.startsWith("/")) {
     return (
       <Link href={href} className={className}>

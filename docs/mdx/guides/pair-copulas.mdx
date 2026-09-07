@@ -82,7 +82,7 @@ All input arrays must be `dtype=np.float64` and contain values **strictly** in `
 In Rust, pair copulas are represented as `PairCopulaSpec` values. Build one directly and call `log_pdf`:
 
 ```rust
-use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = PairCopulaSpec {

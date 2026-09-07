@@ -26,9 +26,13 @@ jobs:
             exit 1
           fi
 
+  validation:
+    needs: check-version
+    uses: ./.github/workflows/ci.yml
+
   linux:
     name: Build wheels (linux ${{ matrix.target }})
-    needs: check-version
+    needs: [check-version, validation]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -62,7 +66,7 @@ jobs:
 
   macos:
     name: Build wheels (macos ${{ matrix.target }})
-    needs: check-version
+    needs: [check-version, validation]
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +95,7 @@ jobs:
 
   windows:
     name: Build wheels (windows ${{ matrix.target }})
-    needs: check-version
+    needs: [check-version, validation]
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -117,7 +121,7 @@ jobs:
 
   sdist:
     name: Build source distribution
-    needs: check-version
+    needs: [check-version, validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -132,10 +136,59 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  smoke-wheels:
+    name: Install and exercise wheels (${{ matrix.runner }}, ${{ matrix.libc }})
+    needs: [linux, macos, windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            libc: glibc
+          - runner: ubuntu-24.04-arm
+            libc: glibc
+          - runner: ubuntu-latest
+            libc: musl
+          - runner: ubuntu-24.04-arm
+            libc: musl
+          - runner: macos-latest
+            libc: native
+          - runner: macos-15-intel
+            libc: native
+          - runner: windows-latest
+            libc: native
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        if: matrix.libc != 'musl'
+        with:
+          python-version: "3.12"
+      - name: Install compatible wheel and test
+        if: matrix.libc != 'musl'
+        shell: bash
+        run: |
+          python -m pip install --only-binary=:all: numpy
+          python -m pip install --no-index --no-deps --only-binary=:all: --find-links dist rscopulas
+          python -I scripts/smoke_wheel.py
+      - name: Install and test musllinux wheel in Alpine
+        if: matrix.libc == 'musl'
+        run: |
+          docker run --rm -v "$PWD:/work:ro" -w /work python:3.12-alpine sh -ec '
+            python -m pip install --only-binary=:all: numpy
+            python -m pip install --no-index --no-deps --only-binary=:all: --find-links dist rscopulas
+            python -I scripts/smoke_wheel.py
+          '
+
   publish:
     name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows, sdist]
+    needs: [validation, linux, macos, windows, sdist, smoke-wheels]
     runs-on: ubuntu-latest
     environment:
       name: pypi

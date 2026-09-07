@@ -34,7 +34,8 @@ fit = HierarchicalArchimedeanCopula.fit(data, family_set=["gumbel", "clayton"])
 print("tree:", fit.model.tree)
 print("families:", fit.model.families)
 print("parameters:", fit.model.parameters)
-print("AIC:", fit.diagnostics.aic)
+print("objective kind:", fit.diagnostics.likelihood_kind)
+print("score:", fit.diagnostics.loglik)
 ```
 
 <AccordionGroup>
@@ -43,7 +44,7 @@ print("AIC:", fit.diagnostics.aic)
     | --- | --- | --- |
     | `family_set` | `None` (all families) | List of Archimedean family names to consider: `"clayton"`, `"frank"`, `"gumbel"`. |
     | `structure_method` | `"agglomerative_tau_then_collapse"` | Algorithm for discovering tree structure from data. |
-    | `fit_method` | `"recursive_mle"` | Parameter estimation method applied to the discovered structure. |
+    | `fit_method` | `"composite_mle"` | Pairwise composite optimization; `tau_init` initializes from Kendall tau. |
     | `max_iter` | `500` | Maximum iterations for the optimizer at each node. |
   </Accordion>
 </AccordionGroup>
@@ -71,24 +72,23 @@ This creates a 4-dimensional HAC where variables 2 and 3 share a tighter inner G
 
 ## Density evaluation
 
-Rscopulas uses two code paths for `log_pdf` depending on the tree shape:
+`log_pdf(data)` returns the joint log-density for a flat tree (one node over all leaves), using the same implementation as the corresponding multivariate Archimedean model. Nested trees raise an error because exact joint density evaluation is not implemented.
 
-- **Exchangeable fast path** — When the model is a single Archimedean node whose children are all leaves (a classical flat structure), density evaluation uses the same closed-form implementation as `ClaytonCopula`, `FrankCopula`, or `GumbelCopula`. This path is exact and fast.
-- **Composite evaluation** — For deeper nested trees, the implementation evaluates a composite expression built from pair-copula terms associated with the tree structure. This is the intended construction for general HAC estimation workflows.
-
-Use the `is_exact` and `exact_loglik` properties to check which path applies to your model:
+Use `composite_log_pdf(data)` explicitly for pairwise scores on nested trees. These scores are not normalized joint log-densities and cannot be used as ordinary joint likelihoods or ordinary AIC/BIC.
 
 ```python
-print("is_exact:", model.is_exact)
-print("exact_loglik:", model.exact_loglik)
+scores = model.composite_log_pdf(data)
+print("joint density available:", model.exact_loglik)
 ```
 
-`is_exact` is `True` when the tree reduces to a single exchangeable Archimedean fan over all leaves. `exact_loglik` reflects whether the exchangeable closed-form log-likelihood is in use. For nested trees, both will be `False` and the composite path runs instead.
+`exact_loglik` identifies the flat joint-density path. `is_exact` describes whether the tree uses supported same-family nesting; it may be `True` for a nested Gumbel tree even though its joint density is unavailable.
+
+The default `fit_method="composite_mle"` optimizes pairwise scores at each node. `recursive_mle` is a compatibility alias. `tau_init` uses Kendall-tau inversion without optimization. `full_mle`, `smle`, and `dmle` raise an explicit unsupported-method error. No simulated likelihood is performed: `used_smle` is false and the fitted model's `mc_samples` is zero. `allow_experimental=False` rejects mixed-family fitted trees.
 
 ## Sampling
 
 <Warning>
-**Mixed-family nesting can produce degenerate samples.** If a parent node and a child node use *different* Archimedean families (for example, Gumbel above Clayton), sampling goes through a numerical Laplace inversion path that is not robust in the current implementation. That path can produce coordinates stuck near 1 even when `log_pdf` returns finite values. Do not rely on `sample()` for mixed-family HAC trees for inference, calibration, or publication-quality output until this limitation is resolved.
+**Mixed-family nesting can produce degenerate samples.** If a parent node and a child node use *different* Archimedean families (for example, Gumbel above Clayton), sampling goes through a numerical Laplace inversion path that is not robust in the current implementation. That path can produce coordinates stuck near 1 even when composite scores are finite. Do not rely on `sample()` for mixed-family HAC trees for inference, calibration, or publication-quality output until this limitation is resolved.
 </Warning>
 
 ### Reliable scenarios for Monte Carlo use
@@ -101,7 +101,7 @@ Two scenarios are validated and safe to use today:
 For this reason, rscopulas example scripts use nested Gumbel exclusively when demonstrating HAC sampling.
 
 <Tip>
-If your fitted tree contains mixed families, you can still use `log_pdf` for likelihood evaluation. Reserve `sample()` for exchangeable or nested same-family Gumbel configurations.
+If your fitted tree contains mixed families, you can use `composite_log_pdf` for explicit pairwise scoring. Reserve `sample()` for exchangeable or nested same-family Gumbel configurations.
 </Tip>
 
 ## Fit diagnostics
@@ -110,9 +110,10 @@ If your fitted tree contains mixed families, you can still use `log_pdf` for lik
 
 | Field | Description |
 | --- | --- |
-| `diagnostics.loglik` | Log-likelihood of the fitted model. |
-| `diagnostics.aic` | Akaike information criterion. |
-| `diagnostics.bic` | Bayesian information criterion. |
+| `diagnostics.likelihood_kind` | `"joint"` for a flat tree, `"composite"` for nested trees. |
+| `diagnostics.loglik` | Sum of the reported objective on the fitted data. |
+| `diagnostics.aic` | Ordinary AIC for joint likelihood; NaN for composite scores. |
+| `diagnostics.bic` | Ordinary BIC for joint likelihood; NaN for composite scores. |
 | `diagnostics.converged` | Whether the optimizer converged at each node. |
 | `diagnostics.n_iter` | Total optimizer iterations used. |
 

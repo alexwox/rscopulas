@@ -96,7 +96,7 @@ Khoudraji fitting uses a bounded internal search over supported base families an
 In Rust, construct a `PairCopulaSpec::khoudraji` by passing two base `PairCopulaSpec` instances and the shape parameters:
 
 ```rust
-use rscopulas_core::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
+use rscopulas::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first = PairCopulaSpec {
