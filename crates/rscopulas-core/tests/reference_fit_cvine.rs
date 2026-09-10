@@ -361,9 +361,7 @@ macro_rules! cvine_fit_cases {
 }
 
 cvine_fit_cases! {
-    #[ignore = "pending MLE fitting (sibling branch): the Gaussian pair fit is tau inversion, so the sequential C-vine fit is 0.61 nats below R's sequential MLE at n = 2000 (6 edges)"]
     gaussian_d4 => "cvine_fit_gaussian_d4.json";
-    #[ignore = "pending MLE fitting (sibling branch): the Gaussian pair fit is tau inversion, so the sequential C-vine fit is 2.28 nats below R's sequential MLE at n = 2000 (10 edges)"]
     gaussian_d5 => "cvine_fit_gaussian_d5.json";
     clayton_d4 => "cvine_fit_clayton_d4.json";
     clayton_d5 => "cvine_fit_clayton_d5.json";
