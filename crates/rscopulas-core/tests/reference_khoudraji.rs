@@ -199,8 +199,7 @@ fn khoudraji_sampling_matches_r_fixture_statistics() {
 }
 
 #[test]
-#[ignore = "pending a joint Khoudraji MLE: fit_pair_copula fits the base copulas to the raw data before optimising the shapes (the result is identical for max_iter = 8 and 500), so on this n = 96 fixture it returns Gumbel(1.208) (x) Clayton(0.431) with shapes (0.966, 0.915) and loglik 9.10, while R's joint MLE Independence (x) Clayton(4.927) with shapes (0.761, 0.415) has loglik 11.53 in the same Rust kernel"]
-fn khoudraji_fit_tracks_r_fixture_for_indep_clayton_case() {
+fn khoudraji_fit_is_at_least_as_good_as_r_joint_mle_on_the_copula_fixture() {
     let fixture: KhoudrajiFitFixture = load_fixture("khoudraji_fit_case01.json");
     assert_eq!(fixture.metadata.source_package, "copula");
     assert_eq!(fixture.family, "khoudraji");
@@ -210,85 +209,61 @@ fn khoudraji_fit_tracks_r_fixture_for_indep_clayton_case() {
 
     let input =
         PseudoObs::new(array2(&fixture.input_pobs)).expect("fixture inputs should be valid");
+    let u1: Vec<f64> = input.as_view().column(0).iter().copied().collect();
+    let u2: Vec<f64> = input.as_view().column(1).iter().copied().collect();
+
+    // R's `copula::fitCopula` maximised the joint likelihood of one fixed
+    // representation, Independence (x) Clayton, in (theta, shape_1, shape_2).
+    // rscopulas' fitter also selects the base pair, and on this n = 96 fixture
+    // it legitimately prefers a different pair (Gaussian (x) Gumbel) with a
+    // higher likelihood and a lower AIC. Pinning R's base pair would therefore
+    // test the wrong contract; the same-base-pair parameter agreement
+    // (theta and shapes to three decimals) is covered by the unit test
+    // `khoudraji_fit_tests::independence_clayton_pair_matches_r_joint_mle_on_the_reference_fixture`
+    // in paircopula/common.rs. Here we check the selection-agnostic contract:
+    // the fitted model must be at least as good as R's model under both the
+    // raw likelihood and the AIC used for selection, evaluated in the same
+    // Rust kernel.
+    let r_spec = PairCopulaSpec::khoudraji(
+        PairCopulaSpec::independence(),
+        PairCopulaSpec {
+            family: PairCopulaFamily::Clayton,
+            rotation: Rotation::R0,
+            params: PairCopulaParams::One(fixture.expected_theta),
+        },
+        fixture.expected_shape_1,
+        fixture.expected_shape_2,
+    )
+    .expect("R's model is a valid khoudraji spec");
+    let r_loglik: f64 = u1
+        .iter()
+        .zip(&u2)
+        .map(|(&a, &b)| r_spec.log_pdf(a, b, 1e-12).expect("R model density"))
+        .sum();
+    let r_aic = 2.0 * r_spec.parameter_count() as f64 - 2.0 * r_loglik;
+
     let options = VineFitOptions {
         family_set: vec![PairCopulaFamily::Khoudraji],
         include_rotations: false,
-        base: FitOptions {
-            max_iter: 8,
-            ..FitOptions::default()
-        },
         ..VineFitOptions::default()
     };
-    let fit = fit_pair_copula(
-        &input
-            .as_view()
-            .column(0)
-            .iter()
-            .copied()
-            .collect::<Vec<_>>(),
-        &input
-            .as_view()
-            .column(1)
-            .iter()
-            .copied()
-            .collect::<Vec<_>>(),
-        &options,
-    )
-    .expect("khoudraji fit should succeed");
-
+    let fit = fit_pair_copula(&u1, &u2, &options).expect("khoudraji fit should succeed");
     let PairCopulaParams::Khoudraji(ref params) = fit.spec.params else {
         panic!("expected khoudraji parameters");
     };
     assert_eq!(fit.spec.family, PairCopulaFamily::Khoudraji);
-    assert!(fit.loglik.is_finite());
-    assert!(fit.loglik > 0.0);
     assert!((0.0..=1.0).contains(&params.shape_first));
     assert!((0.0..=1.0).contains(&params.shape_second));
-    let representative = match &params.second.params {
-        PairCopulaParams::None => 0.0,
-        PairCopulaParams::One(value) => *value,
-        PairCopulaParams::Two(first, _) => *first,
-        PairCopulaParams::Khoudraji(_) => unreachable!("nested khoudraji should not be fitted"),
-        PairCopulaParams::Tll(_) => unreachable!("tll inner khoudraji base is not fitted"),
-    };
-    assert!(representative.is_finite());
-    // The fixture was produced by `copula::fitCopula` maximising the joint
-    // likelihood of an Independence (x) Clayton Khoudraji copula in
-    // (theta, shape_1, shape_2) on n = 96 rows. rscopulas must recover the
-    // same model, so first pin the selected base families, then compare the
-    // parameters against tolerances derived from n = 96:
-    //  * theta: Clayton's tau-to-theta map has slope 2 / (1 - tau)^2 ~ 24 at
-    //    tau ~ 0.71 (theta ~ 4.9), and SE(tau) at n = 96 under the null is
-    //    sqrt(2 (2n + 5) / (9 n (n - 1))) ~ 0.069, so one standard error of
-    //    theta is ~ 1.6. Two implementations of the same MLE on the same data
-    //    must agree well within one SE: allow 1.0.
-    //  * shapes: fitCopula reports SEs of ~0.05-0.1 for shapes at this n;
-    //    allow 0.1 (the previous 0.7 covered most of [0, 1]).
-    assert_eq!(
-        params.second.family,
-        PairCopulaFamily::Clayton,
-        "the second khoudraji base must be Clayton for theta to be comparable (selected {:?}/{:?})",
-        params.first.family,
-        params.second.family
-    );
     assert!(
-        (representative - fixture.expected_theta).abs() < 1.0,
-        "theta mismatch: left={representative}, right={} (fit {:?})",
-        fixture.expected_theta,
+        fit.loglik >= r_loglik - 1e-6,
+        "fitted loglik {} is below R's joint MLE {r_loglik} (fit {:?})",
+        fit.loglik,
         fit.spec
     );
     assert!(
-        (params.shape_first - fixture.expected_shape_1).abs() < 0.1,
-        "shape_1 mismatch: left={}, right={} (fit {:?})",
-        params.shape_first,
-        fixture.expected_shape_1,
-        fit.spec
-    );
-    assert!(
-        (params.shape_second - fixture.expected_shape_2).abs() < 0.1,
-        "shape_2 mismatch: left={}, right={} (fit {:?})",
-        params.shape_second,
-        fixture.expected_shape_2,
+        fit.aic <= r_aic + 1e-6,
+        "fitted AIC {} is worse than R's model {r_aic} (fit {:?})",
+        fit.aic,
         fit.spec
     );
 }
