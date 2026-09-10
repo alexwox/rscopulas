@@ -57,8 +57,10 @@
   on vines simulated by pyvinecopulib (fit time, selected families, in- and
   out-of-sample log-likelihood, Rosenblatt calibration), with the report
   committed as `docs/pyvinecopulib-comparison.md` and a methodology page under
-  `docs/mdx/performance/comparison.mdx`. rscopulas fits comparably well but is
-  currently 7–15× slower at select-and-fit with a nine-family candidate set.
+  `docs/mdx/performance/comparison.mdx`. with the maximum-likelihood
+  fitters rscopulas selects the same model under BIC (and a better one out of
+  sample under AIC) and is 1.6–2.7× slower at select-and-fit with a nine-family
+  candidate set.
 - Add `python/examples/portfolio_tail_risk.py`: simulated heavy-tailed asset
   returns from a known mixed vine, R-vine versus Gaussian-copula VaR/ES, and a
   conditional stress scenario through `sample_conditional`.

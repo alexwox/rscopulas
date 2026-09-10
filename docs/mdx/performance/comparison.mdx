@@ -4,28 +4,28 @@ sidebarTitle: "Comparison with pyvinecopulib"
 description: "Head-to-head comparison of rscopulas and pyvinecopulib on vine copulas simulated by pyvinecopulib: fit time, selected families, in- and out-of-sample log-likelihood, and Rosenblatt calibration."
 ---
 
-[pyvinecopulib](https://github.com/vinecopulib/pyvinecopulib) is the Python binding of vinecopulib, the reference C++ implementation of vine copulas. This page reports what `benchmarks/compare_pyvinecopulib.py` measures when both libraries solve the same problem, and it does not hide the result: **rscopulas fits comparably well but is currently 7–15× slower at select-and-fit** with a rich parametric family set.
+[pyvinecopulib](https://github.com/vinecopulib/pyvinecopulib) is the Python binding of vinecopulib, the reference C++ implementation of vine copulas. This page reports what `benchmarks/compare_pyvinecopulib.py` measures when both libraries solve the same problem, and it does not hide the result: **rscopulas selects the same or a better model and is currently 1.6–2.7× slower at select-and-fit** with a rich parametric family set.
 
 <Note>
-Numbers below come from one run on 2026-09-10 on an Apple M3 Pro (macOS 15.5, Python 3.12, rscopulas 0.3.0 built from source, pyvinecopulib 0.7.6, NumPy 2.5). The machine was shared with other builds; the two rscopulas fits of the Gaussian dataset that select identical models took 44.8 s and 27.4 s in the same run, so treat absolute times as ±50 % and rely on the ratios. The full report, including every first-tree edge, is committed as `docs/pyvinecopulib-comparison.md`.
+Numbers below come from one run on 2026-09-10 on an otherwise idle Apple M3 Pro (macOS 15.5, Python 3.12, rscopulas 0.4.0 built from source with the maximum-likelihood pair fitters, pyvinecopulib 0.7.6, NumPy 2.5). Absolute times are single-run medians of three fits and should be read as ±20 %. The full report, including every first-tree edge, is committed as `docs/pyvinecopulib-comparison.md`.
 </Note>
 
 ## Summary
 
 | Dataset | rscopulas fit (AIC) | pyvinecopulib fit (BIC) | Ratio | Test log-lik: rscopulas / pyvinecopulib / truth | Rosenblatt KS max: rscopulas / pyvinecopulib / truth |
 | --- | ---: | ---: | ---: | --- | --- |
-| Gaussian R-vine, d = 5 | 44.8 s | 3.1 s | 14.5× | 2607.9 / 2607.6 / 2609.0 | 0.022 / 0.023 / 0.021 |
-| Mixed R-vine, d = 5 | 18.0 s | 1.3 s | 13.9× | 4444.2 / 4443.8 / 4644.5 | 0.029 / 0.021 / 0.019 |
-| Mixed R-vine, d = 8 | 28.7 s | 4.2 s | 6.8× | 7386.2 / 7391.2 / 7690.2 | 0.038 / 0.029 / 0.028 |
+| Gaussian R-vine, d = 5 | 3.1 s | 1.7 s | 1.8× | 2607.6 / 2607.6 / 2609.0 | 0.023 / 0.023 / 0.021 |
+| Mixed R-vine, d = 5 | 3.4 s | 1.3 s | 2.7× | 4450.8 / 4443.8 / 4644.5 | 0.029 / 0.021 / 0.019 |
+| Mixed R-vine, d = 8 | 6.5 s | 4.1 s | 1.6× | 7407.1 / 7391.2 / 7690.2 | 0.038 / 0.029 / 0.028 |
 
 Each fit selects structure and families on 2000 training rows; log-likelihoods are evaluated on 2000 held-out rows. Fit times are medians of three complete `fit_r` / `Vinecop.from_data` calls.
 
 ## What the numbers say
 
-- **Statistical quality is equivalent on the 5-dimensional datasets.** In-sample and out-of-sample log-likelihoods agree to within 0.5 nats, both libraries select the same first-tree edges with parameters that agree to two decimals, and the Rosenblatt transform of the test set is as uniform as under the simulating vine. rscopulas is marginally closer to the truth out of sample on both 5-d sets (−1.0 vs −1.4 and −200.4 vs −200.7 nats).
-- **pyvinecopulib is slightly better on the 8-dimensional dataset.** It reaches a higher test log-likelihood (7391.2 vs 7386.2) with fewer parameters (30 vs 33) and a better-calibrated Rosenblatt transform (largest per-column KS distance 0.029, p = 0.06, vs 0.038, p = 0.01). The first-tree selections differ on one pair (Student-t in rscopulas vs BB1 rotated 180° in pyvinecopulib); everything else matches. Refitting rscopulas with BIC does not close the gap (7379.6).
-- **Both libraries lose the same information to structure selection.** On the mixed datasets the simulating vine scores 200–300 nats higher out of sample than either fit because Kendall's τ spanning trees pick a different first tree from the truth (for example the (0, 1) pair instead of the true (0, 2) Student-t edge). That is a property of the Dißmann algorithm, not of either implementation, and it is why the truth row is in every table.
-- **Speed is the real gap.** With independence, Gaussian, Student-t, Clayton, Frank, Gumbel, Joe, BB1 and BB7 as candidates (rotations allowed), rscopulas needs 18–45 s where pyvinecopulib needs 1.3–4.2 s. Two things contribute besides raw implementation speed: pyvinecopulib prunes candidate families from the empirical symmetry of each pair (`preselect_families=True`, its default) while rscopulas fits every candidate, and rscopulas' two-parameter and Student-t fits are comparatively expensive. The ratio is smaller on the 8-dimensional set (7× instead of 14×), presumably because its deeper trees are close to independence, where both libraries spend their time on cheap one-parameter fits; this was not profiled.
+- **Under the same criterion the two libraries fit the same model.** With BIC, rscopulas selects exactly the model pyvinecopulib selects on all three datasets: identical in-sample and out-of-sample log-likelihood and parameter count. The pair-copula fitters are maximum-likelihood on both sides, so agreement is expected once the candidate set and criterion match.
+- **rscopulas' AIC default is better out of sample on the mixed vines.** AIC keeps a few more parameters (14 vs 13 at d = 5, 35 vs 30 at d = 8) and pays off on the held-out rows: 4450.8 vs 4443.8 nats at d = 5 and 7407.1 vs 7391.2 at d = 8. On the Gaussian vine both criteria pick the same ten-parameter model. Rosenblatt calibration of the test set is comparable; pyvinecopulib's transform is slightly more uniform per column (largest KS distance 0.021–0.029 vs 0.023–0.038), rscopulas' columns are slightly less correlated at d = 8.
+- **Both libraries lose the same information to structure selection.** On the mixed datasets the simulating vine scores 200–300 nats higher out of sample than either fit because Kendall's τ spanning trees pick a different first tree from the truth. That is a property of the Dißmann algorithm, not of either implementation, and it affects both equally.
+- **Speed is the remaining gap, and it has narrowed.** With independence, Gaussian, Student-t, Clayton, Frank, Gumbel, Joe, BB1 and BB7 as candidates (rotations allowed), rscopulas needs 3.1–6.5 s where pyvinecopulib needs 1.3–4.1 s, a factor of 1.6–2.7. Before the 0.4.0 estimation rewrite the same run took 18–45 s. Part of the remaining difference is that pyvinecopulib prunes candidate families from the empirical symmetry of each pair (`preselect_families=True`, its default) while rscopulas scores every candidate.
 
 The cross-language harness on the [Benchmarks](/performance/benchmarks) page tells a different story for `log_pdf` and sampling, where rscopulas is far ahead of R; the two pages measure different things and should be read together.
 
@@ -53,7 +53,7 @@ Per dataset the script reports fit wall time (median of three runs), the family,
 
 ```bash
 pip install pyvinecopulib          # next to an installed rscopulas build
-python benchmarks/compare_pyvinecopulib.py                 # full run, about 10 minutes
+python benchmarks/compare_pyvinecopulib.py                 # full run, about 2 minutes
 python benchmarks/compare_pyvinecopulib.py --repeats 1 --n-train 500 --n-test 500 --dataset mixed_rvine_5d
 ```
 
