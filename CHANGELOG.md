@@ -14,6 +14,15 @@
   every break is evaluated so that an interval whose end point hides mass from
   both rules is refined instead of accepted. `quadrature_max_nodes` now also
   counts these break-point evaluations. Benign rows cost about 5–10 % more.
+- Add `benchmarks/compare_pyvinecopulib.py`, a comparison against pyvinecopulib
+  on vines simulated by pyvinecopulib (fit time, selected families, in- and
+  out-of-sample log-likelihood, Rosenblatt calibration), with the report
+  committed as `docs/pyvinecopulib-comparison.md` and a methodology page under
+  `docs/mdx/performance/comparison.mdx`. rscopulas fits comparably well but is
+  currently 7–15× slower at select-and-fit with a nine-family candidate set.
+- Add `python/examples/portfolio_tail_risk.py`: simulated heavy-tailed asset
+  returns from a known mixed vine, R-vine versus Gaussian-copula VaR/ES, and a
+  conditional stress scenario through `sample_conditional`.
 
 ## 0.3.0 — unreleased
 
