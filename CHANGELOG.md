@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 — unreleased
+
+- Fix a false convergence plateau in the factor-copula adaptive quadrature.
+  Strong links at extreme observations concentrate the latent posterior in a
+  spike narrower than the node spacing of both comparison rules; because the
+  spike sits on a mesh break, the interval on its long side was reported as
+  empty and half of its mass was dropped while still reporting convergence
+  (three Joe(40) links at `u = 1 - 1e-10` returned 49.3268 instead of 50.0112;
+  three Clayton(30) links at `u = 1e-12` returned 58.0018 instead of 58.6835).
+  Each row's mesh is now seeded from the local scale of every link's
+  conditional density (conditional quantiles for Khoudraji/Tawn links), and
+  every break is evaluated so that an interval whose end point hides mass from
+  both rules is refined instead of accepted. `quadrature_max_nodes` now also
+  counts these break-point evaluations. Benign rows cost about 5–10 % more.
+
 ## 0.3.0 — unreleased
 
 This minor release contains breaking corrections to the pre-1.0 numerical and

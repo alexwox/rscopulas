@@ -13,6 +13,14 @@
 //! error. The default relative tolerance is 1e-7 with a budget of 4096 integrand
 //! evaluations per row. Fixed-node evaluation is an explicit approximate mode.
 //!
+//! Strongly dependent links at extreme observations concentrate the latent
+//! posterior in a spike far narrower than the spacing of any fixed rule, so
+//! the adaptive mesh is seeded per row: every observation's normal score is a
+//! break, each link additionally contributes breaks at a few e-folds of the
+//! local scale of its conditional density (or at conditional quantiles for
+//! asymmetric families), and every break is evaluated so that an interval
+//! whose end point hides mass from both comparison rules is still refined.
+//!
 //! Extensions (Nested2F, Structured, BiFactor) are intentionally deferred —
 //! adding them only requires extending the `FactorLayout` enum and
 //! `log_pdf_single` / `sample` to walk a richer link tree; the rest of the
@@ -73,7 +81,7 @@ pub struct FactorQuadrature {
     /// `quadrature_nodes` and makes no convergence guarantee.
     pub adaptive: bool,
     /// Maximum integrand evaluations per row in adaptive mode, including
-    /// coarse rules and discarded parent intervals.
+    /// coarse rules, break-point evaluations, and discarded parent intervals.
     pub max_nodes: usize,
     /// Relative error target for adaptive integration.
     pub rel_tol: f64,
@@ -458,64 +466,48 @@ impl CopulaModel for FactorCopula {
                     .map(|u| u.clamp(options.clip_eps, 1.0 - options.clip_eps))
                     .collect();
                 let normal_obs: Vec<_> = obs.iter().map(|&u| normal.inverse_cdf(u)).collect();
-                let mut breaks = vec![-8.0, 0.0, 8.0];
-                breaks.extend(&knots);
-                for (&z, link) in normal_obs.iter().zip(&self.links) {
-                    let z = if matches!(
-                        link.rotation,
-                        crate::paircopula::Rotation::R90 | crate::paircopula::Rotation::R270
-                    ) {
-                        -z
-                    } else {
-                        z
-                    };
-                    if z > -8.0 && z < 8.0 {
-                        breaks.push(z);
-                    }
-                }
-                breaks.sort_by(f64::total_cmp);
-                breaks.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
-                let integrand = |z: f64| -> Result<f64, CopulaError> {
-                    let v = normal.cdf(z);
-                    let tail = normal.cdf(-z.abs());
-                    let (log_v, log_sv) = if z > 0.0 {
-                        ((-tail).ln_1p(), tail.ln())
-                    } else {
-                        (tail.ln(), (-tail).ln_1p())
-                    };
-                    let mut value = -0.5 * z * z - 0.5 * (2.0 * std::f64::consts::PI).ln();
-                    for (j, link) in self.links.iter().enumerate() {
+                // Normal score of each observation as its link sees the latent:
+                // 90°/270° rotations read the latent through `1 - v`.
+                let link_scores: Vec<f64> = normal_obs
+                    .iter()
+                    .zip(&self.links)
+                    .map(|(&z, link)| if mirrors_latent(link) { -z } else { z })
+                    .collect();
+                // Log-density contribution of link `j` at the latent point.
+                let link_term =
+                    |j: usize, z: f64, point: &LatentPoint| -> Result<f64, CopulaError> {
+                        let link = &self.links[j];
                         if let (
                             PairCopulaFamily::Gaussian,
                             crate::paircopula::PairCopulaParams::One(rho),
                         ) = (link.family, &link.params)
                         {
-                            let rho = if matches!(
-                                link.rotation,
-                                crate::paircopula::Rotation::R90
-                                    | crate::paircopula::Rotation::R270
-                            ) {
-                                -*rho
-                            } else {
-                                *rho
-                            };
+                            let rho = if mirrors_latent(link) { -*rho } else { *rho };
                             let x = normal_obs[j];
                             let variance = 1.0 - rho * rho;
-                            value += -0.5 * variance.ln()
+                            Ok(-0.5 * variance.ln()
                                 - (rho * rho * (x * x + z * z) - 2.0 * rho * x * z)
-                                    / (2.0 * variance);
-                        } else if link.family != PairCopulaFamily::Independence {
+                                    / (2.0 * variance))
+                        } else if link.family == PairCopulaFamily::Independence {
+                            Ok(0.0)
+                        } else {
                             // The public clipping policy applies to observations.
                             // Clipping latent integration nodes at 1e-12 creates an
                             // artificial tail plateau and prevents convergence.
-                            value += match link.log_pdf_from_log_probabilities(
-                                [obs[j].ln(), log_v],
-                                [(-obs[j]).ln_1p(), log_sv],
+                            match link.log_pdf_from_log_probabilities(
+                                [obs[j].ln(), point.log_v],
+                                [(-obs[j]).ln_1p(), point.log_sv],
                             ) {
-                                Some(value) => value,
-                                None => link.log_pdf(obs[j], v, f64::EPSILON / 2.0)?,
-                            };
+                                Some(value) => Ok(value),
+                                None => link.log_pdf(obs[j], point.v, f64::EPSILON / 2.0),
+                            }
                         }
+                    };
+                let integrand = |z: f64| -> Result<f64, CopulaError> {
+                    let point = LatentPoint::at(&normal, z);
+                    let mut value = log_normal_pdf(z);
+                    for j in 0..self.dim {
+                        value += link_term(j, z, &point)?;
                     }
                     if value.is_nan() || value == f64::INFINITY {
                         return Err(crate::errors::NumericalError::Failed {
@@ -525,6 +517,70 @@ impl CopulaModel for FactorCopula {
                     }
                     Ok(value)
                 };
+                // Mesh: the range ends, the origin, TLL knots, every observation's
+                // score, and seeds bounding the region where each link concentrates
+                // the latent. Strong links at extreme observations produce spikes
+                // narrower than the spacing of both comparison rules; without the
+                // seeds both rules agree that the interval next to the spike is
+                // empty and the refinement never visits it.
+                let mut breaks = vec![-LATENT_RANGE, 0.0, LATENT_RANGE];
+                breaks.extend(&knots);
+                for (j, link) in self.links.iter().enumerate() {
+                    let score = link_scores[j];
+                    push_seed(&mut breaks, score);
+                    match (link.family, &link.params) {
+                        (PairCopulaFamily::Independence, _) => {}
+                        (
+                            PairCopulaFamily::Gaussian,
+                            crate::paircopula::PairCopulaParams::One(rho),
+                        ) => {
+                            // Z_V | Z_j = x is N(ρx, 1 - ρ²); seed the tails of a
+                            // narrow conditional.
+                            let rho = if mirrors_latent(link) { -*rho } else { *rho };
+                            let sd = (1.0 - rho * rho).sqrt();
+                            if sd < GAUSSIAN_SEED_MAX_SD {
+                                let centre = rho * normal_obs[j];
+                                push_seed(&mut breaks, centre - GAUSSIAN_SEED_SIGMAS * sd);
+                                push_seed(&mut breaks, centre + GAUSSIAN_SEED_SIGMAS * sd);
+                            }
+                        }
+                        (
+                            PairCopulaFamily::Khoudraji
+                            | PairCopulaFamily::Tawn1
+                            | PairCopulaFamily::Tawn2,
+                            _,
+                        ) => {
+                            // Asymmetric families concentrate the latent away from
+                            // the observation's own score; locate the mass through
+                            // conditional quantiles instead.
+                            for q in QUANTILE_SEEDS {
+                                if let Some(z) =
+                                    conditional_quantile_score(link, obs[j], q, &normal)
+                                {
+                                    push_seed(&mut breaks, z);
+                                }
+                            }
+                        }
+                        _ => {
+                            // Exchangeable families peak at the observation's score
+                            // with exponential tails, so the peak of the conditional
+                            // density of the latent score gives the local scale.
+                            if score.abs() < LATENT_RANGE {
+                                let point = LatentPoint::at(&normal, score);
+                                let log_peak = link_term(j, score, &point)? + log_normal_pdf(score);
+                                if log_peak.is_finite() {
+                                    let half_width = SEED_EFOLDS / (2.0 * log_peak.exp());
+                                    if half_width < SEED_MAX_HALF_WIDTH {
+                                        push_seed(&mut breaks, score - half_width);
+                                        push_seed(&mut breaks, score + half_width);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                breaks.sort_by(f64::total_cmp);
+                breaks.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
                 adaptive_factor_integral(
                     &integrand,
                     &breaks,
@@ -561,10 +617,97 @@ impl CopulaModel for FactorCopula {
     }
 }
 
+/// Half-width of the latent normal-score range covered by the adaptive rule.
+const LATENT_RANGE: f64 = 8.0;
+/// A break whose log-integrand exceeds the nearest fine-rule node by more
+/// than this hides a spike from both comparison rules.
+const ENDPOINT_DROP: f64 = 2.0;
+/// Seeds sit this many e-folds of the local exponential scale from a link's
+/// conditional mode, leaving ≈ e⁻¹⁰ of the link's conditional mass beyond.
+const SEED_EFOLDS: f64 = 10.0;
+/// Conditionals wider than this (normal-score units) are resolved by the base
+/// mesh and need no seeds.
+const SEED_MAX_HALF_WIDTH: f64 = 1.0;
+/// Gaussian links seed ±5σ around the conditional mean when σ < 0.25.
+const GAUSSIAN_SEED_SIGMAS: f64 = 5.0;
+const GAUSSIAN_SEED_MAX_SD: f64 = 0.25;
+/// Conditional quantile levels seeded for asymmetric link families.
+const QUANTILE_SEEDS: [f64; 3] = [1e-3, 0.5, 1.0 - 1e-3];
+/// Bisection steps locating a conditional quantile on [-8, 8] (≈ 2e-7 wide).
+const QUANTILE_BISECTIONS: usize = 26;
+
+fn log_normal_pdf(z: f64) -> f64 {
+    -0.5 * z * z - 0.5 * (2.0 * std::f64::consts::PI).ln()
+}
+
+/// Whether a link reads the latent factor through `1 - v`, mirroring the
+/// latent normal score.
+fn mirrors_latent(link: &PairCopulaSpec) -> bool {
+    matches!(
+        link.rotation,
+        crate::paircopula::Rotation::R90 | crate::paircopula::Rotation::R270
+    )
+}
+
+/// Latent uniform and its log-probabilities at a normal score, keeping tail
+/// precision that `1 - Φ(z)` loses in double precision.
+struct LatentPoint {
+    v: f64,
+    log_v: f64,
+    log_sv: f64,
+}
+
+impl LatentPoint {
+    fn at(normal: &Normal, z: f64) -> Self {
+        let v = normal.cdf(z);
+        let tail = normal.cdf(-z.abs());
+        let (log_v, log_sv) = if z > 0.0 {
+            ((-tail).ln_1p(), tail.ln())
+        } else {
+            (tail.ln(), (-tail).ln_1p())
+        };
+        Self { v, log_v, log_sv }
+    }
+}
+
+fn push_seed(breaks: &mut Vec<f64>, z: f64) {
+    if z.is_finite() && z.abs() < LATENT_RANGE {
+        breaks.push(z);
+    }
+}
+
+/// Normal score `z` with `P(V ≤ Φ(z) | U = u) = q` under `link`, by bisection
+/// on the monotone conditional CDF. `None` when the quantile lies outside the
+/// integration range or the conditional cannot be evaluated.
+fn conditional_quantile_score(
+    link: &PairCopulaSpec,
+    u: f64,
+    q: f64,
+    normal: &Normal,
+) -> Option<f64> {
+    let cdf = |z: f64| link.cond_second_given_first(u, normal.cdf(z), 1e-12).ok();
+    let (mut lower, mut upper) = (-LATENT_RANGE, LATENT_RANGE);
+    if cdf(lower)? >= q || cdf(upper)? <= q {
+        return None;
+    }
+    for _ in 0..QUANTILE_BISECTIONS {
+        let mid = 0.5 * (lower + upper);
+        if cdf(mid)? < q {
+            lower = mid;
+        } else {
+            upper = mid;
+        }
+    }
+    Some(0.5 * (lower + upper))
+}
+
 #[derive(Clone, Copy)]
 struct IntegralInterval {
     lower: f64,
     upper: f64,
+    /// Log-integrand at the end points, consumed by the endpoint guard.
+    log_lower: f64,
+    log_upper: f64,
     value: f64,
     error: f64,
 }
@@ -573,28 +716,62 @@ fn factor_interval<F: Fn(f64) -> Result<f64, CopulaError>>(
     f: &F,
     lower: f64,
     upper: f64,
+    log_lower: f64,
+    log_upper: f64,
 ) -> Result<IntegralInterval, CopulaError> {
     use std::sync::OnceLock;
     type Rule = (Vec<f64>, Vec<f64>);
     static RULES: OnceLock<(Rule, Rule)> = OnceLock::new();
     let (small, large) = RULES.get_or_init(|| (gauss_legendre_01(8), gauss_legendre_01(16)));
-    let integrate = |rule: &Rule| -> Result<f64, CopulaError> {
+    let width = upper - lower;
+    // Log-integral plus the log-integrand at the rule's first and last node.
+    let integrate = |rule: &Rule| -> Result<(f64, f64, f64), CopulaError> {
         let mut terms = Vec::with_capacity(rule.0.len());
-        for (&x, &w) in rule.0.iter().zip(&rule.1) {
-            terms.push(w.ln() + f(lower + (upper - lower) * x)?);
+        let mut first = f64::NEG_INFINITY;
+        let mut last = f64::NEG_INFINITY;
+        for (index, (&x, &w)) in rule.0.iter().zip(&rule.1).enumerate() {
+            let log_f = f(lower + width * x)?;
+            if index == 0 {
+                first = log_f;
+            }
+            last = log_f;
+            terms.push(w.ln() + log_f);
         }
-        Ok((upper - lower).ln() + log_sum_exp(&terms))
+        Ok((width.ln() + log_sum_exp(&terms), first, last))
     };
-    let coarse = integrate(small)?;
-    let value = integrate(large)?;
-    let error = if coarse == value {
+    let (coarse, _, _) = integrate(small)?;
+    let (value, first, last) = integrate(large)?;
+    let mut error = if coarse == value {
         f64::NEG_INFINITY
     } else {
         coarse.max(value) + crate::math::log1mexp(-(coarse - value).abs())
     };
+    // Endpoint guard. Gauss nodes never touch the end points, so a spike that
+    // decays before the first node of both rules is invisible to their
+    // disagreement, and the interval next to it reports convergence with the
+    // spike's mass missing. A break that dominates the nearest fine node
+    // bounds that hidden mass: the end-point value over the decay rate implied
+    // by the drop, or times the blind distance when the drop is unmeasurable.
+    let blind = (large.0[0] * width).ln();
+    for (edge, node) in [(log_lower, first), (log_upper, last)] {
+        if !edge.is_finite() {
+            continue;
+        }
+        let drop = edge - node;
+        if drop > ENDPOINT_DROP {
+            let hidden = if drop.is_finite() {
+                edge + blind - drop.ln()
+            } else {
+                edge + blind
+            };
+            error = error.max(hidden);
+        }
+    }
     Ok(IntegralInterval {
         lower,
         upper,
+        log_lower,
+        log_upper,
         value,
         error,
     })
@@ -611,13 +788,20 @@ fn adaptive_factor_integral<F: Fn(f64) -> Result<f64, CopulaError>>(
             reason: "factor quadrature exhausted its node budget; increase quadrature_max_nodes, relax quadrature_rel_tol, or explicitly use fixed quadrature",
         })
     };
-    let mut spent = 24 * (breaks.len() - 1);
+    // Every break is evaluated once for the endpoint guard, every interval
+    // costs its two comparison rules, and every bisection adds a midpoint.
+    let mut spent = 24 * (breaks.len() - 1) + breaks.len();
     if spent > policy.max_nodes {
         return Err(budget_error());
     }
+    let log_breaks = breaks
+        .iter()
+        .map(|&z| f(z))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut intervals = breaks
         .windows(2)
-        .map(|w| factor_interval(f, w[0], w[1]))
+        .zip(log_breaks.windows(2))
+        .map(|(z, g)| factor_interval(f, z[0], z[1], g[0], g[1]))
         .collect::<Result<Vec<_>, _>>()?;
     loop {
         let value = log_sum_exp(&intervals.iter().map(|x| x.value).collect::<Vec<_>>());
@@ -625,7 +809,7 @@ fn adaptive_factor_integral<F: Fn(f64) -> Result<f64, CopulaError>>(
         if value.is_finite() && spent >= min_nodes && error <= value + policy.rel_tol.ln() {
             return Ok(value);
         }
-        if spent + 48 > policy.max_nodes {
+        if spent + 49 > policy.max_nodes {
             return Err(budget_error());
         }
         let worst = intervals
@@ -636,9 +820,10 @@ fn adaptive_factor_integral<F: Fn(f64) -> Result<f64, CopulaError>>(
             .0;
         let old = intervals[worst];
         let mid = (old.lower + old.upper) * 0.5;
-        intervals[worst] = factor_interval(f, old.lower, mid)?;
-        intervals.push(factor_interval(f, mid, old.upper)?);
-        spent += 48;
+        let log_mid = f(mid)?;
+        intervals[worst] = factor_interval(f, old.lower, mid, old.log_lower, log_mid)?;
+        intervals.push(factor_interval(f, mid, old.upper, log_mid, old.log_upper)?);
+        spent += 49;
     }
 }
 
@@ -1148,13 +1333,16 @@ mod tests {
             calls.set(calls.get() + 1);
             Ok(-10_000.0 * (x - 0.13).powi(2))
         };
+        // Two break evaluations plus one 24-node interval, then one 49-node
+        // bisection (two child intervals and their shared midpoint) exhaust a
+        // budget of 75 exactly; the next bisection must be refused.
         let policy = FactorQuadrature {
-            max_nodes: 72,
+            max_nodes: 75,
             rel_tol: 1e-12,
             ..Default::default()
         };
         assert!(adaptive_factor_integral(&integrand, &[0.0, 1.0], 25, policy).is_err());
-        assert_eq!(calls.get(), 72);
+        assert_eq!(calls.get(), 75);
         let value =
             adaptive_factor_integral(&integrand, &[0.0, 1.0], 25, FactorQuadrature::default())
                 .unwrap();
@@ -1162,6 +1350,56 @@ mod tests {
         // Gaussian integral to far better than double precision.
         let exact = (std::f64::consts::PI / 10_000.0).sqrt().ln();
         assert!((value - exact).abs() < 1e-9);
+    }
+
+    #[test]
+    fn endpoint_guard_refines_a_spike_hidden_from_both_rules() {
+        // A two-sided exponential spike at the break x = 0.5 that decays to
+        // e⁻²¹ before the first node of either comparison rule, next to a
+        // smooth bump both rules integrate accurately. Without the guard the
+        // interval left of the spike reports agreement (both rules see e⁻²¹),
+        // the spike's left half (1.25e-4 of 0.1005) is dropped, and the
+        // result is off by 1.2e-3 while claiming 1e-7 accuracy.
+        let sd = 0.04;
+        let integrand = |x: f64| {
+            Ok(crate::math::logaddexp(
+                -8000.0 * (x - 0.5).abs(),
+                -(x - 0.75).powi(2) / (2.0 * sd * sd),
+            ))
+        };
+        let value = adaptive_factor_integral(
+            &integrand,
+            &[0.0, 0.5, 1.0],
+            25,
+            FactorQuadrature::default(),
+        )
+        .unwrap();
+        // The bump's mass beyond x = 1 (6.25σ) and the spike's beyond the
+        // range are both far below the tolerance.
+        let exact = (2.0 / 8000.0 + sd * (2.0 * std::f64::consts::PI).sqrt()).ln();
+        assert!((value - exact).abs() < 1e-6, "got {value}, exact {exact}");
+    }
+
+    #[test]
+    fn conditional_quantile_score_matches_inverse_h_function() {
+        let link = PairCopulaSpec {
+            family: PairCopulaFamily::Clayton,
+            rotation: crate::paircopula::Rotation::R180,
+            params: crate::paircopula::PairCopulaParams::One(3.0),
+        };
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        for (u, q) in [(0.2, 0.1), (0.95, 0.5), (0.5, 0.999)] {
+            let z = conditional_quantile_score(&link, u, q, &normal).unwrap();
+            let expected = link.inv_second_given_first(u, q, 1e-12).unwrap();
+            assert!(
+                (normal.cdf(z) - expected).abs() < 1e-6,
+                "u={u} q={q}: Φ(z)={} expected {expected}",
+                normal.cdf(z)
+            );
+        }
+        // Quantiles outside the integration range are reported as absent
+        // rather than clamped onto the range ends.
+        assert!(conditional_quantile_score(&link, 0.5, 1e-300, &normal).is_none());
     }
 
     #[test]
