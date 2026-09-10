@@ -145,11 +145,13 @@ except ModelFitError as e:
 | Exception | When raised |
 |---|---|
 | `RscopulasError` | Base class for all library exceptions. Catch this to handle any rscopulas error. |
-| `InvalidInputError` | Input data fails validation: wrong dtype, wrong shape, values outside `(0, 1)`, or an invalid parameter value. |
-| `ModelFitError` | The optimization algorithm fails to find a valid solution, e.g. a singular correlation matrix. |
+| `InvalidInputError` | Also a `ValueError`. Input data or arguments fail validation: wrong shape, values outside `(0, 1)`, a dimension that does not match the model at evaluation time, an unknown family/rotation/criterion/method string, an invalid seed or sample count, or malformed JSON passed to `from_json`. |
+| `ModelFitError` | The optimization algorithm fails to find a valid solution, or the fitting configuration is unsupported by the core (e.g. a non-Kruskal tree algorithm for a C-vine). |
 | `NumericalError` | A numerical operation (log, inversion, etc.) produces an invalid result such as `NaN` or `Inf`. |
 | `BackendError` | An internal error in the Rust backend that does not fall into the categories above. |
 | `InternalError` | An internal Rust panic was caught at the Python boundary. This indicates a bug in `rscopulas` and should be reported upstream. |
+
+The full hierarchy (`InvalidInputError` is also a `ValueError`; `NonPrefixConditioningError` derives from it) is listed on the [package overview](/api/python/overview#error-types).
 
 ## Objective type
 

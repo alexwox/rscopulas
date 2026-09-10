@@ -128,12 +128,7 @@ impl CopulaModel for GaussianCopula {
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
         options.validate()?;
-        if data.dim() != self.dim {
-            return Err(FitError::Failed {
-                reason: "input dimension does not match model dimension",
-            }
-            .into());
-        }
+        crate::data::validate_dim(self.dim, data.dim())?;
 
         let standard_normal = Self::standard_normal();
         let strategy = resolve_strategy(options.exec, Operation::DensityEval, data.n_obs())?;
@@ -325,12 +320,7 @@ impl CopulaModel for StudentTCopula {
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
         options.validate()?;
-        if data.dim() != self.dim {
-            return Err(FitError::Failed {
-                reason: "input dimension does not match model dimension",
-            }
-            .into());
-        }
+        crate::data::validate_dim(self.dim, data.dim())?;
 
         let t_distribution = self.univariate_t();
         let dim = self.dim as f64;

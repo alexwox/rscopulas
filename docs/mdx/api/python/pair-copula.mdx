@@ -237,7 +237,7 @@ print(np.allclose(u1, u1_recovered))  # True
 </ResponseField>
 
 <ResponseField name="family" type="str">
-  The copula family name: `"gaussian"`, `"student_t"`, `"clayton"`, `"frank"`, `"gumbel"`, `"independence"`, or `"khoudraji"`.
+  The copula family name: `"independence"`, `"gaussian"`, `"student_t"`, `"clayton"`, `"frank"`, `"gumbel"`, `"joe"`, `"bb1"`, `"bb6"`, `"bb7"`, `"bb8"`, `"tawn1"`, `"tawn2"`, `"tll"`, or `"khoudraji"`.
 </ResponseField>
 
 <ResponseField name="rotation" type="str">
@@ -266,3 +266,24 @@ restored = PairCopula.from_spec(**pair.spec)
 
 TLL `parameters` contains an effective-degrees-of-freedom summary; reconstruction
 also requires `state`. Scalar parametric families do not accept this field.
+
+## Serialization and equality
+
+`PairCopula` supports the same protocols as every other model: `to_json()` /
+`PairCopula.from_json(payload)` (validated on load), `pickle`, `copy.copy` /
+`copy.deepcopy`, `==`, and `repr`. Two pair copulas are equal when their
+serialized specification is identical; models are unhashable.
+
+```python
+pair = PairCopula.from_spec("clayton", [1.5], rotation="R90")
+assert PairCopula.from_json(pair.to_json()) == pair
+assert pickle.loads(pickle.dumps(pair)) == pair
+```
+
+<Note>
+  Loading a fitted TLL specification re-normalizes its density grid, so a
+  restored TLL pair reproduces `log_pdf` to floating-point rounding rather
+  than bit-for-bit, and compares unequal to the original object.
+</Note>
+
+See [Serialization and copying](/api/python/copula-models#serialization-and-copying) for the shared contract.

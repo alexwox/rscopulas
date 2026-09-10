@@ -348,12 +348,7 @@ fn to_variable_label_order(
 }
 
 fn validate_matrix_shape(data: ArrayView2<f64>, dim: usize) -> Result<(), CopulaError> {
-    if data.ncols() != dim {
-        return Err(FitError::Failed {
-            reason: "rosenblatt input has a different dimension than the vine",
-        }
-        .into());
-    }
+    crate::data::validate_dim(dim, data.ncols())?;
     if data.nrows() == 0 {
         return Err(InputError::EmptyObservations.into());
     }

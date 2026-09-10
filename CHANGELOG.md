@@ -19,7 +19,6 @@
 - Add `VineFitOptions::independence_test_level`: an optional significance
   level for the asymptotic Kendall-τ independence test run before family
   selection on every edge. Disabled by default; `independence_threshold`
-  keeps its raw cut-off semantics.
 - Fit Khoudraji pair copulas by joint maximum likelihood. Base parameters
   and both shapes are optimised together (block coordinate ascent from three
   shape seeds, then a bounded Nelder–Mead polish of the leading base pairs),
@@ -31,6 +30,7 @@
   loglik 9.10 while R's joint `Independence ⊗ Clayton` optimum scores 11.53,
   which the same base pair now reproduces (θ 4.926 vs 4.927, shapes
   (0.7615, 0.4147) vs (0.7615, 0.4147)).
+
 - **Behaviour change:** `VineFitOptions::default()` no longer includes
   `Khoudraji` in `family_set`. It dominated the default fit time and rarely
   won selection; list it explicitly to keep the previous candidate set.
@@ -62,7 +62,40 @@
 - Add `python/examples/portfolio_tail_risk.py`: simulated heavy-tailed asset
   returns from a known mixed vine, R-vine versus Gaussian-copula VaR/ES, and a
   conditional stress scenario through `sample_conditional`.
-
+- Release the GIL in every compute-bound Python binding (all fitters,
+  `log_pdf`/`composite_log_pdf`, `sample`, the Rosenblatt transforms, pair
+  batch kernels, and TLL fits). Other Python threads keep running during
+  long fits; every model type is `Send + Sync`.
+- Add `to_json`/`from_json`, `pickle`, `copy`/`deepcopy`, `==`, and `repr` to
+  every Python model class (`GaussianCopula`, `StudentTCopula`,
+  `ClaytonCopula`, `FrankCopula`, `GumbelCopula`, `VineCopula`,
+  `HierarchicalArchimedeanCopula`, `FactorCopula`, `PairCopula`). Vine
+  payloads carry `format_version`; all payloads are validated on load.
+- `InvalidInputError` now inherits from `ValueError` as well as
+  `RscopulasError`. Unsupported family/rotation/criterion/method strings and
+  evaluation-time dimension mismatches raise `InvalidInputError` (previously
+  bare `ValueError` or `ModelFitError`); the core reports mismatches as
+  `InputError::DimensionMismatch`. Panics in any binding surface as
+  `InternalError` instead of `pyo3_runtime.PanicException`.
+- `VineCopula.sample_conditional` draws its free columns from the seeded Rust
+  generator (`rscopulas._rscopulas.uniform_matrix`), so a seed reproduces
+  the same draw regardless of NumPy's global state; draws for a given seed
+  differ from 0.3. Negative or too-large seeds raise `InvalidInputError`
+  everywhere, non-integer `n` raises `TypeError`, and `n < 1` raises
+  `InvalidInputError` in every sampling method.
+- Add `rscopulas.to_pseudo_obs(x, ties=..., scaling=...)`, a NumPy rank
+  transform that builds valid pseudo-observations from raw data.
+- Ship `py.typed`, a `rscopulas/_rscopulas.pyi` stub for the extension, full
+  annotations in the wrapper layer, and `rscopulas.__version__`.
+- Run the Python test suite on Python 3.10 (NumPy 1.26), 3.12, and 3.13 in
+  CI, with SciPy available for the optional statistical checks.
+- `VineCopula.fit_c`/`fit_d`/`fit_r` and `FactorCopula.fit` with
+  `family_set=None` delegate to the core default candidate sets (vines:
+  `independence`, `gaussian`, `student_t`, `clayton`, `frank`, `gumbel`,
+  `joe`, `bb1`, `bb7`; factor: `independence`, `gaussian`, `clayton`,
+  `frank`, `gumbel`) rather than carrying their own list, so a default
+  five-column vine fit takes about a second. `khoudraji` and `tll` stay
+  opt-in; the accepted family strings are documented on `fit_r`.
 
 ## 0.3.0 — unreleased
 

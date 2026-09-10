@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rscopulas import FactorCopula, FactorFitDiagnostics
+from rscopulas import FactorCopula, FactorFitDiagnostics, InvalidInputError, ModelFitError
 
 
 def _reference_links() -> list[dict[str, object]]:
@@ -131,7 +131,7 @@ def test_factor_copula_fit_uses_default_family_set_when_unspecified() -> None:
 
 def test_factor_copula_fit_rejects_unknown_layout() -> None:
     sample = FactorCopula.from_links(_reference_links()).sample(128, seed=1)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidInputError, match="layout"):
         FactorCopula.fit(sample, layout="not_a_layout")
 
 
@@ -145,12 +145,14 @@ def test_factor_copula_log_pdf_rejects_wrong_dimension() -> None:
         ],
         dtype=np.float64,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidInputError, match="dimension"):
         model.log_pdf(wrong)
 
 
 def test_factor_copula_from_links_rejects_degenerate_dim() -> None:
-    with pytest.raises(Exception):
+    # The core classifies this as a fit failure ("requires at least two
+    # observed variables"); the binding only reclassifies dimension mismatches.
+    with pytest.raises(ModelFitError, match="at least two"):
         FactorCopula.from_links(
             [{"family": "gaussian", "rotation": "R0", "parameters": [0.5]}]
         )
@@ -174,7 +176,7 @@ def test_factor_copula_polish_cycles_zero_disables_polish() -> None:
 
 
 def test_factor_copula_from_links_rejects_too_few_quadrature_nodes() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ModelFitError, match="nodes"):
         FactorCopula.from_links(
             [
                 {"family": "gaussian", "rotation": "R0", "parameters": [0.5]},

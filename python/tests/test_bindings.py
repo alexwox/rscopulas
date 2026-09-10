@@ -284,7 +284,7 @@ def test_tll_pair_copula_fits_from_gaussian_sample() -> None:
     assert np.all(np.diff(h_vals) >= -1e-9), f"h values should be non-decreasing: {h_vals}"
 
     # Direct-params spec should raise a clear error (TLL is fit-only).
-    with pytest.raises(Exception, match="tll"):
+    with pytest.raises(InvalidInputError, match="tll"):
         PairCopula.from_spec("tll", [2.0])
 
 

@@ -27,9 +27,11 @@ All three fitting methods accept identical keyword arguments:
 </ParamField>
 
 <ParamField body="family_set" type="Sequence[str] | None" default="None">
-  Restrict which bivariate copula families are considered at each edge. Pass `None` to use all available families. Valid strings:
+  Candidate bivariate copula families for every edge. Supported strings:
 
-  `"independence"`, `"gaussian"`, `"student_t"`, `"clayton"`, `"frank"`, `"gumbel"`, `"khoudraji"`
+  `"independence"`, `"gaussian"`, `"student_t"`, `"clayton"`, `"frank"`, `"gumbel"`, `"joe"`, `"bb1"`, `"bb6"`, `"bb7"`, `"bb8"`, `"tawn1"`, `"tawn2"`, `"tll"`, `"khoudraji"`
+
+  `None` (the default) delegates to the core default set — `independence`, `gaussian`, `student_t`, `clayton`, `frank`, `gumbel`, `joe`, `bb1`, `bb7` — which the Python layer does not duplicate. `"khoudraji"` and `"tll"` are opt-in because they dominate fit time; list them explicitly when you want them considered. Unknown names raise `InvalidInputError`.
 </ParamField>
 
 <ParamField body="include_rotations" type="bool" default="True">
@@ -37,7 +39,7 @@ All three fitting methods accept identical keyword arguments:
 </ParamField>
 
 <ParamField body="criterion" type="str" default='"aic"'>
-  Information criterion used for pair-copula family selection at each edge. Valid values: `"aic"`, `"bic"`.
+  Information criterion used for pair-copula family selection at each edge. Valid values: `"aic"`, `"bic"`, `"mbicv"` (modified vine BIC with the default prior), or `"mbicv:<psi0>"` to pin the prior.
 </ParamField>
 
 <ParamField body="truncation_level" type="int | None" default="None">
@@ -45,7 +47,11 @@ All three fitting methods accept identical keyword arguments:
 </ParamField>
 
 <ParamField body="independence_threshold" type="float | None" default="None">
-  If the Kendall's tau of an edge is below this threshold, that edge is set to independence without fitting. Pass `None` to disable.
+  If the absolute dependence measure of an edge (in the units of `tree_criterion`) is at or below this raw cut-off, that edge is set to independence without fitting. Pass `None` to disable.
+</ParamField>
+
+<ParamField body="independence_test_level" type="float | None" default="None">
+  Significance level (for example `0.05`) for the asymptotic Kendall-τ independence test run on every edge before family selection; edges that do not reject independence receive the independence copula. Unlike `independence_threshold` this accounts for the sample size. `None` disables the test. Values outside `(0, 1)` raise `InvalidInputError`.
 </ParamField>
 
 <ParamField body="clip_eps" type="float" default="1e-12">
@@ -58,6 +64,22 @@ All three fitting methods accept identical keyword arguments:
 
 <ParamField body="order" type="Sequence[int] | None" default="None">
   Only accepted by `fit_c` and `fit_d` (not `fit_r`). Pins the canonical variable order explicitly; the fitter skips its structure-selection heuristic. Use this to set up exact conditional sampling: place the column you want to condition on at the **end** of `order` so that it becomes `variable_order[0]` (the Rosenblatt anchor). See [Conditional sampling](/guides/vine-copulas#conditional-sampling).
+</ParamField>
+
+<ParamField body="tree_algorithm" type="str" default='"kruskal"'>
+  Spanning-tree search for `fit_r`: `"kruskal"`, `"prim"`, `"random_weighted"`, or `"random_unweighted"`. C- and D-vines have a fixed shape and only accept `"kruskal"`.
+</ParamField>
+
+<ParamField body="tree_criterion" type="str" default='"tau"'>
+  Edge weight for tree selection: `"tau"` (Kendall's τ), `"rho"` (Spearman's ρ), or `"hoeffding"` (Hoeffding's D).
+</ParamField>
+
+<ParamField body="select_trunc_lvl" type="bool" default="False">
+  With `criterion="mbicv"`, choose the truncation depth automatically; a manual `truncation_level` then acts as an upper cap.
+</ParamField>
+
+<ParamField body="rng_seed" type="int | None" default="None">
+  Seed for the stochastic tree algorithms; ignored by `"kruskal"` and `"prim"`. Must be `None` or an integer in `[0, 2**64)`; other values raise `InvalidInputError`.
 </ParamField>
 
 <ResponseField name="return" type="FitResult[VineCopula]">
@@ -262,7 +284,7 @@ Draw `n` samples from the vine **conditional** on known values for a subset of c
 </ParamField>
 
 <ParamField body="seed" type="int | None" default="None">
-  Random seed controlling the non-conditioned columns.
+  Random seed controlling the non-conditioned columns. The free uniforms are drawn by the same seeded Rust generator that `sample` uses, so a seed reproduces the draw regardless of NumPy's global random state. Must be `None` or an integer in `[0, 2**64)`; other values raise `InvalidInputError`.
 </ParamField>
 
 <ResponseField name="return" type="ndarray[float64]">
@@ -272,6 +294,18 @@ Draw `n` samples from the vine **conditional** on known values for a subset of c
 <Warning>
 Raises `rscopulas.NonPrefixConditioningError` when the keys of `known` are not equal to `set(variable_order[:k])`. The error message suggests a re-fit pattern.
 </Warning>
+
+### `to_json() → str` and `VineCopula.from_json(payload) → VineCopula`
+
+Serialize the fitted vine (structure, every edge's family, rotation, and parameters, including fitted TLL grids) to a JSON string, and rebuild it later. The payload carries a `format_version`; unversioned or foreign payloads are rejected with `InvalidInputError` on load, and the rebuilt model is validated the same way as `from_trees`.
+
+Vines also support `pickle`, `copy.copy`/`copy.deepcopy`, `==` (structural equality), and `repr`; see [Serialization and copying](/api/python/copula-models#serialization-and-copying).
+
+```python
+payload = fit.model.to_json()
+restored = VineCopula.from_json(payload)
+assert restored == fit.model
+```
 
 ---
 
