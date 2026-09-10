@@ -118,27 +118,81 @@ impl VineCopula {
     }
 
     /// Returns the top-level variable order implied by the structure.
+    ///
+    /// For C-vines the first element is the tree-1 root; for D-vines the
+    /// result is the tree-1 path. Both are reconstructed from the edge set,
+    /// so hand-built trees with arbitrary edge order or orientation give the
+    /// same answer as canonically built ones. R-vines return the reversed
+    /// diagonal of the structure matrix.
     pub fn order(&self) -> Vec<usize> {
+        let Some(first_tree) = self.trees.first() else {
+            return Vec::new();
+        };
         match self.structure.kind {
             VineStructureKind::C => {
-                let mut order = Vec::new();
-                if let Some(first_tree) = self.trees.first()
-                    && let Some(first_edge) = first_tree.edges.first()
-                {
-                    order.push(first_edge.conditioned.0);
-                    order.extend(first_tree.edges.iter().rev().map(|edge| edge.conditioned.1));
-                }
+                let edges = &first_tree.edges;
+                let Some(first_edge) = edges.first() else {
+                    return Vec::new();
+                };
+                let is_root = |v: usize| {
+                    edges
+                        .iter()
+                        .all(|edge| edge.conditioned.0 == v || edge.conditioned.1 == v)
+                };
+                let root = if is_root(first_edge.conditioned.0) {
+                    first_edge.conditioned.0
+                } else {
+                    first_edge.conditioned.1
+                };
+                let mut order = vec![root];
+                order.extend(edges.iter().rev().map(|edge| {
+                    if edge.conditioned.0 == root {
+                        edge.conditioned.1
+                    } else {
+                        edge.conditioned.0
+                    }
+                }));
                 order
             }
             VineStructureKind::D => {
-                let mut order = Vec::new();
-                if let Some(first_tree) = self.trees.first() {
-                    for (idx, edge) in first_tree.edges.iter().rev().enumerate() {
-                        if idx == 0 {
-                            order.push(edge.conditioned.0);
-                        }
-                        order.push(edge.conditioned.1);
-                    }
+                let edges = &first_tree.edges;
+                let Some(last_edge) = edges.last() else {
+                    return Vec::new();
+                };
+                let mut neighbours: std::collections::BTreeMap<usize, Vec<usize>> =
+                    std::collections::BTreeMap::new();
+                for edge in edges {
+                    let (a, b) = edge.conditioned;
+                    neighbours.entry(a).or_default().push(b);
+                    neighbours.entry(b).or_default().push(a);
+                }
+                let degree_one = |v: usize| neighbours.get(&v).is_some_and(|n| n.len() == 1);
+                // Prefer the endpoint a canonical build would start from so
+                // existing callers see unchanged output.
+                let start = if degree_one(last_edge.conditioned.0) {
+                    last_edge.conditioned.0
+                } else if degree_one(last_edge.conditioned.1) {
+                    last_edge.conditioned.1
+                } else {
+                    neighbours
+                        .iter()
+                        .find(|(_, n)| n.len() == 1)
+                        .map(|(v, _)| *v)
+                        .unwrap_or(last_edge.conditioned.0)
+                };
+                let mut order = vec![start];
+                let mut previous = None;
+                let mut current = start;
+                while order.len() < neighbours.len() {
+                    let Some(next) = neighbours
+                        .get(&current)
+                        .and_then(|n| n.iter().copied().find(|&v| Some(v) != previous))
+                    else {
+                        break;
+                    };
+                    order.push(next);
+                    previous = Some(current);
+                    current = next;
                 }
                 order
             }
