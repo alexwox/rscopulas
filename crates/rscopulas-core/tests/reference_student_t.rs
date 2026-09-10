@@ -77,19 +77,31 @@ fn student_t_fit_tracks_r_fixture() {
     let fit = StudentTCopula::fit(&input, &FitOptions::default()).expect("fit should succeed");
     let expected = array2(&fixture.expected_correlation);
 
+    // Both R (`fitCopula(..., method = "itau.mpl")`) and rscopulas estimate the
+    // correlation by inverting Kendall's tau, rho = sin(pi * tau / 2), on the
+    // same n = 256 rows, so the two estimates differ only by floating-point
+    // noise in the tau computation. (The sampling error against the truth,
+    // (1 - rho^2) / sqrt(n) ~ 0.04, is irrelevant for comparing two
+    // implementations of the same estimator on identical data.)
     for ((row, col), expected_value) in expected.indexed_iter() {
         let actual = fit.model.correlation()[(row, col)];
         assert!(
-            (actual - expected_value).abs() < 0.1,
+            (actual - expected_value).abs() < 1e-9,
             "correlation mismatch at ({row}, {col}): left={actual}, right={expected_value}"
         );
     }
 
+    // R maximises the pseudo-likelihood in nu continuously; rscopulas evaluates
+    // it on a 40-point log-spaced grid over [2.1, 50] (step ratio 1.085). For a
+    // unimodal profile likelihood the best grid point lies within one grid step
+    // of the continuous optimum, so the estimates must agree to 8.5% relative.
+    // Allow 10%: at nu ~ 3.9 that is +-0.39 (the previous 5.0 spanned the whole
+    // plausible range).
+    let expected_nu = fixture.expected_degrees_of_freedom;
     assert!(
-        (fit.model.degrees_of_freedom() - fixture.expected_degrees_of_freedom).abs() < 5.0,
-        "degrees of freedom mismatch: left={}, right={}",
+        (fit.model.degrees_of_freedom() - expected_nu).abs() < 0.1 * expected_nu,
+        "degrees of freedom mismatch: left={}, right={expected_nu} (tolerance 10% relative)",
         fit.model.degrees_of_freedom(),
-        fixture.expected_degrees_of_freedom
     );
 }
 
