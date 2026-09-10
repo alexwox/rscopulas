@@ -31,6 +31,27 @@
 - Add `math::maximize_scalar_brent`, `math::nelder_mead_maximize`,
   `stats::kendall_tau_test_statistic`, and
   `stats::kendall_tau_rejects_independence`.
+- Fix a false convergence plateau in the factor-copula adaptive quadrature.
+  Strong links at extreme observations concentrate the latent posterior in a
+  spike narrower than the node spacing of both comparison rules; because the
+  spike sits on a mesh break, the interval on its long side was reported as
+  empty and half of its mass was dropped while still reporting convergence
+  (three Joe(40) links at `u = 1 - 1e-10` returned 49.3268 instead of 50.0112;
+  three Clayton(30) links at `u = 1e-12` returned 58.0018 instead of 58.6835).
+  Each row's mesh is now seeded from the local scale of every link's
+  conditional density (conditional quantiles for Khoudraji/Tawn links), and
+  every break is evaluated so that an interval whose end point hides mass from
+  both rules is refined instead of accepted. `quadrature_max_nodes` now also
+  counts these break-point evaluations. Benign rows cost about 5–10 % more.
+- Add `benchmarks/compare_pyvinecopulib.py`, a comparison against pyvinecopulib
+  on vines simulated by pyvinecopulib (fit time, selected families, in- and
+  out-of-sample log-likelihood, Rosenblatt calibration), with the report
+  committed as `docs/pyvinecopulib-comparison.md` and a methodology page under
+  `docs/mdx/performance/comparison.mdx`. rscopulas fits comparably well but is
+  currently 7–15× slower at select-and-fit with a nine-family candidate set.
+- Add `python/examples/portfolio_tail_risk.py`: simulated heavy-tailed asset
+  returns from a known mixed vine, R-vine versus Gaussian-copula VaR/ES, and a
+  conditional stress scenario through `sample_conditional`.
 - Release the GIL in every compute-bound Python binding (all fitters,
   `log_pdf`/`composite_log_pdf`, `sample`, the Rosenblatt transforms, pair
   batch kernels, and TLL fits). Other Python threads keep running during

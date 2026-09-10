@@ -99,7 +99,11 @@ For large `d`, always set `truncation_level`. Fitting all `d - 1` trees grows qu
 
 ### `independence_threshold`
 
-A float in `(0, 1)`. When set, the fitter skips edges where a statistical test fails to reject independence at this significance level, treating those edges as independence copulas without running full family selection. This is a fast way to sparsify the vine.
+A float in `[0, 1]`. When set, an edge whose dependence measure (Kendall's tau by default, or the configured `tree_criterion`) has absolute value at or below this cut-off is assigned the independence copula without running family selection. This is a raw cut-off, not a statistical test.
+
+### `independence_test_level`
+
+A significance level in `(0, 1)`, for example `0.05`. When set, each edge is first checked with the asymptotic Kendall's tau independence test (the same test vinecopulib uses); edges where the test does not reject independence at this level are assigned the independence copula. This adapts to the sample size, unlike the raw threshold, and is the recommended way to sparsify a vine. Both options can be combined.
 
 ### `include_rotations`
 

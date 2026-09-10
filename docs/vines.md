@@ -24,7 +24,7 @@
 
 ## Pair families on edges
 
-Candidate families include independence, Gaussian, Student t, Clayton, Frank, Gumbel, and **Khoudraji** (asymmetric). Rotations apply where supported for classical families.
+Candidate families include independence, Gaussian, Student t, Clayton, Frank (positive or negative dependence), Gumbel, Joe, BB1, BB6, BB7, BB8, Tawn, the nonparametric TLL, and **Khoudraji** (asymmetric). The default family set is independence, Gaussian, Student t, Clayton, Frank, Gumbel, Joe, BB1 and BB7; Khoudraji must be requested explicitly. Rotations apply where supported for classical families.
 
 Asymmetric families (e.g. Khoudraji) affect edge likelihood and structure selection; treat fitted structures as tied to the chosen `family_set` and options.
 
