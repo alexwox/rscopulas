@@ -288,9 +288,9 @@ impl Deref for RuntimeView<'_> {
 
 /// Families considered by [`VineFitOptions::default`].
 ///
-/// Khoudraji is deliberately absent since 0.4: its fit enumerates 25 base
-/// pairs with a nested shape search, which dominated the default fit time
-/// while rarely winning selection. Opt in by listing
+/// Khoudraji is deliberately absent since 0.4: its fit enumerates every
+/// unordered base pair with a nested joint search, which dominated the
+/// default fit time while rarely winning selection. Opt in by listing
 /// `PairCopulaFamily::Khoudraji` in `family_set`.
 fn default_family_set() -> Vec<PairCopulaFamily> {
     vec![

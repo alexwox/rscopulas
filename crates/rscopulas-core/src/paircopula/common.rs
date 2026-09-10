@@ -13,7 +13,7 @@ use crate::{
 pub use super::tll::{TllOrder, TllParams};
 use super::{
     bb1, bb6, bb7, bb8, clayton, frank, gaussian, gumbel, joe, khoudraji,
-    polish::{decode_fit_params, encode_fit_params, fit_brackets},
+    polish::{decode_fit_params, encode_fit_params, fit_brackets, inv_logit, logit},
     rotated, student_t, tawn, tll,
 };
 
@@ -907,6 +907,7 @@ pub fn fit_pair_copula(
                 tau,
                 options.base.clip_eps,
                 options.base.max_iter,
+                options.criterion,
             ) {
                 Ok(spec) => spec,
                 Err(_) => continue,
@@ -1059,8 +1060,6 @@ const SCALAR_TOL: f64 = 1e-8;
 /// start. The joint polish that follows refines the result, so the warm
 /// start only needs to land in the right basin.
 const WARM_START_TOL: f64 = 1e-4;
-/// Tolerance for the Khoudraji shape coordinate searches.
-const KHOUDRAJI_SHAPE_TOL: f64 = 1e-4;
 /// Largest |ρ| the Gaussian MLE may return. Keeps `1 − ρ²` away from zero
 /// while still representing near-comonotone data.
 const GAUSSIAN_RHO_MAX: f64 = 1.0 - 1e-9;
@@ -1071,6 +1070,7 @@ const STUDENT_T_RHO_MAX: f64 = 0.9999;
 /// starts from a small positive θ instead.
 const FRANK_TAU_FLOOR: f64 = 1e-10;
 
+#[allow(clippy::too_many_arguments)]
 fn fit_family_with_rotation(
     family: PairCopulaFamily,
     rotation: Rotation,
@@ -1079,9 +1079,10 @@ fn fit_family_with_rotation(
     tau: f64,
     clip_eps: f64,
     max_iter: usize,
+    criterion: SelectionCriterion,
 ) -> Result<PairCopulaSpec, CopulaError> {
     if family == PairCopulaFamily::Khoudraji {
-        return fit_khoudraji_with_rotation(rotation, u1, u2, tau, clip_eps, max_iter);
+        return fit_khoudraji_with_rotation(rotation, u1, u2, tau, clip_eps, max_iter, criterion);
     }
 
     let (x1, x2) = clipped_transform(rotation, u1, u2, clip_eps);
@@ -1429,6 +1430,62 @@ fn polish_two_parameter(
     }
 }
 
+/// Number of base-pair combinations that receive the joint Khoudraji polish.
+/// The warm start ranks pairs by their penalised score, which is only a rough
+/// proxy for the polished optimum, so a few runners-up are polished as well.
+const KHOUDRAJI_POLISH_CANDIDATES: usize = 3;
+/// Logit-space box for the Khoudraji shapes during the joint polish;
+/// `inv_logit(±12) ≈ 6e-6` keeps both power exponents strictly inside (0, 1).
+const KHOUDRAJI_SHAPE_LOGIT_BOUND: f64 = 12.0;
+
+/// One base-pair combination of the Khoudraji fit together with its shapes
+/// and log-likelihood on the caller's (unrotated) sample.
+struct KhoudrajiCandidate {
+    first: PairCopulaSpec,
+    second: PairCopulaSpec,
+    shape_first: f64,
+    shape_second: f64,
+    loglik: f64,
+}
+
+impl KhoudrajiCandidate {
+    fn parameter_count(&self) -> usize {
+        self.first.parameter_count() + self.second.parameter_count() + 2
+    }
+
+    fn into_spec(self, rotation: Rotation) -> Result<PairCopulaSpec, CopulaError> {
+        Ok(PairCopulaSpec {
+            family: PairCopulaFamily::Khoudraji,
+            rotation,
+            params: PairCopulaParams::Khoudraji(KhoudrajiParams::new(
+                self.first,
+                self.second,
+                self.shape_first,
+                self.shape_second,
+            )?),
+        })
+    }
+}
+
+/// Information-criterion score used to rank Khoudraji base-pair candidates:
+/// AIC under `SelectionCriterion::Aic`, BIC otherwise (mBICV is a tree-level
+/// penalty and falls back to BIC per edge, exactly as in `criterion_value`).
+/// Ranking by a penalised score rather than raw log-likelihood makes the
+/// simplest of several equivalent representations win — e.g.
+/// `Independence ⊗ Clayton` over `Clayton(≈0) ⊗ Clayton` at the same optimum.
+fn penalised_score(loglik: f64, k: f64, n: f64, criterion: SelectionCriterion) -> f64 {
+    match criterion {
+        SelectionCriterion::Aic => 2.0 * k - 2.0 * loglik,
+        SelectionCriterion::Bic | SelectionCriterion::Mbicv { .. } => k * n.ln() - 2.0 * loglik,
+    }
+}
+
+/// Khoudraji fit in three stages: (1) fit each base family to the rotated
+/// sample and run the shape search for every *unordered* base pair — since
+/// `(C₁, C₂, a, b)` and `(C₂, C₁, 1 − a, 1 − b)` are the same copula, ordered
+/// pairs would only double the work; (2) jointly polish the leading pairs
+/// over (base parameters, shapes) with Nelder–Mead in the unconstrained space
+/// of `polish.rs`; (3) select the pair by the caller's information criterion.
 fn fit_khoudraji_with_rotation(
     rotation: Rotation,
     u1: &[f64],
@@ -1436,6 +1493,7 @@ fn fit_khoudraji_with_rotation(
     tau: f64,
     clip_eps: f64,
     max_iter: usize,
+    criterion: SelectionCriterion,
 ) -> Result<PairCopulaSpec, CopulaError> {
     let (x1, x2) = clipped_transform(rotation, u1, u2, clip_eps);
     let tau = rotated_tau(rotation, tau);
@@ -1456,35 +1514,122 @@ fn fit_khoudraji_with_rotation(
         });
     }
 
-    let mut best_spec = None;
-    let mut best_loglik = f64::NEG_INFINITY;
-    for first in &base_specs {
-        for second in &base_specs {
-            let (shape_first, shape_second, loglik) =
-                optimize_khoudraji_shapes(first, second, u1, u2, rotation, clip_eps, max_iter)?;
-            let spec = PairCopulaSpec {
-                family: PairCopulaFamily::Khoudraji,
-                rotation,
-                params: PairCopulaParams::Khoudraji(KhoudrajiParams::new(
-                    first.clone(),
-                    second.clone(),
-                    shape_first,
-                    shape_second,
-                )?),
-            };
-            if loglik > best_loglik {
-                best_loglik = loglik;
-                best_spec = Some(spec);
-            }
+    let n = u1.len() as f64;
+    let score = |candidate: &KhoudrajiCandidate| {
+        penalised_score(
+            candidate.loglik,
+            candidate.parameter_count() as f64,
+            n,
+            criterion,
+        )
+    };
+    let mut candidates = Vec::with_capacity(base_specs.len() * (base_specs.len() + 1) / 2);
+    for (index, first) in base_specs.iter().enumerate() {
+        for second in &base_specs[index..] {
+            candidates.push(warm_start_khoudraji_candidate(
+                first, second, u1, u2, rotation, clip_eps, max_iter,
+            )?);
+        }
+    }
+    candidates.sort_by(|left, right| score(left).total_cmp(&score(right)));
+
+    for candidate in candidates.iter_mut().take(KHOUDRAJI_POLISH_CANDIDATES) {
+        if let Some(polished) =
+            polish_khoudraji_jointly(candidate, u1, u2, rotation, clip_eps, max_iter)
+        {
+            *candidate = polished;
         }
     }
 
-    best_spec.ok_or(
-        FitError::Failed {
+    let best = candidates
+        .into_iter()
+        .filter(|candidate| candidate.loglik.is_finite())
+        .min_by(|left, right| score(left).total_cmp(&score(right)))
+        .ok_or(FitError::Failed {
             reason: "khoudraji pair fit failed",
-        }
-        .into(),
-    )
+        })?;
+    best.into_spec(rotation)
+}
+
+/// Joint maximisation over (base-1 parameters, base-2 parameters, shapes)
+/// from the two-stage warm start. Base parameters use the pair-fit encoding,
+/// shapes use the logit. Returns `None` unless the polished point validates
+/// and strictly improves the log-likelihood, so the warm start is never
+/// replaced by something worse.
+fn polish_khoudraji_jointly(
+    candidate: &KhoudrajiCandidate,
+    u1: &[f64],
+    u2: &[f64],
+    rotation: Rotation,
+    clip_eps: f64,
+    max_iter: usize,
+) -> Option<KhoudrajiCandidate> {
+    if !candidate.loglik.is_finite() {
+        return None;
+    }
+    let first_coords = encode_fit_params(&candidate.first);
+    let second_coords = encode_fit_params(&candidate.second);
+    let (n_first, n_second) = (first_coords.len(), second_coords.len());
+    let mut x0 = first_coords;
+    x0.extend(second_coords);
+    x0.push(logit(candidate.shape_first));
+    x0.push(logit(candidate.shape_second));
+    let mut bounds = fit_brackets(candidate.first.family);
+    bounds.extend(fit_brackets(candidate.second.family));
+    bounds.push((-KHOUDRAJI_SHAPE_LOGIT_BOUND, KHOUDRAJI_SHAPE_LOGIT_BOUND));
+    bounds.push((-KHOUDRAJI_SHAPE_LOGIT_BOUND, KHOUDRAJI_SHAPE_LOGIT_BOUND));
+
+    let decode = |x: &[f64]| {
+        let first = decode_fit_params(&candidate.first, &x[..n_first]);
+        let second = decode_fit_params(&candidate.second, &x[n_first..n_first + n_second]);
+        let shape_first = inv_logit(x[n_first + n_second]);
+        let shape_second = inv_logit(x[n_first + n_second + 1]);
+        (first, second, shape_first, shape_second)
+    };
+    // Khoudraji parameters are only ever reported to a few decimals and the
+    // objective is a full pass over the sample per evaluation, so the polish
+    // stops at 1e-4 in unconstrained space (about four significant digits of
+    // each base parameter and shape).
+    let options = NelderMeadOptions {
+        initial_step: 0.2,
+        ftol: 1e-6 * (1.0 + candidate.loglik.abs()),
+        xtol: 1e-4,
+        max_iter,
+        restarts: 1,
+    };
+    let result = nelder_mead_maximize(&x0, &bounds, &options, |x| {
+        let (first, second, shape_first, shape_second) = decode(x);
+        khoudraji_loglik(
+            &first,
+            &second,
+            shape_first,
+            shape_second,
+            u1,
+            u2,
+            rotation,
+            clip_eps,
+        )
+        .unwrap_or(f64::NEG_INFINITY)
+    });
+    if !result.value.is_finite() || result.value <= candidate.loglik {
+        return None;
+    }
+    let (first, second, shape_first, shape_second) = decode(&result.x);
+    let spec = PairCopulaSpec {
+        family: PairCopulaFamily::Khoudraji,
+        rotation,
+        params: PairCopulaParams::Khoudraji(
+            KhoudrajiParams::new(first.clone(), second.clone(), shape_first, shape_second).ok()?,
+        ),
+    };
+    spec.validate().ok()?;
+    Some(KhoudrajiCandidate {
+        first,
+        second,
+        shape_first,
+        shape_second,
+        loglik: result.value,
+    })
 }
 
 fn rotated_tau(rotation: Rotation, tau: f64) -> f64 {
@@ -1494,8 +1639,30 @@ fn rotated_tau(rotation: Rotation, tau: f64) -> f64 {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn optimize_khoudraji_shapes(
+/// Shape seeds for the Khoudraji block coordinate ascent. Only unordered base
+/// pairs are enumerated, so the seeds cover both orientations of a pair.
+const KHOUDRAJI_SHAPE_SEEDS: [(f64, f64); 3] = [(0.5, 0.5), (0.2, 0.8), (0.8, 0.2)];
+/// Maximum sweeps of the block coordinate ascent (base parameters given the
+/// shapes, then shapes given the base parameters) per seed. A seed stops
+/// early once a sweep no longer improves the log-likelihood materially.
+const KHOUDRAJI_SWEEPS: usize = 3;
+/// Tolerance of the scalar searches inside the Khoudraji warm start (shapes
+/// and unconstrained base coordinates); the joint polish refines the result.
+const KHOUDRAJI_WARM_START_TOL: f64 = 1e-2;
+/// Relative log-likelihood improvement below which a warm-start sweep is
+/// considered converged.
+const KHOUDRAJI_SWEEP_REL_TOL: f64 = 1e-4;
+
+/// Two-stage warm start for one base pair: block coordinate ascent that
+/// alternates the base parameters given the shapes with the shapes given the
+/// base parameters, from each seed in [`KHOUDRAJI_SHAPE_SEEDS`].
+///
+/// Refitting the bases first matters. The base copulas arrive fitted to the
+/// raw sample, where their dependence is "diluted" by the shape powers, so
+/// optimising the shapes at those parameters collapses onto a single base
+/// copula (shapes at 0 or 1) — a flat corner of the parameter space that a
+/// joint polish cannot escape.
+fn warm_start_khoudraji_candidate(
     first: &PairCopulaSpec,
     second: &PairCopulaSpec,
     u1: &[f64],
@@ -1503,79 +1670,163 @@ fn optimize_khoudraji_shapes(
     rotation: Rotation,
     clip_eps: f64,
     max_iter: usize,
-) -> Result<(f64, f64, f64), CopulaError> {
-    let seeds = [(0.2, 0.8), (0.5, 0.5)];
-    let mut best = None;
-    let mut best_loglik = f64::NEG_INFINITY;
-
-    for (mut shape_first, mut shape_second) in seeds {
-        for _ in 0..4 {
-            shape_first = maximize_scalar_brent(
-                0.0,
-                1.0,
-                Some(shape_first),
-                KHOUDRAJI_SHAPE_TOL,
-                max_iter,
-                |candidate| {
-                    khoudraji_loglik(
-                        first,
-                        second,
-                        candidate,
-                        shape_second,
-                        u1,
-                        u2,
-                        rotation,
-                        clip_eps,
-                    )
-                    .unwrap_or(f64::NEG_INFINITY)
-                },
-            )
-            .x;
-            shape_second = maximize_scalar_brent(
-                0.0,
-                1.0,
-                Some(shape_second),
-                KHOUDRAJI_SHAPE_TOL,
-                max_iter,
-                |candidate| {
-                    khoudraji_loglik(
-                        first,
-                        second,
-                        shape_first,
-                        candidate,
-                        u1,
-                        u2,
-                        rotation,
-                        clip_eps,
-                    )
-                    .unwrap_or(f64::NEG_INFINITY)
-                },
-            )
-            .x;
-        }
-
-        let loglik = khoudraji_loglik(
-            first,
-            second,
+) -> Result<KhoudrajiCandidate, CopulaError> {
+    let mut best: Option<KhoudrajiCandidate> = None;
+    for (shape_first, shape_second) in KHOUDRAJI_SHAPE_SEEDS {
+        let mut candidate = KhoudrajiCandidate {
+            first: first.clone(),
+            second: second.clone(),
             shape_first,
             shape_second,
+            loglik: f64::NEG_INFINITY,
+        };
+        let mut previous = f64::NEG_INFINITY;
+        for _ in 0..KHOUDRAJI_SWEEPS {
+            refine_khoudraji_base(&mut candidate, true, u1, u2, rotation, clip_eps, max_iter);
+            refine_khoudraji_base(&mut candidate, false, u1, u2, rotation, clip_eps, max_iter);
+
+            let (base_first, base_second) = (&candidate.first, &candidate.second);
+            let fixed_second = candidate.shape_second;
+            candidate.shape_first = maximize_scalar_brent(
+                0.0,
+                1.0,
+                Some(candidate.shape_first),
+                KHOUDRAJI_WARM_START_TOL,
+                max_iter,
+                |shape| {
+                    khoudraji_loglik(
+                        base_first,
+                        base_second,
+                        shape,
+                        fixed_second,
+                        u1,
+                        u2,
+                        rotation,
+                        clip_eps,
+                    )
+                    .unwrap_or(f64::NEG_INFINITY)
+                },
+            )
+            .x;
+            let fixed_first = candidate.shape_first;
+            let search = maximize_scalar_brent(
+                0.0,
+                1.0,
+                Some(candidate.shape_second),
+                KHOUDRAJI_WARM_START_TOL,
+                max_iter,
+                |shape| {
+                    khoudraji_loglik(
+                        base_first,
+                        base_second,
+                        fixed_first,
+                        shape,
+                        u1,
+                        u2,
+                        rotation,
+                        clip_eps,
+                    )
+                    .unwrap_or(f64::NEG_INFINITY)
+                },
+            );
+            candidate.shape_second = search.x;
+            if search.value.is_finite()
+                && search.value - previous <= KHOUDRAJI_SWEEP_REL_TOL * (1.0 + search.value.abs())
+            {
+                break;
+            }
+            previous = search.value;
+        }
+        candidate.loglik = khoudraji_loglik(
+            &candidate.first,
+            &candidate.second,
+            candidate.shape_first,
+            candidate.shape_second,
             u1,
             u2,
             rotation,
             clip_eps,
         )?;
-        if loglik > best_loglik {
-            best_loglik = loglik;
-            best = Some((shape_first, shape_second, loglik));
+        if best
+            .as_ref()
+            .is_none_or(|incumbent| candidate.loglik > incumbent.loglik)
+        {
+            best = Some(candidate);
         }
     }
-
     best.ok_or(
         FitError::Failed {
             reason: "khoudraji shape optimization failed",
         }
         .into(),
     )
+}
+
+/// Refits one base copula of `candidate` at the current shapes: a bounded
+/// scalar search per unconstrained coordinate of the base's pair-fit
+/// encoding, warm-started at the current value. Independence has nothing to
+/// refit.
+fn refine_khoudraji_base(
+    candidate: &mut KhoudrajiCandidate,
+    refine_first: bool,
+    u1: &[f64],
+    u2: &[f64],
+    rotation: Rotation,
+    clip_eps: f64,
+    max_iter: usize,
+) {
+    let template = if refine_first {
+        candidate.first.clone()
+    } else {
+        candidate.second.clone()
+    };
+    let mut coords = encode_fit_params(&template);
+    if coords.is_empty() {
+        return;
+    }
+    let bounds = fit_brackets(template.family);
+    for index in 0..coords.len() {
+        let (low, high) = bounds[index];
+        let search = maximize_scalar_brent(
+            low,
+            high,
+            Some(coords[index]),
+            KHOUDRAJI_WARM_START_TOL,
+            max_iter,
+            |value| {
+                let mut trial = coords.clone();
+                trial[index] = value;
+                let refined = decode_fit_params(&template, &trial);
+                let (first, second) = if refine_first {
+                    (&refined, &candidate.second)
+                } else {
+                    (&candidate.first, &refined)
+                };
+                khoudraji_loglik(
+                    first,
+                    second,
+                    candidate.shape_first,
+                    candidate.shape_second,
+                    u1,
+                    u2,
+                    rotation,
+                    clip_eps,
+                )
+                .unwrap_or(f64::NEG_INFINITY)
+            },
+        );
+        if search.value.is_finite() {
+            coords[index] = search.x;
+        }
+    }
+    let refined = decode_fit_params(&template, &coords);
+    if refined.validate().is_ok() {
+        if refine_first {
+            candidate.first = refined;
+        } else {
+            candidate.second = refined;
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1869,4 +2120,125 @@ fn copy_gaussian_batch(
     outputs
         .cond_on_second
         .copy_from_slice(&batch.cond_on_second);
+}
+
+#[cfg(test)]
+mod khoudraji_fit_tests {
+    use super::*;
+
+    fn reference_fixture() -> (Vec<f64>, Vec<f64>, f64, (f64, f64)) {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/reference/r-copula/v1_1_3/khoudraji_fit_case01.json"
+        );
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).expect("fixture should exist"))
+                .expect("fixture should deserialize");
+        let rows = fixture["input_pobs"].as_array().expect("input_pobs");
+        let u1 = rows.iter().map(|row| row[0].as_f64().unwrap()).collect();
+        let u2 = rows.iter().map(|row| row[1].as_f64().unwrap()).collect();
+        let theta = fixture["expected_theta"].as_f64().unwrap();
+        let shapes = (
+            fixture["expected_shape_1"].as_f64().unwrap(),
+            fixture["expected_shape_2"].as_f64().unwrap(),
+        );
+        (u1, u2, theta, shapes)
+    }
+
+    /// Runs the Khoudraji warm start and joint polish for one fixed base
+    /// pair, exactly as `fit_khoudraji_with_rotation` does before selecting
+    /// among pairs.
+    fn fit_fixed_pair(
+        first: PairCopulaSpec,
+        second: PairCopulaSpec,
+        u1: &[f64],
+        u2: &[f64],
+        max_iter: usize,
+    ) -> KhoudrajiCandidate {
+        let candidate =
+            warm_start_khoudraji_candidate(&first, &second, u1, u2, Rotation::R0, 1e-12, max_iter)
+                .expect("warm start should succeed");
+        polish_khoudraji_jointly(&candidate, u1, u2, Rotation::R0, 1e-12, max_iter)
+            .unwrap_or(candidate)
+    }
+
+    #[test]
+    fn independence_clayton_pair_matches_r_joint_mle_on_the_reference_fixture() {
+        // `copula::fitCopula` on the same 96 rows for the same base pair
+        // gives theta = 4.927, shapes = (0.761, 0.415), loglik 11.528 in this
+        // kernel. Two implementations of one MLE on one dataset must agree
+        // within a fraction of a standard error (SE(theta) ~ 1.6 and
+        // SE(shape) ~ 0.05-0.1 at n = 96).
+        let (u1, u2, theta, shapes) = reference_fixture();
+        let r_solution = PairCopulaSpec::khoudraji(
+            PairCopulaSpec::independence(),
+            PairCopulaSpec {
+                family: PairCopulaFamily::Clayton,
+                rotation: Rotation::R0,
+                params: PairCopulaParams::One(theta),
+            },
+            shapes.0,
+            shapes.1,
+        )
+        .expect("R solution should validate");
+        let r_loglik = pair_loglik(&r_solution, &u1, &u2, 1e-12).expect("R loglik");
+
+        // The raw-sample base fit the enumeration starts from.
+        let tau = crate::stats::kendall_tau_bivariate(&u1, &u2).expect("tau");
+        let clayton = PairCopulaSpec {
+            family: PairCopulaFamily::Clayton,
+            rotation: Rotation::R0,
+            params: fit_simple_family(PairCopulaFamily::Clayton, tau, &u1, &u2, 1e-12, 500)
+                .expect("clayton base fit"),
+        };
+
+        for max_iter in [500usize, 8] {
+            let fitted = fit_fixed_pair(
+                PairCopulaSpec::independence(),
+                clayton.clone(),
+                &u1,
+                &u2,
+                max_iter,
+            );
+            let PairCopulaParams::One(fitted_theta) = fitted.second.params else {
+                panic!("clayton base keeps one parameter");
+            };
+            println!(
+                "max_iter {max_iter}: theta {fitted_theta} shapes ({}, {}) loglik {} vs R theta {theta} shapes {shapes:?} loglik {r_loglik}",
+                fitted.shape_first, fitted.shape_second, fitted.loglik
+            );
+            if max_iter == 500 {
+                assert!(fitted.loglik >= r_loglik - 1e-3, "loglik {}", fitted.loglik);
+                assert!((fitted_theta - theta).abs() < 1.0, "theta {fitted_theta}");
+                assert!((fitted.shape_first - shapes.0).abs() < 0.1);
+                assert!((fitted.shape_second - shapes.1).abs() < 0.1);
+            }
+        }
+    }
+
+    #[test]
+    fn swapped_base_pair_is_the_same_copula_with_complementary_shapes() {
+        // (C1, C2, a, b) and (C2, C1, 1 - a, 1 - b) describe one copula, which
+        // is why the fitter enumerates unordered base pairs only.
+        let clayton = PairCopulaSpec {
+            family: PairCopulaFamily::Clayton,
+            rotation: Rotation::R0,
+            params: PairCopulaParams::One(2.5),
+        };
+        let gumbel = PairCopulaSpec {
+            family: PairCopulaFamily::Gumbel,
+            rotation: Rotation::R0,
+            params: PairCopulaParams::One(1.8),
+        };
+        let direct = PairCopulaSpec::khoudraji(clayton.clone(), gumbel.clone(), 0.3, 0.8).unwrap();
+        let swapped = PairCopulaSpec::khoudraji(gumbel, clayton, 0.7, 0.2).unwrap();
+        for (u, v) in [(0.1, 0.2), (0.5, 0.5), (0.9, 0.3), (0.35, 0.95)] {
+            let a = direct.log_pdf(u, v, 1e-12).unwrap();
+            let b = swapped.log_pdf(u, v, 1e-12).unwrap();
+            assert!((a - b).abs() < 1e-10, "({u}, {v}): {a} vs {b}");
+            let a = direct.cond_second_given_first(u, v, 1e-12).unwrap();
+            let b = swapped.cond_second_given_first(u, v, 1e-12).unwrap();
+            assert!((a - b).abs() < 1e-10);
+        }
+    }
 }
