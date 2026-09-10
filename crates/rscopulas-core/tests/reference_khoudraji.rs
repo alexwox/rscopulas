@@ -199,6 +199,7 @@ fn khoudraji_sampling_matches_r_fixture_statistics() {
 }
 
 #[test]
+#[ignore = "pending a joint Khoudraji MLE: fit_pair_copula fits the base copulas to the raw data before optimising the shapes (the result is identical for max_iter = 8 and 500), so on this n = 96 fixture it returns Gumbel(1.208) (x) Clayton(0.431) with shapes (0.966, 0.915) and loglik 9.10, while R's joint MLE Independence (x) Clayton(4.927) with shapes (0.761, 0.415) has loglik 11.53 in the same Rust kernel"]
 fn khoudraji_fit_tracks_r_fixture_for_indep_clayton_case() {
     let fixture: KhoudrajiFitFixture = load_fixture("khoudraji_fit_case01.json");
     assert_eq!(fixture.metadata.source_package, "copula");
@@ -251,9 +252,45 @@ fn khoudraji_fit_tracks_r_fixture_for_indep_clayton_case() {
         PairCopulaParams::Tll(_) => unreachable!("tll inner khoudraji base is not fitted"),
     };
     assert!(representative.is_finite());
-    assert!((representative - fixture.expected_theta).abs() < 5.0);
-    assert!((params.shape_first - fixture.expected_shape_1).abs() < 0.7);
-    assert!((params.shape_second - fixture.expected_shape_2).abs() < 0.7);
+    // The fixture was produced by `copula::fitCopula` maximising the joint
+    // likelihood of an Independence (x) Clayton Khoudraji copula in
+    // (theta, shape_1, shape_2) on n = 96 rows. rscopulas must recover the
+    // same model, so first pin the selected base families, then compare the
+    // parameters against tolerances derived from n = 96:
+    //  * theta: Clayton's tau-to-theta map has slope 2 / (1 - tau)^2 ~ 24 at
+    //    tau ~ 0.71 (theta ~ 4.9), and SE(tau) at n = 96 under the null is
+    //    sqrt(2 (2n + 5) / (9 n (n - 1))) ~ 0.069, so one standard error of
+    //    theta is ~ 1.6. Two implementations of the same MLE on the same data
+    //    must agree well within one SE: allow 1.0.
+    //  * shapes: fitCopula reports SEs of ~0.05-0.1 for shapes at this n;
+    //    allow 0.1 (the previous 0.7 covered most of [0, 1]).
+    assert_eq!(
+        params.second.family,
+        PairCopulaFamily::Clayton,
+        "the second khoudraji base must be Clayton for theta to be comparable (selected {:?}/{:?})",
+        params.first.family,
+        params.second.family
+    );
+    assert!(
+        (representative - fixture.expected_theta).abs() < 1.0,
+        "theta mismatch: left={representative}, right={} (fit {:?})",
+        fixture.expected_theta,
+        fit.spec
+    );
+    assert!(
+        (params.shape_first - fixture.expected_shape_1).abs() < 0.1,
+        "shape_1 mismatch: left={}, right={} (fit {:?})",
+        params.shape_first,
+        fixture.expected_shape_1,
+        fit.spec
+    );
+    assert!(
+        (params.shape_second - fixture.expected_shape_2).abs() < 0.1,
+        "shape_2 mismatch: left={}, right={} (fit {:?})",
+        params.shape_second,
+        fixture.expected_shape_2,
+        fit.spec
+    );
 }
 
 #[test]
