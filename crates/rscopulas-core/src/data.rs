@@ -9,6 +9,16 @@ pub fn validate_clip_eps(eps: f64) -> Result<(), InputError> {
     Ok(())
 }
 
+/// Checks that an input matrix has the dimension a model expects.
+///
+/// Evaluation-time dimension mismatches are input errors, not fit failures.
+pub fn validate_dim(expected: usize, got: usize) -> Result<(), InputError> {
+    if got != expected {
+        return Err(InputError::DimensionMismatch { expected, got });
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_probability(value: f64) -> Result<(), InputError> {
     if !value.is_finite() || !(0.0..=1.0).contains(&value) {
         return Err(InputError::InvalidProbability);

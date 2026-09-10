@@ -199,7 +199,7 @@ fn khoudraji_sampling_matches_r_fixture_statistics() {
 }
 
 #[test]
-fn khoudraji_fit_tracks_r_fixture_for_indep_clayton_case() {
+fn khoudraji_fit_is_at_least_as_good_as_r_joint_mle_on_the_copula_fixture() {
     let fixture: KhoudrajiFitFixture = load_fixture("khoudraji_fit_case01.json");
     assert_eq!(fixture.metadata.source_package, "copula");
     assert_eq!(fixture.family, "khoudraji");
@@ -209,51 +209,63 @@ fn khoudraji_fit_tracks_r_fixture_for_indep_clayton_case() {
 
     let input =
         PseudoObs::new(array2(&fixture.input_pobs)).expect("fixture inputs should be valid");
+    let u1: Vec<f64> = input.as_view().column(0).iter().copied().collect();
+    let u2: Vec<f64> = input.as_view().column(1).iter().copied().collect();
+
+    // R's `copula::fitCopula` maximised the joint likelihood of one fixed
+    // representation, Independence (x) Clayton, in (theta, shape_1, shape_2).
+    // rscopulas' fitter also selects the base pair, and on this n = 96 fixture
+    // it legitimately prefers a different pair (Gaussian (x) Gumbel) with a
+    // higher likelihood and a lower AIC. Pinning R's base pair would therefore
+    // test the wrong contract; the same-base-pair parameter agreement
+    // (theta and shapes to three decimals) is covered by the unit test
+    // `khoudraji_fit_tests::independence_clayton_pair_matches_r_joint_mle_on_the_reference_fixture`
+    // in paircopula/common.rs. Here we check the selection-agnostic contract:
+    // the fitted model must be at least as good as R's model under both the
+    // raw likelihood and the AIC used for selection, evaluated in the same
+    // Rust kernel.
+    let r_spec = PairCopulaSpec::khoudraji(
+        PairCopulaSpec::independence(),
+        PairCopulaSpec {
+            family: PairCopulaFamily::Clayton,
+            rotation: Rotation::R0,
+            params: PairCopulaParams::One(fixture.expected_theta),
+        },
+        fixture.expected_shape_1,
+        fixture.expected_shape_2,
+    )
+    .expect("R's model is a valid khoudraji spec");
+    let r_loglik: f64 = u1
+        .iter()
+        .zip(&u2)
+        .map(|(&a, &b)| r_spec.log_pdf(a, b, 1e-12).expect("R model density"))
+        .sum();
+    let r_aic = 2.0 * r_spec.parameter_count() as f64 - 2.0 * r_loglik;
+
     let options = VineFitOptions {
         family_set: vec![PairCopulaFamily::Khoudraji],
         include_rotations: false,
-        base: FitOptions {
-            max_iter: 8,
-            ..FitOptions::default()
-        },
         ..VineFitOptions::default()
     };
-    let fit = fit_pair_copula(
-        &input
-            .as_view()
-            .column(0)
-            .iter()
-            .copied()
-            .collect::<Vec<_>>(),
-        &input
-            .as_view()
-            .column(1)
-            .iter()
-            .copied()
-            .collect::<Vec<_>>(),
-        &options,
-    )
-    .expect("khoudraji fit should succeed");
-
+    let fit = fit_pair_copula(&u1, &u2, &options).expect("khoudraji fit should succeed");
     let PairCopulaParams::Khoudraji(ref params) = fit.spec.params else {
         panic!("expected khoudraji parameters");
     };
     assert_eq!(fit.spec.family, PairCopulaFamily::Khoudraji);
-    assert!(fit.loglik.is_finite());
-    assert!(fit.loglik > 0.0);
     assert!((0.0..=1.0).contains(&params.shape_first));
     assert!((0.0..=1.0).contains(&params.shape_second));
-    let representative = match &params.second.params {
-        PairCopulaParams::None => 0.0,
-        PairCopulaParams::One(value) => *value,
-        PairCopulaParams::Two(first, _) => *first,
-        PairCopulaParams::Khoudraji(_) => unreachable!("nested khoudraji should not be fitted"),
-        PairCopulaParams::Tll(_) => unreachable!("tll inner khoudraji base is not fitted"),
-    };
-    assert!(representative.is_finite());
-    assert!((representative - fixture.expected_theta).abs() < 5.0);
-    assert!((params.shape_first - fixture.expected_shape_1).abs() < 0.7);
-    assert!((params.shape_second - fixture.expected_shape_2).abs() < 0.7);
+    assert!(
+        fit.loglik >= r_loglik - 1e-6,
+        "fitted loglik {} is below R's joint MLE {r_loglik} (fit {:?})",
+        fit.loglik,
+        fit.spec
+    );
+    assert!(
+        fit.aic <= r_aic + 1e-6,
+        "fitted AIC {} is worse than R's model {r_aic} (fit {:?})",
+        fit.aic,
+        fit.spec
+    );
 }
 
 #[test]

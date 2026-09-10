@@ -27,11 +27,14 @@ All public names are available from the top-level `rscopulas` package.
 from rscopulas import (
     GaussianCopula, StudentTCopula,
     ClaytonCopula, FrankCopula, GumbelCopula,
-    VineCopula, HierarchicalArchimedeanCopula, PairCopula,
+    VineCopula, HierarchicalArchimedeanCopula, FactorCopula, PairCopula,
     FitResult, FitDiagnostics,
-    InvalidInputError, ModelFitError,
+    RscopulasError, InvalidInputError, ModelFitError,
+    to_pseudo_obs,
 )
 ```
+
+`rscopulas.__version__` reports the installed version, and the package ships `py.typed` plus a stub for the compiled extension so type checkers see precise signatures.
 
 ## Public exports
 
@@ -46,7 +49,16 @@ from rscopulas import (
 | `GumbelCopula`                  | Archimedean copula with upper-tail dependence            |
 | `VineCopula`                    | Pair-copula construction in C-, D-, or R-vine structure  |
 | `HierarchicalArchimedeanCopula` | Nested Archimedean copula with hierarchical structure    |
+| `FactorCopula`                  | Single-factor copula with one pair-copula link per variable |
 | `PairCopula`                    | Bivariate copula used as a building block in vine models |
+
+Every model class supports `to_json()` / `from_json()`, `pickle`, `copy.copy` / `copy.deepcopy`, `==`, and `repr`; see [Serialization and copying](/api/python/copula-models#serialization-and-copying). Compute-bound calls release the GIL.
+
+### Helpers
+
+| Function                                              | Description                                                                                                   |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `to_pseudo_obs(x, *, ties="average", scaling="n+1")` | Rank-transform a raw vector or `(n, d)` matrix into pseudo-observations strictly inside `(0, 1)` (NumPy only). |
 
 ### Data and result types
 
@@ -63,16 +75,28 @@ from rscopulas import (
 | Exception           | Description                                                                      |
 | ------------------- | -------------------------------------------------------------------------------- |
 | `RscopulasError`             | Base class for all library errors                                                |
-| `InvalidInputError`          | Raised when input data fails validation (wrong shape, out-of-range values, etc.) |
+| `InvalidInputError`          | Also a `ValueError`. Raised when input data or arguments fail validation: wrong shape, values outside `(0, 1)`, evaluation-time dimension mismatches, unknown family/rotation/criterion/method strings, invalid seeds or sample counts, malformed JSON. |
 | `NonPrefixConditioningError` | Subclass of `InvalidInputError`. Raised by `VineCopula.sample_conditional` when the known columns do not form a diagonal prefix of `variable_order`. |
-| `ModelFitError`              | Raised when the fitting algorithm fails to find a valid solution                 |
+| `ModelFitError`              | Raised when the fitting algorithm fails to find a valid solution or a fitting configuration is unsupported |
 | `NumericalError`             | Raised when a numerical operation produces an invalid result                     |
 | `BackendError`               | Raised for internal Rust backend failures                                        |
-| `InternalError`              | Raised when an internal Rust panic is caught at the Python boundary              |
+| `InternalError`              | Raised when an internal Rust panic is caught at the Python boundary (every binding is wrapped) |
+
+```
+RscopulasError (Exception)
+├── InvalidInputError (also a ValueError)
+│   └── NonPrefixConditioningError
+├── ModelFitError
+├── NumericalError
+├── BackendError
+└── InternalError
+```
+
+Catch `RscopulasError` to handle anything the library raises, or `ValueError` if you only care about bad input.
 
 ## Data requirements
 
-All copula models expect pseudo-observations as input: values that lie strictly in the open interval `(0, 1)`. Passing raw observations, probabilities outside that range, or exact 0 and 1 will raise an `InvalidInputError`.
+All copula models expect pseudo-observations as input: values that lie strictly in the open interval `(0, 1)`. Passing raw observations, probabilities outside that range, or exact 0 and 1 will raise an `InvalidInputError`. Use `to_pseudo_obs(raw)` to rank-transform raw data into a valid matrix (see [Pseudo-observations](/concepts/pseudo-observations)).
 
 <Warning>
   Values equal to 0 or 1 are not valid inputs. Use the `clip_eps` parameter on

@@ -54,7 +54,8 @@
           {
             "group": "Performance",
             "pages": [
-              "performance/benchmarks"
+              "performance/benchmarks",
+              "performance/comparison"
             ]
           }
         ]

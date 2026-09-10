@@ -91,7 +91,9 @@ pub struct VineFitOptions {
     pub include_rotations: bool,               // allow rotated Archimedean families
     pub criterion: SelectionCriterion,         // Aic or Bic
     pub truncation_level: Option<usize>,       // stop fitting after this tree level
-    pub independence_threshold: Option<f64>,  // select independence if |tau| <= threshold
+    pub independence_threshold: Option<f64>,  // raw cut-off: independence if |dependence| <= threshold
+    pub independence_test_level: Option<f64>, // asymptotic Kendall tau test at this significance level
+    // plus tree_criterion, tree_algorithm, select_trunc_lvl, rng_seed; see the crate docs
 }
 ```
 
@@ -103,13 +105,15 @@ pub struct VineFitOptions {
 | `Gaussian` | Single parameter `rho`. No rotation needed. |
 | `StudentT` | Two parameters `(rho, nu)`. No rotation. |
 | `Clayton` | Single `theta > 0`. Rotations available. |
-| `Frank` | Single `theta > 0`. No rotation. |
+| `Frank` | Single `theta != 0`; negative values model negative dependence. No rotation needed. |
 | `Gumbel` | Single `theta >= 1`. Rotations available. |
-| `Khoudraji` | Asymmetric composition. Fitted via bounded CPU search. |
+| `Joe`, `Bb1`, `Bb6`, `Bb7`, `Bb8`, `Tawn1`, `Tawn2` | One- and two-parameter Archimedean and extreme-value families. Rotations available; two-parameter families are fitted by joint maximum likelihood. |
+| `Tll` | Nonparametric transformation local likelihood. |
+| `Khoudraji` | Asymmetric composition of two base copulas. Not in the default family set because it is expensive; opt in explicitly. |
 
 **`SelectionCriterion` variants:** `Aic`, `Bic`.
 
-The default `VineFitOptions` includes all families, enables rotations, uses AIC, and applies no truncation.
+The default `VineFitOptions` uses the family set Independence, Gaussian, StudentT, Clayton, Frank, Gumbel, Joe, Bb1 and Bb7, enables rotations, uses AIC, and applies no truncation or independence test. All pair fits are maximum-likelihood estimates; `FitOptions::max_iter` caps the optimiser iterations.
 
 ## R-vine fit example
 

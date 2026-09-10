@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Sequence, TypeVar
+from typing import Any, ClassVar, Generic, Sequence, TypeVar
 
 import numpy as np
 import numpy.typing as npt
 
 from . import _rscopulas
+from ._rscopulas import InvalidInputError, NonPrefixConditioningError
 
 ModelT = TypeVar("ModelT")
+_ModelT = TypeVar("_ModelT", bound="_SerializableMixin")
+
+# Version tag embedded in pickled wrapper state.
+_STATE_FORMAT = 1
 
 
 def _as_float_matrix(data: npt.ArrayLike) -> npt.NDArray[np.float64]:
     array = np.asarray(data, dtype=np.float64)
     if array.ndim != 2:
-        raise ValueError("expected a 2D array")
+        raise InvalidInputError(f"expected a 2D array, got ndim={array.ndim}")
     return array
 
 
@@ -25,8 +30,40 @@ def _as_order(order: Sequence[int]) -> list[int]:
 def _as_float_vector(data: npt.ArrayLike) -> npt.NDArray[np.float64]:
     array = np.asarray(data, dtype=np.float64)
     if array.ndim != 1:
-        raise ValueError("expected a 1D array")
+        raise InvalidInputError(f"expected a 1D array, got ndim={array.ndim}")
     return array
+
+
+def _as_count(value: Any, name: str = "n") -> int:
+    """Validate a sample count up front: an ``int`` (not ``bool``) that is ``>= 1``."""
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise TypeError(f"{name} must be an int, got {type(value).__name__}")
+    count = int(value)
+    if count < 1:
+        raise InvalidInputError(f"{name} must be a positive integer, got {count}")
+    return count
+
+
+def _fmt(value: float) -> str:
+    return f"{float(value):.4g}"
+
+
+def _format_vector(values: Sequence[float], limit: int = 6) -> str:
+    items = list(values)
+    shown = ", ".join(_fmt(value) for value in items[:limit])
+    return f"[{shown}, ...]" if len(items) > limit else f"[{shown}]"
+
+
+def _format_matrix(matrix: npt.ArrayLike, limit: int = 3) -> str:
+    array = np.asarray(matrix, dtype=np.float64)
+    rows = ", ".join(_format_vector(row, limit) for row in array[:limit])
+    return f"[{rows}, ...]" if array.shape[0] > limit else f"[{rows}]"
+
+
+def _format_names(names: Sequence[str], limit: int = 6) -> str:
+    items = [str(name) for name in names]
+    shown = ", ".join(repr(name) for name in items[:limit])
+    return f"[{shown}, ...]" if len(items) > limit else f"[{shown}]"
 
 
 def _family_set(family_set: Sequence[str] | None) -> list[str] | None:
@@ -248,12 +285,75 @@ class VineTreeInfo:
         )
 
 
-class _BaseModel:
+class _SerializableMixin:
+    """Serialization, copying, equality, and repr shared by every model.
+
+    Subclasses set ``_core_cls`` to the compiled class that backs them and
+    override ``_repr_fields`` to describe their key parameters.
+    """
+
+    _core_cls: ClassVar[Any]
+    _core: Any
+
     def __init__(self, core_model: Any) -> None:
         self._core = core_model
 
     @classmethod
-    def _fit_result(cls, payload: tuple[Any, Any]) -> FitResult[Any]:
+    def from_json(cls: type[_ModelT], payload: str) -> _ModelT:
+        """Rebuild a model from :meth:`to_json` output.
+
+        Payloads are validated on load: malformed or out-of-range state
+        raises :class:`InvalidInputError`. Vine payloads carry a
+        ``format_version`` and unversioned payloads are rejected.
+        """
+        return cls(cls._core_cls.from_json(str(payload)))
+
+    def to_json(self) -> str:
+        """JSON serialization of the model.
+
+        The layout mirrors the Rust ``serde`` representation and pairs with
+        :meth:`from_json`; compare payloads only across matching rscopulas
+        minor versions.
+        """
+        return str(self._core.to_json())
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {"format": _STATE_FORMAT, "model": self.to_json()}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        if (
+            not isinstance(state, dict)
+            or state.get("format") != _STATE_FORMAT
+            or "model" not in state
+        ):
+            raise InvalidInputError(f"unsupported pickled state for {type(self).__name__}")
+        self._core = type(self)._core_cls.from_json(str(state["model"]))
+
+    def __copy__(self: _ModelT) -> _ModelT:
+        return type(self)(self._core.__copy__())
+
+    def __deepcopy__(self: _ModelT, memo: dict[int, Any]) -> _ModelT:
+        return type(self)(self._core.__deepcopy__(memo))
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return bool(self._core == other._core)
+
+    # Models compare by value, so they are deliberately unhashable.
+    __hash__ = None  # type: ignore[assignment]
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return []
+
+    def __repr__(self) -> str:
+        fields = ", ".join(f"{name}={value}" for name, value in self._repr_fields())
+        return f"{type(self).__name__}({fields})"
+
+
+class _BaseModel(_SerializableMixin):
+    @classmethod
+    def _fit_result(cls: type[_ModelT], payload: tuple[Any, Any]) -> FitResult[_ModelT]:
         core_model, diagnostics = payload
         return FitResult(model=cls(core_model), diagnostics=FitDiagnostics._from_core(diagnostics))
 
@@ -271,12 +371,29 @@ class _BaseModel:
         return np.asarray(self._core.log_pdf(_as_float_matrix(data), clip_eps=clip_eps))
 
     def sample(self, n: int, *, seed: int | None = None) -> npt.NDArray[np.float64]:
-        return np.asarray(self._core.sample(int(n), seed=seed))
+        """Draw ``n`` pseudo-observations from the model.
+
+        ``n`` must be a positive ``int``. ``seed`` must be ``None`` or an
+        integer in ``[0, 2**64)``; a given seed reproduces the same draw
+        regardless of NumPy's global random state. The draw runs with the
+        GIL released.
+        """
+        return np.asarray(self._core.sample(_as_count(n), seed=seed))
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [("family", repr(self.family)), ("dim", str(self.dim))]
 
 
-class PairCopula:
-    def __init__(self, core_model: Any) -> None:
-        self._core = core_model
+class PairCopula(_SerializableMixin):
+    _core_cls = _rscopulas._PairCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [
+            ("family", repr(self.family)),
+            ("rotation", repr(self.rotation)),
+            ("parameters", _format_vector(self.parameters)),
+            ("dim", str(self.dim)),
+        ]
 
     @classmethod
     def from_spec(
@@ -410,6 +527,11 @@ class PairCopula:
 
 
 class GaussianCopula(_BaseModel):
+    _core_cls = _rscopulas._GaussianCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [*super()._repr_fields(), ("correlation", _format_matrix(self.correlation))]
+
     @classmethod
     def from_params(cls, correlation: npt.ArrayLike) -> "GaussianCopula":
         return cls(_rscopulas._GaussianCopula.from_params(_as_float_matrix(correlation)))
@@ -430,6 +552,15 @@ class GaussianCopula(_BaseModel):
 
 
 class StudentTCopula(_BaseModel):
+    _core_cls = _rscopulas._StudentTCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [
+            *super()._repr_fields(),
+            ("degrees_of_freedom", _fmt(self.degrees_of_freedom)),
+            ("correlation", _format_matrix(self.correlation)),
+        ]
+
     @classmethod
     def from_params(
         cls, correlation: npt.ArrayLike, degrees_of_freedom: float
@@ -460,6 +591,11 @@ class StudentTCopula(_BaseModel):
 
 
 class ClaytonCopula(_BaseModel):
+    _core_cls = _rscopulas._ClaytonCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [*super()._repr_fields(), ("theta", _fmt(self.theta))]
+
     @classmethod
     def from_params(cls, dim: int, theta: float) -> "ClaytonCopula":
         return cls(_rscopulas._ClaytonCopula.from_params(int(dim), float(theta)))
@@ -480,6 +616,11 @@ class ClaytonCopula(_BaseModel):
 
 
 class FrankCopula(_BaseModel):
+    _core_cls = _rscopulas._FrankCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [*super()._repr_fields(), ("theta", _fmt(self.theta))]
+
     @classmethod
     def from_params(cls, dim: int, theta: float) -> "FrankCopula":
         return cls(_rscopulas._FrankCopula.from_params(int(dim), float(theta)))
@@ -500,6 +641,11 @@ class FrankCopula(_BaseModel):
 
 
 class GumbelCopula(_BaseModel):
+    _core_cls = _rscopulas._GumbelCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [*super()._repr_fields(), ("theta", _fmt(self.theta))]
+
     @classmethod
     def from_params(cls, dim: int, theta: float) -> "GumbelCopula":
         return cls(_rscopulas._GumbelCopula.from_params(int(dim), float(theta)))
@@ -520,6 +666,15 @@ class GumbelCopula(_BaseModel):
 
 
 class HierarchicalArchimedeanCopula(_BaseModel):
+    _core_cls = _rscopulas._HierarchicalArchimedeanCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [
+            *super()._repr_fields(),
+            ("families", _format_names(self.families)),
+            ("parameters", _format_vector(self.parameters)),
+        ]
+
     def composite_log_pdf(self, data: npt.ArrayLike, *, clip_eps: float = 1e-12) -> npt.NDArray[np.float64]:
         """Pairwise composite score, which is not a normalized joint density.
 
@@ -604,6 +759,17 @@ class HierarchicalArchimedeanCopula(_BaseModel):
 
 
 class VineCopula(_BaseModel):
+    _core_cls = _rscopulas._VineCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        families = [edge.family for tree in self.trees for edge in tree.edges]
+        return [
+            *super()._repr_fields(),
+            ("kind", repr(self.structure_kind)),
+            ("truncation_level", str(self.truncation_level)),
+            ("families", _format_names(families)),
+        ]
+
     @classmethod
     def from_trees(
         cls,
@@ -641,6 +807,7 @@ class VineCopula(_BaseModel):
         criterion: str = "aic",
         truncation_level: int | None = None,
         independence_threshold: float | None = None,
+        independence_test_level: float | None = None,
         clip_eps: float = 1e-12,
         max_iter: int = 500,
         order: Sequence[int] | None = None,
@@ -663,9 +830,11 @@ class VineCopula(_BaseModel):
 
         ``tree_algorithm`` is accepted only as ``"kruskal"`` for C-vines —
         the star-tree shape is fixed by the vine family, so tree-search
-        choices do not apply. ``tree_criterion``, ``select_trunc_lvl``, and
-        ``rng_seed`` behave symmetrically with ``fit_r``; ``criterion`` can
-        be ``"mbicv"`` or ``"mbicv:<psi0>"`` to drive auto-truncation.
+        choices do not apply. ``family_set`` (``None`` delegates to the core
+        default set), ``independence_test_level``, ``tree_criterion``,
+        ``select_trunc_lvl``, and ``rng_seed`` behave exactly as documented
+        on :meth:`fit_r`; ``criterion`` can be ``"mbicv"`` or
+        ``"mbicv:<psi0>"`` to drive auto-truncation.
         """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_c(
@@ -675,6 +844,7 @@ class VineCopula(_BaseModel):
                 criterion=criterion,
                 truncation_level=truncation_level,
                 independence_threshold=independence_threshold,
+                independence_test_level=independence_test_level,
                 clip_eps=clip_eps,
                 max_iter=max_iter,
                 order=None if order is None else _as_order(order),
@@ -695,6 +865,7 @@ class VineCopula(_BaseModel):
         criterion: str = "aic",
         truncation_level: int | None = None,
         independence_threshold: float | None = None,
+        independence_test_level: float | None = None,
         clip_eps: float = 1e-12,
         max_iter: int = 500,
         order: Sequence[int] | None = None,
@@ -712,7 +883,9 @@ class VineCopula(_BaseModel):
         ``order[-2]`` is the second Rosenblatt position, and so on.
 
         ``tree_algorithm`` is accepted only as ``"kruskal"`` for D-vines
-        (path structure is fixed). Other new kwargs match ``fit_r``.
+        (path structure is fixed). ``family_set`` (``None`` delegates to the
+        core default set), ``independence_test_level``, and the other
+        keyword arguments match :meth:`fit_r`.
         """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_d(
@@ -722,6 +895,7 @@ class VineCopula(_BaseModel):
                 criterion=criterion,
                 truncation_level=truncation_level,
                 independence_threshold=independence_threshold,
+                independence_test_level=independence_test_level,
                 clip_eps=clip_eps,
                 max_iter=max_iter,
                 order=None if order is None else _as_order(order),
@@ -742,6 +916,7 @@ class VineCopula(_BaseModel):
         criterion: str = "aic",
         truncation_level: int | None = None,
         independence_threshold: float | None = None,
+        independence_test_level: float | None = None,
         clip_eps: float = 1e-12,
         max_iter: int = 500,
         tree_algorithm: str = "kruskal",
@@ -751,7 +926,17 @@ class VineCopula(_BaseModel):
     ) -> FitResult["VineCopula"]:
         """Fit an R-vine with Dissmann-style spanning-tree selection.
 
-        New options (all matching pyvinecopulib's ``FitControlsVinecop``):
+        ``family_set``
+            Candidate pair families as strings: ``independence``,
+            ``gaussian``, ``student_t``, ``clayton``, ``frank``, ``gumbel``,
+            ``joe``, ``bb1``, ``bb6``, ``bb7``, ``bb8``, ``tawn1``, ``tawn2``,
+            ``tll``, and ``khoudraji``. ``None`` (default) delegates to the
+            core default set: ``independence``, ``gaussian``, ``student_t``,
+            ``clayton``, ``frank``, ``gumbel``, ``joe``, ``bb1``, ``bb7``.
+            ``khoudraji`` and ``tll`` are opt-in because they dominate fit
+            time.
+
+        Options matching pyvinecopulib's ``FitControlsVinecop``:
 
         ``criterion``
             ``"aic"`` (default), ``"bic"``, or ``"mbicv"`` / ``"mbicv:<psi0>"``.
@@ -771,9 +956,17 @@ class VineCopula(_BaseModel):
             dropping trees whose mBICV contribution is positive. A manual
             ``truncation_level`` becomes an upper cap on the auto-selected
             depth (matching vinecopulib's semantics).
+        ``independence_test_level``
+            Optional significance level (for example ``0.05``) for the
+            asymptotic Kendall-τ independence test run on every edge before
+            family selection; edges that do not reject independence receive
+            the independence copula. ``None`` (default) disables the test.
+            ``independence_threshold`` keeps its raw cut-off semantics and
+            both checks may be combined. Must lie in ``(0, 1)``.
         ``rng_seed``
             Seed for stochastic tree algorithms. Ignored for ``kruskal`` /
-            ``prim``. ``None`` draws from the OS RNG.
+            ``prim``. ``None`` draws from the OS RNG; otherwise an integer
+            in ``[0, 2**64)``.
         """
         return cls._fit_result(
             _rscopulas._VineCopula.fit_r(
@@ -783,6 +976,7 @@ class VineCopula(_BaseModel):
                 criterion=criterion,
                 truncation_level=truncation_level,
                 independence_threshold=independence_threshold,
+                independence_test_level=independence_test_level,
                 clip_eps=clip_eps,
                 max_iter=max_iter,
                 tree_algorithm=tree_algorithm,
@@ -885,26 +1079,23 @@ class VineCopula(_BaseModel):
         """
         eps = 1e-12
         d = int(self._core.dim)
-        if n <= 0:
-            raise ValueError("n must be positive")
+        n = _as_count(n)
 
         known_columns = {int(col): _as_float_vector(values) for col, values in known.items()}
         if not known_columns:
-            raise ValueError("sample_conditional requires at least one known column")
+            raise InvalidInputError("sample_conditional requires at least one known column")
         for col, values in known_columns.items():
             if values.shape[0] != n:
-                raise ValueError(
+                raise InvalidInputError(
                     f"known column {col} has length {values.shape[0]}, expected {n}"
                 )
             if col < 0 or col >= d:
-                raise ValueError(f"known column {col} is out of range [0, {d})")
+                raise InvalidInputError(f"known column {col} is out of range [0, {d})")
 
         k = len(known_columns)
         variable_order = self.variable_order
         prefix = variable_order[:k]
         if set(known_columns) != set(prefix):
-            from ._rscopulas import NonPrefixConditioningError
-
             raise NonPrefixConditioningError(
                 f"sample_conditional requires the known columns to match a prefix of "
                 f"variable_order. Given known columns {sorted(known_columns)}, "
@@ -915,14 +1106,16 @@ class VineCopula(_BaseModel):
                 f"the leading positions of variable_order."
             )
 
-        rng = np.random.default_rng(seed)
+        # Free columns come from the seeded Rust generator that `sample` also
+        # uses, so a seed reproduces the draw regardless of NumPy's global
+        # random state. Column j of `uniforms` feeds variable_order[k + j].
+        uniforms = np.asarray(_rscopulas.uniform_matrix(n, d - k, seed))
 
         if k == 1:
             col = next(iter(known_columns))
             u = np.empty((n, d), dtype=np.float64)
             u[:, col] = np.clip(known_columns[col], eps, 1.0 - eps)
-            free_mask = [var for var in range(d) if var != col]
-            u[:, free_mask] = rng.uniform(size=(n, d - 1))
+            u[:, variable_order[1:]] = uniforms
             return self.inverse_rosenblatt(u)
 
         v_partial = np.full((n, d), 0.5, dtype=np.float64)
@@ -936,7 +1129,7 @@ class VineCopula(_BaseModel):
             if idx < k:
                 u[:, var] = u_fixed[:, idx]
             else:
-                u[:, var] = rng.uniform(size=n)
+                u[:, var] = uniforms[:, idx - k]
         return self.inverse_rosenblatt(u)
 
 
@@ -970,6 +1163,15 @@ class FactorCopula(_BaseModel):
     >>> log_density = fit.model.log_pdf(data)
     >>> sample = fit.model.sample(1000, seed=0)
     """
+
+    _core_cls = _rscopulas._FactorCopula
+
+    def _repr_fields(self) -> list[tuple[str, str]]:
+        return [
+            *super()._repr_fields(),
+            ("layout", repr(self.layout)),
+            ("links", _format_names([str(link["family"]) for link in self.links])),
+        ]
 
     @classmethod
     def from_links(
@@ -1087,19 +1289,6 @@ class FactorCopula(_BaseModel):
             model=cls(core_model),
             diagnostics=FactorFitDiagnostics._build(diagnostics, std_errors),
         )
-
-    @classmethod
-    def from_json(cls, payload: str) -> "FactorCopula":
-        """Rehydrate a previously-serialized factor copula. Pair with
-        :meth:`to_json` for round-trip persistence.
-        """
-        return cls(_rscopulas._FactorCopula.from_json(str(payload)))
-
-    def to_json(self) -> str:
-        """JSON serialisation of the fitted model. Cross-version comparison
-        is supported only across matching rscopulas minor versions.
-        """
-        return str(self._core.to_json())
 
     @property
     def num_factors(self) -> int:

@@ -4,32 +4,131 @@ use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::{
     Bound, create_exception,
-    exceptions::{PyException, PyValueError},
+    exceptions::{PyException, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyDict, PyList, PyModule},
+    sync::PyOnceLock,
+    types::{PyDict, PyList, PyModule, PyTuple, PyType},
 };
-use rand::{SeedableRng, random, rngs::StdRng};
+use rand::{Rng, SeedableRng, random, rngs::StdRng};
 use rscopulas::{
     ClaytonCopula, CopulaError, CopulaFamily, CopulaModel, EvalOptions, ExecPolicy, FactorCopula,
-    FactorFitOptions, FactorFitResult, FactorLayout, FactorQuadrature, FitDiagnostics, FitOptions,
-    FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod, HacFitOptions,
-    HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula, KhoudrajiParams,
-    PairCopulaFamily, PairCopulaParams, Rotation, SampleOptions, SelectionCriterion,
-    StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge, VineFitOptions,
-    VineStructureKind, VineTree,
+    FactorFitOptions, FactorFitResult, FactorLayout, FactorQuadrature, FitDiagnostics, FitError,
+    FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod,
+    HacFitOptions, HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula,
+    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, SampleOptions,
+    SelectionCriterion, StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge,
+    VineFitOptions, VineStructureKind, VineTree,
 };
 
-create_exception!(rscopulas, RscopulasError, PyException);
-create_exception!(rscopulas, InvalidInputError, RscopulasError);
-create_exception!(rscopulas, ModelFitError, RscopulasError);
-create_exception!(rscopulas, NumericalError, RscopulasError);
-create_exception!(rscopulas, BackendError, RscopulasError);
-create_exception!(rscopulas, InternalError, RscopulasError);
-create_exception!(rscopulas, NonPrefixConditioningError, InvalidInputError);
+// ---------------------------------------------------------------------------
+// Exception hierarchy
+//
+//   RscopulasError (Exception)
+//   ├── InvalidInputError (also a ValueError)
+//   │   └── NonPrefixConditioningError
+//   ├── ModelFitError
+//   ├── NumericalError
+//   ├── BackendError
+//   └── InternalError
+// ---------------------------------------------------------------------------
+
+create_exception!(
+    rscopulas,
+    RscopulasError,
+    PyException,
+    "Base class for every exception raised by rscopulas."
+);
+create_exception!(
+    rscopulas,
+    ModelFitError,
+    RscopulasError,
+    "Raised when a fitting or estimation routine fails to produce a valid model."
+);
+create_exception!(
+    rscopulas,
+    NumericalError,
+    RscopulasError,
+    "Raised when a numerical routine produces an invalid result."
+);
+create_exception!(
+    rscopulas,
+    BackendError,
+    RscopulasError,
+    "Raised when the requested execution backend is unavailable or fails."
+);
+create_exception!(
+    rscopulas,
+    InternalError,
+    RscopulasError,
+    "Raised when an internal Rust panic is caught at the Python boundary; please report it."
+);
+
+/// `InvalidInputError` derives from both `RscopulasError` and the builtin
+/// `ValueError` so it can be caught either way. `create_exception!` only
+/// supports a single base class, so the type object is assembled by hand
+/// and cached exactly like the macro-generated exception types.
+#[repr(transparent)]
+pub struct InvalidInputError(PyAny);
+
+pyo3::impl_exception_boilerplate!(InvalidInputError);
+pyo3::pyobject_native_type_named!(InvalidInputError);
+
+const INVALID_INPUT_DOC: &str = "Raised when input data or arguments fail validation. \
+Subclass of both RscopulasError and ValueError.";
+
+fn build_invalid_input_error_type(py: Python<'_>) -> PyResult<Py<PyType>> {
+    let bases = PyTuple::new(
+        py,
+        [
+            py.get_type::<RscopulasError>(),
+            py.get_type::<PyValueError>(),
+        ],
+    )?;
+    let namespace = PyDict::new(py);
+    namespace.set_item("__module__", "rscopulas")?;
+    namespace.set_item("__doc__", INVALID_INPUT_DOC)?;
+    let type_builder = py.import("builtins")?.getattr("type")?;
+    let created = type_builder.call1(("InvalidInputError", bases, namespace))?;
+    Ok(created.cast_into::<PyType>()?.unbind())
+}
+
+#[allow(deprecated)]
+unsafe impl pyo3::type_object::PyTypeInfo for InvalidInputError {
+    const NAME: &'static str = "InvalidInputError";
+    const MODULE: Option<&'static str> = Some("rscopulas");
+
+    fn type_object_raw(py: Python<'_>) -> *mut pyo3::ffi::PyTypeObject {
+        static TYPE_OBJECT: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+        TYPE_OBJECT
+            .get_or_init(py, || {
+                build_invalid_input_error_type(py)
+                    .expect("failed to initialize rscopulas.InvalidInputError")
+            })
+            .as_ptr()
+            .cast()
+    }
+}
+
+create_exception!(
+    rscopulas,
+    NonPrefixConditioningError,
+    InvalidInputError,
+    "Raised by VineCopula.sample_conditional when the known columns are not a diagonal prefix of variable_order."
+);
+
+fn is_dimension_mismatch(reason: &str) -> bool {
+    reason.contains("dimension does not match")
+}
 
 fn to_pyerr(error: CopulaError) -> PyErr {
     match error {
         CopulaError::InvalidInput(inner) => InvalidInputError::new_err(inner.to_string()),
+        // HAC and factor models still classify evaluation-time dimension
+        // mismatches as fit failures inside the core; surface them as input
+        // errors so that every model behaves the same at the Python boundary.
+        CopulaError::FitFailed(FitError::Failed { reason }) if is_dimension_mismatch(reason) => {
+            InvalidInputError::new_err(reason.to_string())
+        }
         CopulaError::FitFailed(inner) => ModelFitError::new_err(inner.to_string()),
         CopulaError::Numerical(inner) => NumericalError::new_err(inner.to_string()),
         CopulaError::Backend(inner) => BackendError::new_err(inner.to_string()),
@@ -46,6 +145,8 @@ fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
     }
 }
 
+/// Converts a Rust panic inside a binding into `InternalError` instead of
+/// letting PyO3 raise `pyo3_runtime.PanicException` (a `BaseException`).
 fn catch_internal_panic<T, F>(f: F) -> PyResult<T>
 where
     F: FnOnce() -> PyResult<T>,
@@ -58,6 +159,35 @@ where
         ))),
     }
 }
+
+/// Runs a compute-bound core call with the GIL released.
+///
+/// The closure must only touch owned Rust data: the `Send` bound rejects
+/// captured Python objects at compile time. Panics propagate through
+/// `Python::detach`, which re-attaches before unwinding, so callers can
+/// still wrap the result in `catch_internal_panic`.
+fn detached<T, F>(py: Python<'_>, f: F) -> PyResult<T>
+where
+    T: Send,
+    F: FnOnce() -> Result<T, CopulaError> + Send,
+{
+    py.detach(f).map_err(to_pyerr)
+}
+
+/// Every model that is evaluated with the GIL released must be `Send + Sync`,
+/// because several Python threads may call into the same object at once.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<GaussianCopula>();
+    assert_send_sync::<StudentTCopula>();
+    assert_send_sync::<ClaytonCopula>();
+    assert_send_sync::<FrankCopula>();
+    assert_send_sync::<GumbelHougaardCopula>();
+    assert_send_sync::<PairCopulaSpec>();
+    assert_send_sync::<VineCopula>();
+    assert_send_sync::<HierarchicalArchimedeanCopula>();
+    assert_send_sync::<FactorCopula>();
+};
 
 fn fit_options(clip_eps: f64, max_iter: usize) -> FitOptions {
     FitOptions {
@@ -80,8 +210,118 @@ fn sample_options() -> SampleOptions {
     }
 }
 
+/// Clipping applied to raw uniforms before they enter an inverse Rosenblatt
+/// pass; mirrors the clipping used by the core samplers.
+const UNIFORM_CLIP_EPS: f64 = 1e-12;
+
 fn rng_from_seed(seed: Option<u64>) -> StdRng {
     StdRng::seed_from_u64(seed.unwrap_or_else(random))
+}
+
+/// Validates a Python seed value: `None`, or an integer in `[0, 2**64)`.
+///
+/// Out-of-range integers raise `InvalidInputError` (instead of the
+/// `OverflowError` that a bare `u64` extraction would produce) and
+/// non-integers raise `TypeError`.
+fn seed_from_py(seed: Option<&Bound<'_, PyAny>>) -> PyResult<Option<u64>> {
+    let Some(seed) = seed else {
+        return Ok(None);
+    };
+    if seed.is_none() {
+        return Ok(None);
+    }
+    match seed.extract::<u64>() {
+        Ok(value) => Ok(Some(value)),
+        Err(_) if seed.hasattr("__index__")? => Err(InvalidInputError::new_err(format!(
+            "seed must be an integer in [0, 2**64), got {seed}"
+        ))),
+        Err(_) => Err(PyTypeError::new_err(format!(
+            "seed must be an int or None, got {}",
+            seed.get_type().name()?
+        ))),
+    }
+}
+
+fn positive_count(value: usize, name: &str) -> PyResult<()> {
+    if value == 0 {
+        return Err(InvalidInputError::new_err(format!(
+            "{name} must be a positive integer, got 0"
+        )));
+    }
+    Ok(())
+}
+
+macro_rules! json_string {
+    ($value:expr, $label:expr) => {
+        serde_json::to_string($value)
+            .map_err(|err| InternalError::new_err(format!("failed to serialize {}: {err}", $label)))
+    };
+}
+
+macro_rules! parse_json {
+    ($ty:ty, $payload:expr, $label:expr) => {
+        serde_json::from_str::<$ty>($payload).map_err(|err| {
+            InvalidInputError::new_err(format!("failed to deserialize {}: {err}", $label))
+        })
+    };
+}
+
+/// Structural equality through the serialized representation.
+macro_rules! json_equal {
+    ($left:expr, $right:expr) => {
+        match (serde_json::to_value($left), serde_json::to_value($right)) {
+            (Ok(left), Ok(right)) => Ok(left == right),
+            (Err(err), _) | (_, Err(err)) => Err(InternalError::new_err(format!(
+                "failed to compare models: {err}"
+            ))),
+        }
+    };
+}
+
+const REPR_LIMIT: usize = 6;
+
+fn fmt_scalar(value: f64) -> String {
+    format!("{value:?}")
+}
+
+fn fmt_vector(values: &[f64]) -> String {
+    let shown: Vec<String> = values
+        .iter()
+        .take(REPR_LIMIT)
+        .map(|value| format!("{value:.4}"))
+        .collect();
+    if values.len() > REPR_LIMIT {
+        format!("[{}, ...]", shown.join(", "))
+    } else {
+        format!("[{}]", shown.join(", "))
+    }
+}
+
+fn fmt_matrix(matrix: &Array2<f64>) -> String {
+    const ROW_LIMIT: usize = 3;
+    let rows: Vec<String> = matrix
+        .rows()
+        .into_iter()
+        .take(ROW_LIMIT)
+        .map(|row| fmt_vector(&row.to_vec()))
+        .collect();
+    if matrix.nrows() > ROW_LIMIT {
+        format!("[{}, ...]", rows.join(", "))
+    } else {
+        format!("[{}]", rows.join(", "))
+    }
+}
+
+fn fmt_names<'a>(names: impl Iterator<Item = &'a str>, total: usize) -> String {
+    let shown: Vec<String> = names
+        .take(REPR_LIMIT)
+        .map(|name| format!("'{name}'"))
+        .collect();
+    if total > REPR_LIMIT {
+        format!("[{}, ...]", shown.join(", "))
+    } else {
+        format!("[{}]", shown.join(", "))
+    }
 }
 
 fn pseudo_obs_from_py(data: PyReadonlyArray2<'_, f64>) -> PyResult<rscopulas::PseudoObs> {
@@ -91,6 +331,43 @@ fn pseudo_obs_from_py(data: PyReadonlyArray2<'_, f64>) -> PyResult<rscopulas::Ps
 
 fn matrix_from_py(data: PyReadonlyArray2<'_, f64>) -> Array2<f64> {
     data.as_array().to_owned()
+}
+
+/// Shared `log_pdf` binding: copy the input, release the GIL, evaluate.
+fn model_log_pdf<'py, M>(
+    py: Python<'py>,
+    model: &M,
+    data: PyReadonlyArray2<'_, f64>,
+    clip_eps: f64,
+) -> PyResult<Bound<'py, PyArray1<f64>>>
+where
+    M: CopulaModel + Sync,
+{
+    catch_internal_panic(|| {
+        let data = pseudo_obs_from_py(data)?;
+        let options = eval_options(clip_eps);
+        let values = detached(py, || model.log_pdf(&data, &options))?;
+        Ok(values.into_pyarray(py))
+    })
+}
+
+/// Shared `sample` binding: validate `n` and `seed`, release the GIL, draw.
+fn model_sample<'py, M>(
+    py: Python<'py>,
+    model: &M,
+    n: usize,
+    seed: Option<&Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyArray2<f64>>>
+where
+    M: CopulaModel + Sync,
+{
+    catch_internal_panic(|| {
+        positive_count(n, "n")?;
+        let mut rng = rng_from_seed(seed_from_py(seed)?);
+        let options = sample_options();
+        let values = detached(py, move || model.sample(n, &mut rng, &options))?;
+        Ok(values.into_pyarray(py))
+    })
 }
 
 fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
@@ -110,7 +387,7 @@ fn pair_family_from_name(name: &str) -> PyResult<PairCopulaFamily> {
         "tawn2" | "tawn_2" | "tawn-2" => Ok(PairCopulaFamily::Tawn2),
         "tll" => Ok(PairCopulaFamily::Tll),
         "khoudraji" => Ok(PairCopulaFamily::Khoudraji),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported pair family '{other}'; expected one of independence, gaussian, student_t, clayton, frank, gumbel, joe, bb1, bb6, bb7, bb8, tawn1, tawn2, tll, khoudraji"
         ))),
     }
@@ -122,7 +399,7 @@ fn rotation_from_name(name: &str) -> PyResult<Rotation> {
         "R90" => Ok(Rotation::R90),
         "R180" => Ok(Rotation::R180),
         "R270" => Ok(Rotation::R270),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported rotation '{other}'; expected one of R0, R90, R180, R270"
         ))),
     }
@@ -146,34 +423,34 @@ fn pair_params_from_values(
         | (PairCopulaFamily::Bb8, [theta, delta])
         | (PairCopulaFamily::Tawn1, [theta, delta])
         | (PairCopulaFamily::Tawn2, [theta, delta]) => Ok(PairCopulaParams::Two(*theta, *delta)),
-        (PairCopulaFamily::Khoudraji, _) => Err(PyValueError::new_err(
+        (PairCopulaFamily::Khoudraji, _) => Err(InvalidInputError::new_err(
             "khoudraji pair copulas require structured base_copula_1/base_copula_2 and shape_1/shape_2 inputs",
         )),
-        (PairCopulaFamily::Independence, values) => Err(PyValueError::new_err(format!(
+        (PairCopulaFamily::Independence, values) => Err(InvalidInputError::new_err(format!(
             "independence pair copulas do not take parameters (got {})",
             values.len()
         ))),
-        (PairCopulaFamily::StudentT, values) => Err(PyValueError::new_err(format!(
+        (PairCopulaFamily::StudentT, values) => Err(InvalidInputError::new_err(format!(
             "student_t pair copulas require exactly two parameters (got {})",
             values.len()
         ))),
         (PairCopulaFamily::Bb1, values)
         | (PairCopulaFamily::Bb6, values)
         | (PairCopulaFamily::Bb7, values)
-        | (PairCopulaFamily::Bb8, values) => Err(PyValueError::new_err(format!(
+        | (PairCopulaFamily::Bb8, values) => Err(InvalidInputError::new_err(format!(
             "BB pair copulas require exactly two parameters (theta, delta) (got {})",
             values.len()
         ))),
         (PairCopulaFamily::Tawn1, values) | (PairCopulaFamily::Tawn2, values) => {
-            Err(PyValueError::new_err(format!(
+            Err(InvalidInputError::new_err(format!(
                 "Tawn pair copulas require exactly two parameters (theta, psi) (got {})",
                 values.len()
             )))
         }
-        (PairCopulaFamily::Tll, _) => Err(PyValueError::new_err(
+        (PairCopulaFamily::Tll, _) => Err(InvalidInputError::new_err(
             "tll pair copulas are nonparametric; use PairCopula.fit_tll(u1, u2) to fit from data",
         )),
-        (_, values) => Err(PyValueError::new_err(format!(
+        (_, values) => Err(InvalidInputError::new_err(format!(
             "pair family requires exactly one parameter (got {})",
             values.len()
         ))),
@@ -184,9 +461,9 @@ fn pair_spec_from_values(
     family: &str,
     rotation: &str,
     parameters: Vec<f64>,
-) -> PyResult<rscopulas::PairCopulaSpec> {
+) -> PyResult<PairCopulaSpec> {
     let family = pair_family_from_name(family)?;
-    let spec = rscopulas::PairCopulaSpec {
+    let spec = PairCopulaSpec {
         family,
         rotation: rotation_from_name(rotation)?,
         params: pair_params_from_values(family, parameters)?,
@@ -195,10 +472,10 @@ fn pair_spec_from_values(
     Ok(spec)
 }
 
-fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas::PairCopulaSpec> {
+fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<PairCopulaSpec> {
     let family = dict
         .get_item("family")?
-        .ok_or_else(|| PyValueError::new_err("pair spec dictionaries require 'family'"))?
+        .ok_or_else(|| InvalidInputError::new_err("pair spec dictionaries require 'family'"))?
         .extract::<String>()?;
     let rotation = dict
         .get_item("rotation")?
@@ -208,16 +485,15 @@ fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas::PairC
     let parsed_family = pair_family_from_name(&family)?;
     if parsed_family == PairCopulaFamily::Tll {
         let state = dict.get_item("state")?.ok_or_else(|| {
-            PyValueError::new_err("TLL specs require fitted 'state'; use PairCopula.fit_tll")
+            InvalidInputError::new_err("TLL specs require fitted 'state'; use PairCopula.fit_tll")
         })?;
         let json: String = dict
             .py()
             .import("json")?
             .call_method1("dumps", (state,))?
             .extract()?;
-        let params = serde_json::from_str::<rscopulas::TllParams>(&json)
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        let spec = rscopulas::PairCopulaSpec {
+        let params = parse_json!(rscopulas::TllParams, &json, "TLL state")?;
+        let spec = PairCopulaSpec {
             family: parsed_family,
             rotation: rotation_from_name(&rotation)?,
             params: PairCopulaParams::Tll(params),
@@ -228,21 +504,21 @@ fn pair_spec_from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<rscopulas::PairC
     if parsed_family == PairCopulaFamily::Khoudraji {
         let base_first_value = dict
             .get_item("base_copula_1")?
-            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'base_copula_1'"))?;
+            .ok_or_else(|| InvalidInputError::new_err("khoudraji specs require 'base_copula_1'"))?;
         let base_first = base_first_value.cast::<PyDict>()?;
         let base_second_value = dict
             .get_item("base_copula_2")?
-            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'base_copula_2'"))?;
+            .ok_or_else(|| InvalidInputError::new_err("khoudraji specs require 'base_copula_2'"))?;
         let base_second = base_second_value.cast::<PyDict>()?;
         let shape_first = dict
             .get_item("shape_1")?
-            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'shape_1'"))?
+            .ok_or_else(|| InvalidInputError::new_err("khoudraji specs require 'shape_1'"))?
             .extract::<f64>()?;
         let shape_second = dict
             .get_item("shape_2")?
-            .ok_or_else(|| PyValueError::new_err("khoudraji specs require 'shape_2'"))?
+            .ok_or_else(|| InvalidInputError::new_err("khoudraji specs require 'shape_2'"))?
             .extract::<f64>()?;
-        return Ok(rscopulas::PairCopulaSpec {
+        return Ok(PairCopulaSpec {
             family: PairCopulaFamily::Khoudraji,
             rotation: rotation_from_name(&rotation)?,
             params: PairCopulaParams::Khoudraji(
@@ -272,7 +548,7 @@ fn vine_kind_from_name(name: &str) -> PyResult<VineStructureKind> {
         "c" => Ok(VineStructureKind::C),
         "d" => Ok(VineStructureKind::D),
         "r" => Ok(VineStructureKind::R),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported vine kind '{other}'; expected one of c, d, r"
         ))),
     }
@@ -291,7 +567,7 @@ fn paired_vectors_from_py(
     let left_values = vector_from_py(left);
     let right_values = vector_from_py(right);
     if left_values.len() != right_values.len() {
-        return Err(PyValueError::new_err(format!(
+        return Err(InvalidInputError::new_err(format!(
             "{left_name} and {right_name} must have the same length"
         )));
     }
@@ -309,17 +585,17 @@ fn criterion_from_name(name: &str) -> PyResult<SelectionCriterion> {
         } else {
             rest.strip_prefix(':')
                 .ok_or_else(|| {
-                    PyValueError::new_err(format!(
+                    InvalidInputError::new_err(format!(
                         "unsupported selection criterion '{lower}'; expected 'mbicv' or 'mbicv:<psi0>'"
                     ))
                 })?
                 .parse::<f64>()
                 .map_err(|err| {
-                    PyValueError::new_err(format!("invalid psi0 in mbicv criterion: {err}"))
+                    InvalidInputError::new_err(format!("invalid psi0 in mbicv criterion: {err}"))
                 })?
         };
         if !(0.0 < psi0 && psi0 < 1.0) {
-            return Err(PyValueError::new_err(format!(
+            return Err(InvalidInputError::new_err(format!(
                 "mbicv psi0 must lie in (0, 1), got {psi0}"
             )));
         }
@@ -328,7 +604,7 @@ fn criterion_from_name(name: &str) -> PyResult<SelectionCriterion> {
     match lower.as_str() {
         "aic" => Ok(SelectionCriterion::Aic),
         "bic" => Ok(SelectionCriterion::Bic),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported selection criterion '{other}'; expected 'aic', 'bic', 'mbicv', or 'mbicv:<psi0>'"
         ))),
     }
@@ -340,7 +616,7 @@ fn tree_algorithm_from_name(name: &str) -> PyResult<TreeAlgorithm> {
         "prim" | "mst_prim" => Ok(TreeAlgorithm::Prim),
         "random_weighted" | "weighted" => Ok(TreeAlgorithm::RandomWeighted),
         "random_unweighted" | "unweighted" | "wilson" => Ok(TreeAlgorithm::RandomUnweighted),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported tree_algorithm '{other}'; expected 'kruskal', 'prim', 'random_weighted', or 'random_unweighted'"
         ))),
     }
@@ -351,7 +627,7 @@ fn tree_criterion_from_name(name: &str) -> PyResult<TreeCriterion> {
         "tau" | "kendall" => Ok(TreeCriterion::Tau),
         "rho" | "spearman" => Ok(TreeCriterion::Rho),
         "hoeffd" | "hoeffding" | "d" => Ok(TreeCriterion::Hoeffding),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported tree_criterion '{other}'; expected 'tau', 'rho', or 'hoeffding'"
         ))),
     }
@@ -364,6 +640,7 @@ fn vine_fit_options(
     criterion: &str,
     truncation_level: Option<usize>,
     independence_threshold: Option<f64>,
+    independence_test_level: Option<f64>,
     clip_eps: f64,
     max_iter: usize,
     tree_algorithm: &str,
@@ -371,12 +648,20 @@ fn vine_fit_options(
     select_trunc_lvl: bool,
     rng_seed: Option<u64>,
 ) -> PyResult<VineFitOptions> {
+    if let Some(alpha) = independence_test_level
+        && !(alpha.is_finite() && 0.0 < alpha && alpha < 1.0)
+    {
+        return Err(InvalidInputError::new_err(format!(
+            "independence_test_level must lie in (0, 1), got {alpha}"
+        )));
+    }
     let mut options = VineFitOptions {
         base: fit_options(clip_eps, max_iter),
         include_rotations,
         criterion: criterion_from_name(criterion)?,
         truncation_level,
         independence_threshold,
+        independence_test_level,
         tree_algorithm: tree_algorithm_from_name(tree_algorithm)?,
         tree_criterion: tree_criterion_from_name(tree_criterion)?,
         select_trunc_lvl,
@@ -414,7 +699,7 @@ fn factor_layout_name(layout: FactorLayout) -> &'static str {
 fn factor_layout_from_name(name: &str) -> PyResult<FactorLayout> {
     match name.trim().to_ascii_lowercase().as_str() {
         "basic_1f" | "basic1f" | "basic-1f" | "basic" => Ok(FactorLayout::Basic1F),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported factor layout '{other}'; expected 'basic_1f'"
         ))),
     }
@@ -433,7 +718,7 @@ fn hac_family_from_name(name: &str) -> PyResult<HacFamily> {
         "clayton" => Ok(HacFamily::Clayton),
         "frank" => Ok(HacFamily::Frank),
         "gumbel" => Ok(HacFamily::Gumbel),
-        other => Err(PyValueError::new_err(format!(
+        other => Err(InvalidInputError::new_err(format!(
             "unsupported HAC family '{other}'; expected one of clayton, frank, gumbel"
         ))),
     }
@@ -454,8 +739,8 @@ fn hac_structure_method_from_name(name: &str) -> PyResult<HacStructureMethod> {
         "agglomerative_tau_then_collapse" | "agglomerative_then_collapse" | "collapse" => {
             Ok(HacStructureMethod::AgglomerativeTauThenCollapse)
         }
-        other => Err(PyValueError::new_err(format!(
-            "unsupported HAC structure method '{other}'"
+        other => Err(InvalidInputError::new_err(format!(
+            "unsupported HAC structure method '{other}'; expected one of given_tree, agglomerative_tau, agglomerative_tau_then_collapse"
         ))),
     }
 }
@@ -479,8 +764,8 @@ fn hac_fit_method_from_name(name: &str) -> PyResult<HacFitMethod> {
         "full_mle" | "full" => Ok(HacFitMethod::FullMle),
         "smle" => Ok(HacFitMethod::Smle),
         "dmle" => Ok(HacFitMethod::Dmle),
-        other => Err(PyValueError::new_err(format!(
-            "unsupported HAC fit method '{other}'"
+        other => Err(InvalidInputError::new_err(format!(
+            "unsupported HAC fit method '{other}'; expected one of tau_init, composite_mle, recursive_mle, full_mle, smle, dmle"
         ))),
     }
 }
@@ -492,15 +777,15 @@ fn hac_tree_from_py(value: &Bound<'_, PyAny>) -> PyResult<HacTree> {
     let dict = value.cast::<PyDict>()?;
     let family = dict
         .get_item("family")?
-        .ok_or_else(|| PyValueError::new_err("HAC node dictionaries require a 'family' key"))?
+        .ok_or_else(|| InvalidInputError::new_err("HAC node dictionaries require a 'family' key"))?
         .extract::<String>()?;
     let theta = dict
         .get_item("theta")?
-        .ok_or_else(|| PyValueError::new_err("HAC node dictionaries require a 'theta' key"))?
+        .ok_or_else(|| InvalidInputError::new_err("HAC node dictionaries require a 'theta' key"))?
         .extract::<f64>()?;
-    let children_value = dict
-        .get_item("children")?
-        .ok_or_else(|| PyValueError::new_err("HAC node dictionaries require a 'children' key"))?;
+    let children_value = dict.get_item("children")?.ok_or_else(|| {
+        InvalidInputError::new_err("HAC node dictionaries require a 'children' key")
+    })?;
     let children = children_value.cast::<PyList>()?;
     let parsed_children = children
         .iter()
@@ -612,11 +897,10 @@ fn params_to_vec(params: &PairCopulaParams) -> Vec<f64> {
 fn attach_pair_components<'py>(
     py: Python<'py>,
     dict: &Bound<'py, PyDict>,
-    spec: &rscopulas::PairCopulaSpec,
+    spec: &PairCopulaSpec,
 ) -> PyResult<()> {
     if let PairCopulaParams::Tll(params) = &spec.params {
-        let state =
-            serde_json::to_string(params).map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let state = json_string!(params, "TLL state")?;
         dict.set_item("state", py.import("json")?.call_method1("loads", (state,))?)?;
     }
     if let PairCopulaParams::Khoudraji(params) = &spec.params {
@@ -628,10 +912,7 @@ fn attach_pair_components<'py>(
     Ok(())
 }
 
-fn pair_spec_to_py<'py>(
-    py: Python<'py>,
-    spec: &rscopulas::PairCopulaSpec,
-) -> PyResult<Bound<'py, PyDict>> {
+fn pair_spec_to_py<'py>(py: Python<'py>, spec: &PairCopulaSpec) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("family", pair_family_name(spec.family))?;
     dict.set_item("rotation", rotation_name(spec.rotation))?;
@@ -644,7 +925,7 @@ fn vine_edge_from_py(value: &Bound<'_, PyAny>, level: usize) -> PyResult<VineEdg
     let dict = value.cast::<PyDict>()?;
     let conditioned = dict
         .get_item("conditioned")?
-        .ok_or_else(|| PyValueError::new_err("vine edge dictionaries require 'conditioned'"))?
+        .ok_or_else(|| InvalidInputError::new_err("vine edge dictionaries require 'conditioned'"))?
         .extract::<(usize, usize)>()?;
     let conditioning = match dict.get_item("conditioning")? {
         Some(value) => value.extract::<Vec<usize>>()?,
@@ -662,11 +943,11 @@ fn vine_tree_from_py(value: &Bound<'_, PyAny>) -> PyResult<VineTree> {
     let dict = value.cast::<PyDict>()?;
     let level = dict
         .get_item("level")?
-        .ok_or_else(|| PyValueError::new_err("vine tree dictionaries require 'level'"))?
+        .ok_or_else(|| InvalidInputError::new_err("vine tree dictionaries require 'level'"))?
         .extract::<usize>()?;
     let edges = dict
         .get_item("edges")?
-        .ok_or_else(|| PyValueError::new_err("vine tree dictionaries require 'edges'"))?
+        .ok_or_else(|| InvalidInputError::new_err("vine tree dictionaries require 'edges'"))?
         .cast::<PyList>()?
         .iter()
         .map(|edge| vine_edge_from_py(&edge, level))
@@ -736,12 +1017,25 @@ impl PyFitDiagnostics {
     fn n_iter(&self) -> usize {
         self.n_iter
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "_FitDiagnostics(loglik={}, aic={}, bic={}, converged={}, n_iter={}, likelihood_kind='{}')",
+            fmt_scalar(self.loglik),
+            fmt_scalar(self.aic),
+            fmt_scalar(self.bic),
+            if self.converged { "True" } else { "False" },
+            self.n_iter,
+            self.likelihood_kind
+        )
+    }
 }
 
 #[pyclass(
     skip_from_py_object,
     module = "rscopulas._rscopulas",
-    name = "_GaussianCopula"
+    name = "_GaussianCopula",
+    frozen
 )]
 #[derive(Clone)]
 struct PyGaussianCopula {
@@ -750,24 +1044,34 @@ struct PyGaussianCopula {
 
 #[pymethods]
 impl PyGaussianCopula {
+    /// Rebuild from the JSON produced by `to_json`; this is the constructor
+    /// that `pickle` calls through `__reduce__`.
+    #[new]
+    fn new(payload: &str) -> PyResult<Self> {
+        Self::from_json(payload)
+    }
+
     #[staticmethod]
     fn from_params(correlation: PyReadonlyArray2<'_, f64>) -> PyResult<Self> {
-        GaussianCopula::new(matrix_from_py(correlation))
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
+        catch_internal_panic(|| {
+            GaussianCopula::new(matrix_from_py(correlation))
+                .map(|inner| Self { inner })
+                .map_err(to_pyerr)
+        })
     }
 
     #[staticmethod]
     #[pyo3(signature = (data, clip_eps=1e-12, max_iter=500))]
     fn fit(
+        py: Python<'_>,
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
-            let result =
-                GaussianCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+            let options = fit_options(clip_eps, max_iter);
+            let result = detached(py, || GaussianCopula::fit(&data, &options))?;
             Ok((
                 Self {
                     inner: result.model,
@@ -775,6 +1079,19 @@ impl PyGaussianCopula {
                 result.diagnostics.into(),
             ))
         })
+    }
+
+    #[staticmethod]
+    fn from_json(payload: &str) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            Ok(Self {
+                inner: parse_json!(GaussianCopula, payload, "Gaussian copula")?,
+            })
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        json_string!(&self.inner, "Gaussian copula")
     }
 
     #[getter]
@@ -799,12 +1116,7 @@ impl PyGaussianCopula {
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_log_pdf(py, &self.inner, data, clip_eps)
     }
 
     #[pyo3(signature = (n, seed=None))]
@@ -812,21 +1124,41 @@ impl PyGaussianCopula {
         &self,
         py: Python<'py>,
         n: usize,
-        seed: Option<u64>,
+        seed: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_sample(py, &self.inner, n, seed)
+    }
+
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {
+        Ok((slf.get_type(), (slf.get().to_json()?,)))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __eq__(&self, other: PyRef<'_, Self>) -> PyResult<bool> {
+        json_equal!(&self.inner, &other.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "_GaussianCopula(dim={}, correlation={})",
+            self.inner.dim(),
+            fmt_matrix(self.inner.correlation())
+        )
     }
 }
 
 #[pyclass(
     skip_from_py_object,
     module = "rscopulas._rscopulas",
-    name = "_StudentTCopula"
+    name = "_StudentTCopula",
+    frozen
 )]
 #[derive(Clone)]
 struct PyStudentTCopula {
@@ -835,27 +1167,35 @@ struct PyStudentTCopula {
 
 #[pymethods]
 impl PyStudentTCopula {
+    #[new]
+    fn new(payload: &str) -> PyResult<Self> {
+        Self::from_json(payload)
+    }
+
     #[staticmethod]
     fn from_params(
         correlation: PyReadonlyArray2<'_, f64>,
         degrees_of_freedom: f64,
     ) -> PyResult<Self> {
-        StudentTCopula::new(matrix_from_py(correlation), degrees_of_freedom)
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
+        catch_internal_panic(|| {
+            StudentTCopula::new(matrix_from_py(correlation), degrees_of_freedom)
+                .map(|inner| Self { inner })
+                .map_err(to_pyerr)
+        })
     }
 
     #[staticmethod]
     #[pyo3(signature = (data, clip_eps=1e-12, max_iter=500))]
     fn fit(
+        py: Python<'_>,
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
         max_iter: usize,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
-            let result =
-                StudentTCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
+            let options = fit_options(clip_eps, max_iter);
+            let result = detached(py, || StudentTCopula::fit(&data, &options))?;
             Ok((
                 Self {
                     inner: result.model,
@@ -863,6 +1203,19 @@ impl PyStudentTCopula {
                 result.diagnostics.into(),
             ))
         })
+    }
+
+    #[staticmethod]
+    fn from_json(payload: &str) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            Ok(Self {
+                inner: parse_json!(StudentTCopula, payload, "Student t copula")?,
+            })
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        json_string!(&self.inner, "Student t copula")
     }
 
     #[getter]
@@ -892,12 +1245,7 @@ impl PyStudentTCopula {
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_log_pdf(py, &self.inner, data, clip_eps)
     }
 
     #[pyo3(signature = (n, seed=None))]
@@ -905,280 +1253,197 @@ impl PyStudentTCopula {
         &self,
         py: Python<'py>,
         n: usize,
-        seed: Option<u64>,
+        seed: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_sample(py, &self.inner, n, seed)
+    }
+
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {
+        Ok((slf.get_type(), (slf.get().to_json()?,)))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __eq__(&self, other: PyRef<'_, Self>) -> PyResult<bool> {
+        json_equal!(&self.inner, &other.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "_StudentTCopula(dim={}, degrees_of_freedom={}, correlation={})",
+            self.inner.dim(),
+            fmt_scalar(self.inner.degrees_of_freedom()),
+            fmt_matrix(self.inner.correlation())
+        )
     }
 }
+
+/// The three one-parameter Archimedean families share an identical binding
+/// surface; the macro keeps them in lock-step.
+///
+/// `rustfmt` does not format multi-line attributes inside macro bodies
+/// idempotently, so the macro is skipped; its body follows rustfmt style.
+#[rustfmt::skip]
+macro_rules! archimedean_pyclass {
+    ($py_ty:ident, $core:ty, $py_name:literal, $label:literal) => {
+        #[pyclass(skip_from_py_object, module = "rscopulas._rscopulas", name = $py_name, frozen)]
+        #[derive(Clone)]
+        struct $py_ty {
+            inner: $core,
+        }
+
+        #[pymethods]
+        impl $py_ty {
+            #[new]
+            fn new(payload: &str) -> PyResult<Self> {
+                Self::from_json(payload)
+            }
+
+            #[staticmethod]
+            fn from_params(dim: usize, theta: f64) -> PyResult<Self> {
+                catch_internal_panic(|| {
+                    <$core>::new(dim, theta)
+                        .map(|inner| Self { inner })
+                        .map_err(to_pyerr)
+                })
+            }
+
+            #[staticmethod]
+            #[pyo3(signature = (data, clip_eps=1e-12, max_iter=500))]
+            fn fit(
+                py: Python<'_>,
+                data: PyReadonlyArray2<'_, f64>,
+                clip_eps: f64,
+                max_iter: usize,
+            ) -> PyResult<(Self, PyFitDiagnostics)> {
+                catch_internal_panic(|| {
+                    let data = pseudo_obs_from_py(data)?;
+                    let options = fit_options(clip_eps, max_iter);
+                    let result = detached(py, || <$core>::fit(&data, &options))?;
+                    Ok((
+                        Self {
+                            inner: result.model,
+                        },
+                        result.diagnostics.into(),
+                    ))
+                })
+            }
+
+            #[staticmethod]
+            fn from_json(payload: &str) -> PyResult<Self> {
+                catch_internal_panic(|| {
+                    // The derived deserializer does not validate `theta`, so
+                    // rebuild the model through the checked constructor.
+                    let parsed = parse_json!($core, payload, $label)?;
+                    <$core>::new(parsed.dim(), parsed.theta())
+                        .map(|inner| Self { inner })
+                        .map_err(|err| {
+                            InvalidInputError::new_err(format!(
+                                "failed to deserialize {}: {err}",
+                                $label
+                            ))
+                        })
+                })
+            }
+
+            fn to_json(&self) -> PyResult<String> {
+                json_string!(&self.inner, $label)
+            }
+
+            #[getter]
+            fn dim(&self) -> usize {
+                self.inner.dim()
+            }
+
+            #[getter]
+            fn family(&self) -> &'static str {
+                family_name(self.inner.family())
+            }
+
+            #[getter]
+            fn theta(&self) -> f64 {
+                self.inner.theta()
+            }
+
+            #[pyo3(signature = (data, clip_eps=1e-12))]
+            fn log_pdf<'py>(
+                &self,
+                py: Python<'py>,
+                data: PyReadonlyArray2<'_, f64>,
+                clip_eps: f64,
+            ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+                model_log_pdf(py, &self.inner, data, clip_eps)
+            }
+
+            #[pyo3(signature = (n, seed=None))]
+            fn sample<'py>(
+                &self,
+                py: Python<'py>,
+                n: usize,
+                seed: Option<&Bound<'py, PyAny>>,
+            ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+                model_sample(py, &self.inner, n, seed)
+            }
+
+            fn __reduce__<'py>(
+                slf: &Bound<'py, Self>,
+            ) -> PyResult<(Bound<'py, PyType>, (String,))> {
+                Ok((slf.get_type(), (slf.get().to_json()?,)))
+            }
+
+            fn __copy__(&self) -> Self {
+                self.clone()
+            }
+
+            fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+                self.clone()
+            }
+
+            fn __eq__(&self, other: PyRef<'_, Self>) -> PyResult<bool> {
+                json_equal!(&self.inner, &other.inner)
+            }
+
+            fn __repr__(&self) -> String {
+                format!(
+                    "{}(dim={}, theta={})",
+                    $py_name,
+                    self.inner.dim(),
+                    fmt_scalar(self.inner.theta())
+                )
+            }
+        }
+    };
+}
+
+archimedean_pyclass!(
+    PyClaytonCopula,
+    ClaytonCopula,
+    "_ClaytonCopula",
+    "Clayton copula"
+);
+archimedean_pyclass!(PyFrankCopula, FrankCopula, "_FrankCopula", "Frank copula");
+archimedean_pyclass!(
+    PyGumbelCopula,
+    GumbelHougaardCopula,
+    "_GumbelCopula",
+    "Gumbel copula"
+);
 
 #[pyclass(
     skip_from_py_object,
     module = "rscopulas._rscopulas",
-    name = "_ClaytonCopula"
-)]
-#[derive(Clone)]
-struct PyClaytonCopula {
-    inner: ClaytonCopula,
-}
-
-#[pymethods]
-impl PyClaytonCopula {
-    #[staticmethod]
-    fn from_params(dim: usize, theta: f64) -> PyResult<Self> {
-        ClaytonCopula::new(dim, theta)
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (data, clip_eps=1e-12, max_iter=500))]
-    fn fit(
-        data: PyReadonlyArray2<'_, f64>,
-        clip_eps: f64,
-        max_iter: usize,
-    ) -> PyResult<(Self, PyFitDiagnostics)> {
-        catch_internal_panic(|| {
-            let data = pseudo_obs_from_py(data)?;
-            let result =
-                ClaytonCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-            Ok((
-                Self {
-                    inner: result.model,
-                },
-                result.diagnostics.into(),
-            ))
-        })
-    }
-
-    #[getter]
-    fn dim(&self) -> usize {
-        self.inner.dim()
-    }
-
-    #[getter]
-    fn family(&self) -> &'static str {
-        family_name(self.inner.family())
-    }
-
-    #[getter]
-    fn theta(&self) -> f64 {
-        self.inner.theta()
-    }
-
-    #[pyo3(signature = (data, clip_eps=1e-12))]
-    fn log_pdf<'py>(
-        &self,
-        py: Python<'py>,
-        data: PyReadonlyArray2<'_, f64>,
-        clip_eps: f64,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
-    }
-
-    #[pyo3(signature = (n, seed=None))]
-    fn sample<'py>(
-        &self,
-        py: Python<'py>,
-        n: usize,
-        seed: Option<u64>,
-    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
-    }
-}
-
-#[pyclass(
-    skip_from_py_object,
-    module = "rscopulas._rscopulas",
-    name = "_FrankCopula"
-)]
-#[derive(Clone)]
-struct PyFrankCopula {
-    inner: FrankCopula,
-}
-
-#[pymethods]
-impl PyFrankCopula {
-    #[staticmethod]
-    fn from_params(dim: usize, theta: f64) -> PyResult<Self> {
-        FrankCopula::new(dim, theta)
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (data, clip_eps=1e-12, max_iter=500))]
-    fn fit(
-        data: PyReadonlyArray2<'_, f64>,
-        clip_eps: f64,
-        max_iter: usize,
-    ) -> PyResult<(Self, PyFitDiagnostics)> {
-        catch_internal_panic(|| {
-            let data = pseudo_obs_from_py(data)?;
-            let result =
-                FrankCopula::fit(&data, &fit_options(clip_eps, max_iter)).map_err(to_pyerr)?;
-            Ok((
-                Self {
-                    inner: result.model,
-                },
-                result.diagnostics.into(),
-            ))
-        })
-    }
-
-    #[getter]
-    fn dim(&self) -> usize {
-        self.inner.dim()
-    }
-
-    #[getter]
-    fn family(&self) -> &'static str {
-        family_name(self.inner.family())
-    }
-
-    #[getter]
-    fn theta(&self) -> f64 {
-        self.inner.theta()
-    }
-
-    #[pyo3(signature = (data, clip_eps=1e-12))]
-    fn log_pdf<'py>(
-        &self,
-        py: Python<'py>,
-        data: PyReadonlyArray2<'_, f64>,
-        clip_eps: f64,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
-    }
-
-    #[pyo3(signature = (n, seed=None))]
-    fn sample<'py>(
-        &self,
-        py: Python<'py>,
-        n: usize,
-        seed: Option<u64>,
-    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
-    }
-}
-
-#[pyclass(
-    skip_from_py_object,
-    module = "rscopulas._rscopulas",
-    name = "_GumbelCopula"
-)]
-#[derive(Clone)]
-struct PyGumbelCopula {
-    inner: GumbelHougaardCopula,
-}
-
-#[pymethods]
-impl PyGumbelCopula {
-    #[staticmethod]
-    fn from_params(dim: usize, theta: f64) -> PyResult<Self> {
-        GumbelHougaardCopula::new(dim, theta)
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (data, clip_eps=1e-12, max_iter=500))]
-    fn fit(
-        data: PyReadonlyArray2<'_, f64>,
-        clip_eps: f64,
-        max_iter: usize,
-    ) -> PyResult<(Self, PyFitDiagnostics)> {
-        catch_internal_panic(|| {
-            let data = pseudo_obs_from_py(data)?;
-            let result = GumbelHougaardCopula::fit(&data, &fit_options(clip_eps, max_iter))
-                .map_err(to_pyerr)?;
-            Ok((
-                Self {
-                    inner: result.model,
-                },
-                result.diagnostics.into(),
-            ))
-        })
-    }
-
-    #[getter]
-    fn dim(&self) -> usize {
-        self.inner.dim()
-    }
-
-    #[getter]
-    fn family(&self) -> &'static str {
-        family_name(self.inner.family())
-    }
-
-    #[getter]
-    fn theta(&self) -> f64 {
-        self.inner.theta()
-    }
-
-    #[pyo3(signature = (data, clip_eps=1e-12))]
-    fn log_pdf<'py>(
-        &self,
-        py: Python<'py>,
-        data: PyReadonlyArray2<'_, f64>,
-        clip_eps: f64,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
-    }
-
-    #[pyo3(signature = (n, seed=None))]
-    fn sample<'py>(
-        &self,
-        py: Python<'py>,
-        n: usize,
-        seed: Option<u64>,
-    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
-    }
-}
-
-#[pyclass(
-    skip_from_py_object,
-    module = "rscopulas._rscopulas",
-    name = "_PairCopula"
+    name = "_PairCopula",
+    frozen
 )]
 #[derive(Clone)]
 struct PyPairCopula {
-    inner: rscopulas::PairCopulaSpec,
+    inner: PairCopulaSpec,
 }
 
 impl PyPairCopula {
@@ -1191,24 +1456,34 @@ impl PyPairCopula {
         clip_eps: f64,
         left_name: &str,
         right_name: &str,
-        mut callback: F,
+        callback: F,
     ) -> PyResult<Bound<'py, PyArray1<f64>>>
     where
-        F: FnMut(&rscopulas::PairCopulaSpec, f64, f64, f64) -> Result<f64, CopulaError>,
+        F: Fn(&PairCopulaSpec, f64, f64, f64) -> Result<f64, CopulaError> + Send,
     {
-        let (left_values, right_values) =
-            paired_vectors_from_py(left, right, left_name, right_name)?;
-        let values = left_values
-            .into_iter()
-            .zip(right_values)
-            .map(|(first, second)| callback(&self.inner, first, second, clip_eps).map_err(to_pyerr))
-            .collect::<PyResult<Vec<_>>>()?;
-        Ok(values.into_pyarray(py))
+        catch_internal_panic(|| {
+            let (left_values, right_values) =
+                paired_vectors_from_py(left, right, left_name, right_name)?;
+            let spec = &self.inner;
+            let values = detached(py, move || {
+                left_values
+                    .into_iter()
+                    .zip(right_values)
+                    .map(|(first, second)| callback(spec, first, second, clip_eps))
+                    .collect::<Result<Vec<_>, CopulaError>>()
+            })?;
+            Ok(values.into_pyarray(py))
+        })
     }
 }
 
 #[pymethods]
 impl PyPairCopula {
+    #[new]
+    fn new(payload: &str) -> PyResult<Self> {
+        Self::from_json(payload)
+    }
+
     #[staticmethod]
     #[pyo3(signature = (family, parameters=None, rotation="R0", state=None))]
     fn from_spec(
@@ -1218,27 +1493,29 @@ impl PyPairCopula {
         rotation: &str,
         state: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        if let Some(state) = state {
-            if pair_family_from_name(family)? != PairCopulaFamily::Tll {
-                return Err(PyValueError::new_err(
-                    "'state' is only valid for TLL specifications",
+        catch_internal_panic(|| {
+            if let Some(state) = state {
+                if pair_family_from_name(family)? != PairCopulaFamily::Tll {
+                    return Err(InvalidInputError::new_err(
+                        "'state' is only valid for TLL specifications",
+                    ));
+                }
+                let spec = PyDict::new(py);
+                spec.set_item("family", family)?;
+                spec.set_item("rotation", rotation)?;
+                spec.set_item("state", state)?;
+                return Ok(Self {
+                    inner: pair_spec_from_py_dict(&spec)?,
+                });
+            }
+            if pair_family_from_name(family)? == PairCopulaFamily::Khoudraji {
+                return Err(InvalidInputError::new_err(
+                    "use PairCopula.from_khoudraji(...) for khoudraji specifications",
                 ));
             }
-            let spec = PyDict::new(py);
-            spec.set_item("family", family)?;
-            spec.set_item("rotation", rotation)?;
-            spec.set_item("state", state)?;
-            return Ok(Self {
-                inner: pair_spec_from_py_dict(&spec)?,
-            });
-        }
-        if pair_family_from_name(family)? == PairCopulaFamily::Khoudraji {
-            return Err(PyValueError::new_err(
-                "use PairCopula.from_khoudraji(...) for khoudraji specifications",
-            ));
-        }
-        Ok(Self {
-            inner: pair_spec_from_values(family, rotation, parameters.unwrap_or_default())?,
+            Ok(Self {
+                inner: pair_spec_from_values(family, rotation, parameters.unwrap_or_default())?,
+            })
         })
     }
 
@@ -1247,28 +1524,31 @@ impl PyPairCopula {
     #[staticmethod]
     #[pyo3(signature = (u1, u2, method="constant"))]
     fn fit_tll(
+        py: Python<'_>,
         u1: PyReadonlyArray1<'_, f64>,
         u2: PyReadonlyArray1<'_, f64>,
         method: &str,
     ) -> PyResult<Self> {
-        let order = match method.trim().to_ascii_lowercase().as_str() {
-            "constant" | "tll0" => rscopulas::TllOrder::Constant,
-            "linear" | "tll1" => rscopulas::TllOrder::Linear,
-            "quadratic" | "tll2" => rscopulas::TllOrder::Quadratic,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unsupported tll method '{other}'; expected one of constant, linear, quadratic"
-                )));
-            }
-        };
-        let (u1_values, u2_values) = paired_vectors_from_py(u1, u2, "u1", "u2")?;
-        let tll_params = rscopulas::tll_fit(&u1_values, &u2_values, order).map_err(to_pyerr)?;
-        Ok(Self {
-            inner: rscopulas::PairCopulaSpec {
-                family: PairCopulaFamily::Tll,
-                rotation: Rotation::R0,
-                params: PairCopulaParams::Tll(tll_params),
-            },
+        catch_internal_panic(|| {
+            let order = match method.trim().to_ascii_lowercase().as_str() {
+                "constant" | "tll0" => rscopulas::TllOrder::Constant,
+                "linear" | "tll1" => rscopulas::TllOrder::Linear,
+                "quadratic" | "tll2" => rscopulas::TllOrder::Quadratic,
+                other => {
+                    return Err(InvalidInputError::new_err(format!(
+                        "unsupported tll method '{other}'; expected one of constant, linear, quadratic"
+                    )));
+                }
+            };
+            let (u1_values, u2_values) = paired_vectors_from_py(u1, u2, "u1", "u2")?;
+            let tll_params = detached(py, || rscopulas::tll_fit(&u1_values, &u2_values, order))?;
+            Ok(Self {
+                inner: PairCopulaSpec {
+                    family: PairCopulaFamily::Tll,
+                    rotation: Rotation::R0,
+                    params: PairCopulaParams::Tll(tll_params),
+                },
+            })
         })
     }
 
@@ -1296,29 +1576,46 @@ impl PyPairCopula {
         first_rotation: &str,
         second_rotation: &str,
     ) -> PyResult<Self> {
-        Ok(Self {
-            inner: rscopulas::PairCopulaSpec {
-                family: PairCopulaFamily::Khoudraji,
-                rotation: rotation_from_name(rotation)?,
-                params: PairCopulaParams::Khoudraji(
-                    KhoudrajiParams::new(
-                        pair_spec_from_values(
-                            first_family,
-                            first_rotation,
-                            first_parameters.unwrap_or_default(),
-                        )?,
-                        pair_spec_from_values(
-                            second_family,
-                            second_rotation,
-                            second_parameters.unwrap_or_default(),
-                        )?,
-                        shape_1,
-                        shape_2,
-                    )
-                    .map_err(to_pyerr)?,
-                ),
-            },
+        catch_internal_panic(|| {
+            Ok(Self {
+                inner: PairCopulaSpec {
+                    family: PairCopulaFamily::Khoudraji,
+                    rotation: rotation_from_name(rotation)?,
+                    params: PairCopulaParams::Khoudraji(
+                        KhoudrajiParams::new(
+                            pair_spec_from_values(
+                                first_family,
+                                first_rotation,
+                                first_parameters.unwrap_or_default(),
+                            )?,
+                            pair_spec_from_values(
+                                second_family,
+                                second_rotation,
+                                second_parameters.unwrap_or_default(),
+                            )?,
+                            shape_1,
+                            shape_2,
+                        )
+                        .map_err(to_pyerr)?,
+                    ),
+                },
+            })
         })
+    }
+
+    #[staticmethod]
+    fn from_json(payload: &str) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            let inner = parse_json!(PairCopulaSpec, payload, "pair copula")?;
+            inner.validate().map_err(|err| {
+                InvalidInputError::new_err(format!("failed to deserialize pair copula: {err}"))
+            })?;
+            Ok(Self { inner })
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        json_string!(&self.inner, "pair copula")
     }
 
     #[getter]
@@ -1338,7 +1635,7 @@ impl PyPairCopula {
 
     #[getter]
     fn spec<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        pair_spec_to_py(py, &self.inner)
+        catch_internal_panic(|| pair_spec_to_py(py, &self.inner))
     }
 
     #[getter]
@@ -1428,73 +1725,130 @@ impl PyPairCopula {
             spec.inv_second_given_first(left, right, eps)
         })
     }
+
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {
+        Ok((slf.get_type(), (slf.get().to_json()?,)))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __eq__(&self, other: PyRef<'_, Self>) -> PyResult<bool> {
+        // `PairCopulaSpec: PartialEq` also compares the lazily built TLL
+        // grid cache, so compare the serialized state instead.
+        json_equal!(&self.inner, &other.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "_PairCopula(family='{}', rotation='{}', parameters={})",
+            pair_family_name(self.inner.family),
+            rotation_name(self.inner.rotation),
+            fmt_vector(&params_to_vec(&self.inner.params))
+        )
+    }
 }
 
 #[pyclass(
     skip_from_py_object,
     module = "rscopulas._rscopulas",
-    name = "_VineCopula"
+    name = "_VineCopula",
+    frozen
 )]
 #[derive(Clone)]
 struct PyVineCopula {
     inner: VineCopula,
 }
 
+impl PyVineCopula {
+    fn from_fit_result(result: rscopulas::fit::FitResult<VineCopula>) -> (Self, PyFitDiagnostics) {
+        (
+            Self {
+                inner: result.model,
+            },
+            result.diagnostics.into(),
+        )
+    }
+}
+
 #[pymethods]
 impl PyVineCopula {
+    #[new]
+    fn new(payload: &str) -> PyResult<Self> {
+        Self::from_json(payload)
+    }
+
     #[staticmethod]
     fn from_trees(
+        py: Python<'_>,
         kind: &str,
         trees: &Bound<'_, PyAny>,
         truncation_level: Option<usize>,
     ) -> PyResult<Self> {
-        let trees = trees
-            .cast::<PyList>()?
-            .iter()
-            .map(|tree| vine_tree_from_py(&tree))
-            .collect::<PyResult<Vec<_>>>()?;
-        VineCopula::from_trees(vine_kind_from_name(kind)?, trees, truncation_level)
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
+        catch_internal_panic(|| {
+            let kind = vine_kind_from_name(kind)?;
+            let trees = trees
+                .cast::<PyList>()?
+                .iter()
+                .map(|tree| vine_tree_from_py(&tree))
+                .collect::<PyResult<Vec<_>>>()?;
+            let inner = detached(py, move || {
+                VineCopula::from_trees(kind, trees, truncation_level)
+            })?;
+            Ok(Self { inner })
+        })
     }
 
     #[staticmethod]
     fn gaussian_c_vine(
+        py: Python<'_>,
         order: Vec<usize>,
         correlation: PyReadonlyArray2<'_, f64>,
     ) -> PyResult<Self> {
-        VineCopula::gaussian_c_vine(order, matrix_from_py(correlation))
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
+        catch_internal_panic(|| {
+            let correlation = matrix_from_py(correlation);
+            let inner = detached(py, move || VineCopula::gaussian_c_vine(order, correlation))?;
+            Ok(Self { inner })
+        })
     }
 
     #[staticmethod]
     fn gaussian_d_vine(
+        py: Python<'_>,
         order: Vec<usize>,
         correlation: PyReadonlyArray2<'_, f64>,
     ) -> PyResult<Self> {
-        VineCopula::gaussian_d_vine(order, matrix_from_py(correlation))
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
+        catch_internal_panic(|| {
+            let correlation = matrix_from_py(correlation);
+            let inner = detached(py, move || VineCopula::gaussian_d_vine(order, correlation))?;
+            Ok(Self { inner })
+        })
     }
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, independence_test_level=None, clip_eps=1e-12, max_iter=500, order=None, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
     fn fit_c(
+        py: Python<'_>,
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
         include_rotations: bool,
         criterion: &str,
         truncation_level: Option<usize>,
         independence_threshold: Option<f64>,
+        independence_test_level: Option<f64>,
         clip_eps: f64,
         max_iter: usize,
         order: Option<Vec<usize>>,
         tree_algorithm: &str,
         tree_criterion: &str,
         select_trunc_lvl: bool,
-        rng_seed: Option<u64>,
+        rng_seed: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1504,44 +1858,41 @@ impl PyVineCopula {
                 criterion,
                 truncation_level,
                 independence_threshold,
+                independence_test_level,
                 clip_eps,
                 max_iter,
                 tree_algorithm,
                 tree_criterion,
                 select_trunc_lvl,
-                rng_seed,
+                seed_from_py(rng_seed)?,
             )?;
-            let result = match order {
+            let result = detached(py, || match order {
                 Some(order) => VineCopula::fit_c_vine_with_order(&data, &order, &options),
                 None => VineCopula::fit_c_vine(&data, &options),
-            }
-            .map_err(to_pyerr)?;
-            Ok((
-                Self {
-                    inner: result.model,
-                },
-                result.diagnostics.into(),
-            ))
+            })?;
+            Ok(Self::from_fit_result(result))
         })
     }
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, order=None, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, independence_test_level=None, clip_eps=1e-12, max_iter=500, order=None, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
     fn fit_d(
+        py: Python<'_>,
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
         include_rotations: bool,
         criterion: &str,
         truncation_level: Option<usize>,
         independence_threshold: Option<f64>,
+        independence_test_level: Option<f64>,
         clip_eps: f64,
         max_iter: usize,
         order: Option<Vec<usize>>,
         tree_algorithm: &str,
         tree_criterion: &str,
         select_trunc_lvl: bool,
-        rng_seed: Option<u64>,
+        rng_seed: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1551,43 +1902,40 @@ impl PyVineCopula {
                 criterion,
                 truncation_level,
                 independence_threshold,
+                independence_test_level,
                 clip_eps,
                 max_iter,
                 tree_algorithm,
                 tree_criterion,
                 select_trunc_lvl,
-                rng_seed,
+                seed_from_py(rng_seed)?,
             )?;
-            let result = match order {
+            let result = detached(py, || match order {
                 Some(order) => VineCopula::fit_d_vine_with_order(&data, &order, &options),
                 None => VineCopula::fit_d_vine(&data, &options),
-            }
-            .map_err(to_pyerr)?;
-            Ok((
-                Self {
-                    inner: result.model,
-                },
-                result.diagnostics.into(),
-            ))
+            })?;
+            Ok(Self::from_fit_result(result))
         })
     }
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, clip_eps=1e-12, max_iter=500, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
+    #[pyo3(signature = (data, family_set=None, include_rotations=true, criterion="aic", truncation_level=None, independence_threshold=None, independence_test_level=None, clip_eps=1e-12, max_iter=500, tree_algorithm="kruskal", tree_criterion="tau", select_trunc_lvl=false, rng_seed=None))]
     fn fit_r(
+        py: Python<'_>,
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
         include_rotations: bool,
         criterion: &str,
         truncation_level: Option<usize>,
         independence_threshold: Option<f64>,
+        independence_test_level: Option<f64>,
         clip_eps: f64,
         max_iter: usize,
         tree_algorithm: &str,
         tree_criterion: &str,
         select_trunc_lvl: bool,
-        rng_seed: Option<u64>,
+        rng_seed: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<(Self, PyFitDiagnostics)> {
         catch_internal_panic(|| {
             let data = pseudo_obs_from_py(data)?;
@@ -1597,21 +1945,32 @@ impl PyVineCopula {
                 criterion,
                 truncation_level,
                 independence_threshold,
+                independence_test_level,
                 clip_eps,
                 max_iter,
                 tree_algorithm,
                 tree_criterion,
                 select_trunc_lvl,
-                rng_seed,
+                seed_from_py(rng_seed)?,
             )?;
-            let result = VineCopula::fit_r_vine(&data, &options).map_err(to_pyerr)?;
-            Ok((
-                Self {
-                    inner: result.model,
-                },
-                result.diagnostics.into(),
-            ))
+            let result = detached(py, || VineCopula::fit_r_vine(&data, &options))?;
+            Ok(Self::from_fit_result(result))
         })
+    }
+
+    /// Rebuild a vine from `to_json` output. The payload carries a
+    /// `format_version`; unversioned or foreign payloads are rejected.
+    #[staticmethod]
+    fn from_json(payload: &str) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            Ok(Self {
+                inner: parse_json!(VineCopula, payload, "vine copula")?,
+            })
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        json_string!(&self.inner, "vine copula")
     }
 
     #[getter]
@@ -1634,40 +1993,44 @@ impl PyVineCopula {
         self.inner.truncation_level()
     }
 
-    fn order(&self) -> Vec<usize> {
-        self.inner.order()
+    fn order(&self) -> PyResult<Vec<usize>> {
+        catch_internal_panic(|| Ok(self.inner.order()))
     }
 
-    fn pair_parameters(&self) -> Vec<f64> {
-        self.inner.pair_parameters()
+    fn pair_parameters(&self) -> PyResult<Vec<f64>> {
+        catch_internal_panic(|| Ok(self.inner.pair_parameters()))
     }
 
     fn structure_info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let info = self.inner.structure_info();
-        let dict = PyDict::new(py);
-        dict.set_item("kind", vine_kind_name(info.kind))?;
-        dict.set_item("matrix", info.matrix.clone().into_pyarray(py))?;
-        dict.set_item("truncation_level", info.truncation_level)?;
-        Ok(dict)
+        catch_internal_panic(|| {
+            let info = self.inner.structure_info();
+            let dict = PyDict::new(py);
+            dict.set_item("kind", vine_kind_name(info.kind))?;
+            dict.set_item("matrix", info.matrix.clone().into_pyarray(py))?;
+            dict.set_item("truncation_level", info.truncation_level)?;
+            Ok(dict)
+        })
     }
 
     fn trees<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let trees = PyList::empty(py);
-        for tree in self.inner.trees() {
-            let tree_dict = PyDict::new(py);
-            tree_dict.set_item("level", tree.level)?;
-            let edges = PyList::empty(py);
-            for edge in &tree.edges {
-                let edge_dict = pair_spec_to_py(py, &edge.copula)?;
-                edge_dict.set_item("tree", edge.tree)?;
-                edge_dict.set_item("conditioned", (edge.conditioned.0, edge.conditioned.1))?;
-                edge_dict.set_item("conditioning", edge.conditioning.clone())?;
-                edges.append(edge_dict)?;
+        catch_internal_panic(|| {
+            let trees = PyList::empty(py);
+            for tree in self.inner.trees() {
+                let tree_dict = PyDict::new(py);
+                tree_dict.set_item("level", tree.level)?;
+                let edges = PyList::empty(py);
+                for edge in &tree.edges {
+                    let edge_dict = pair_spec_to_py(py, &edge.copula)?;
+                    edge_dict.set_item("tree", edge.tree)?;
+                    edge_dict.set_item("conditioned", (edge.conditioned.0, edge.conditioned.1))?;
+                    edge_dict.set_item("conditioning", edge.conditioning.clone())?;
+                    edges.append(edge_dict)?;
+                }
+                tree_dict.set_item("edges", edges)?;
+                trees.append(tree_dict)?;
             }
-            tree_dict.set_item("edges", edges)?;
-            trees.append(tree_dict)?;
-        }
-        Ok(trees)
+            Ok(trees)
+        })
     }
 
     #[pyo3(signature = (data, clip_eps=1e-12))]
@@ -1677,12 +2040,7 @@ impl PyVineCopula {
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_log_pdf(py, &self.inner, data, clip_eps)
     }
 
     #[pyo3(signature = (n, seed=None))]
@@ -1690,14 +2048,9 @@ impl PyVineCopula {
         &self,
         py: Python<'py>,
         n: usize,
-        seed: Option<u64>,
+        seed: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_sample(py, &self.inner, n, seed)
     }
 
     /// Diagonal ordering used by the Rosenblatt transform.
@@ -1714,12 +2067,13 @@ impl PyVineCopula {
         py: Python<'py>,
         data: PyReadonlyArray2<'_, f64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let view = data.as_array();
-        let values = self
-            .inner
-            .rosenblatt(view, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        catch_internal_panic(|| {
+            let data = matrix_from_py(data);
+            let options = sample_options();
+            let model = &self.inner;
+            let values = detached(py, || model.rosenblatt(data.view(), &options))?;
+            Ok(values.into_pyarray(py))
+        })
     }
 
     /// Inverse Rosenblatt transform `V = F^{-1}(U)` indexed by original
@@ -1730,12 +2084,13 @@ impl PyVineCopula {
         py: Python<'py>,
         data: PyReadonlyArray2<'_, f64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let view = data.as_array();
-        let values = self
-            .inner
-            .inverse_rosenblatt(view, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        catch_internal_panic(|| {
+            let data = matrix_from_py(data);
+            let options = sample_options();
+            let model = &self.inner;
+            let values = detached(py, || model.inverse_rosenblatt(data.view(), &options))?;
+            Ok(values.into_pyarray(py))
+        })
     }
 
     /// Partial forward Rosenblatt that only emits the first `col_limit`
@@ -1748,19 +2103,53 @@ impl PyVineCopula {
         data: PyReadonlyArray2<'_, f64>,
         col_limit: usize,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let view = data.as_array();
-        let values = self
-            .inner
-            .rosenblatt_prefix(view, col_limit, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        catch_internal_panic(|| {
+            let data = matrix_from_py(data);
+            let options = sample_options();
+            let model = &self.inner;
+            let values = detached(py, || {
+                model.rosenblatt_prefix(data.view(), col_limit, &options)
+            })?;
+            Ok(values.into_pyarray(py))
+        })
+    }
+
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {
+        Ok((slf.get_type(), (slf.get().to_json()?,)))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __eq__(&self, other: PyRef<'_, Self>) -> PyResult<bool> {
+        json_equal!(&self.inner, &other.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        let truncation = match self.inner.truncation_level() {
+            Some(level) => level.to_string(),
+            None => "None".to_string(),
+        };
+        format!(
+            "_VineCopula(kind='{}', dim={}, truncation_level={}, n_trees={})",
+            vine_kind_name(self.inner.structure()),
+            self.inner.dim(),
+            truncation,
+            self.inner.trees().len()
+        )
     }
 }
 
 #[pyclass(
     skip_from_py_object,
     module = "rscopulas._rscopulas",
-    name = "_HierarchicalArchimedeanCopula"
+    name = "_HierarchicalArchimedeanCopula",
+    frozen
 )]
 #[derive(Clone)]
 struct PyHierarchicalArchimedeanCopula {
@@ -1769,18 +2158,26 @@ struct PyHierarchicalArchimedeanCopula {
 
 #[pymethods]
 impl PyHierarchicalArchimedeanCopula {
+    #[new]
+    fn new(payload: &str) -> PyResult<Self> {
+        Self::from_json(payload)
+    }
+
     #[staticmethod]
     fn from_tree(tree: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let tree = hac_tree_from_py(tree)?;
-        HierarchicalArchimedeanCopula::new(tree)
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
+        catch_internal_panic(|| {
+            let tree = hac_tree_from_py(tree)?;
+            HierarchicalArchimedeanCopula::new(tree)
+                .map(|inner| Self { inner })
+                .map_err(to_pyerr)
+        })
     }
 
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (data, tree=None, family_set=None, structure_method="agglomerative_tau_then_collapse", fit_method="composite_mle", collapse_eps=0.05, mc_samples=0, allow_experimental=true, clip_eps=1e-12, max_iter=500))]
     fn fit(
+        py: Python<'_>,
         data: PyReadonlyArray2<'_, f64>,
         tree: Option<&Bound<'_, PyAny>>,
         family_set: Option<Vec<String>>,
@@ -1804,14 +2201,13 @@ impl PyHierarchicalArchimedeanCopula {
                 clip_eps,
                 max_iter,
             )?;
-            let result = match tree {
-                Some(tree) => {
-                    let parsed_tree = hac_tree_from_py(tree)?;
+            let parsed_tree = tree.map(hac_tree_from_py).transpose()?;
+            let result = detached(py, move || match parsed_tree {
+                Some(parsed_tree) => {
                     HierarchicalArchimedeanCopula::fit_with_tree(&data, parsed_tree, &options)
                 }
                 None => HierarchicalArchimedeanCopula::fit(&data, &options),
-            }
-            .map_err(to_pyerr)?;
+            })?;
             Ok((
                 Self {
                     inner: result.model,
@@ -1819,6 +2215,19 @@ impl PyHierarchicalArchimedeanCopula {
                 result.diagnostics.into(),
             ))
         })
+    }
+
+    #[staticmethod]
+    fn from_json(payload: &str) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            Ok(Self {
+                inner: parse_json!(HierarchicalArchimedeanCopula, payload, "HAC copula")?,
+            })
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        json_string!(&self.inner, "HAC copula")
     }
 
     #[getter]
@@ -1862,23 +2271,26 @@ impl PyHierarchicalArchimedeanCopula {
     }
 
     fn tree<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
-        hac_tree_to_py(py, self.inner.tree())
+        catch_internal_panic(|| hac_tree_to_py(py, self.inner.tree()))
     }
 
-    fn leaf_order(&self) -> Vec<usize> {
-        self.inner.leaf_order()
+    fn leaf_order(&self) -> PyResult<Vec<usize>> {
+        catch_internal_panic(|| Ok(self.inner.leaf_order()))
     }
 
-    fn parameters(&self) -> Vec<f64> {
-        self.inner.parameters()
+    fn parameters(&self) -> PyResult<Vec<f64>> {
+        catch_internal_panic(|| Ok(self.inner.parameters()))
     }
 
-    fn families(&self) -> Vec<String> {
-        self.inner
-            .families()
-            .into_iter()
-            .map(|family| hac_family_name(family).to_string())
-            .collect()
+    fn families(&self) -> PyResult<Vec<String>> {
+        catch_internal_panic(|| {
+            Ok(self
+                .inner
+                .families()
+                .into_iter()
+                .map(|family| hac_family_name(family).to_string())
+                .collect())
+        })
     }
 
     #[pyo3(signature = (data, clip_eps=1e-12))]
@@ -1888,12 +2300,7 @@ impl PyHierarchicalArchimedeanCopula {
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_log_pdf(py, &self.inner, data, clip_eps)
     }
 
     #[pyo3(signature = (data, clip_eps=1e-12))]
@@ -1903,12 +2310,13 @@ impl PyHierarchicalArchimedeanCopula {
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .composite_log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        catch_internal_panic(|| {
+            let data = pseudo_obs_from_py(data)?;
+            let options = eval_options(clip_eps);
+            let model = &self.inner;
+            let values = detached(py, || model.composite_log_pdf(&data, &options))?;
+            Ok(values.into_pyarray(py))
+        })
     }
 
     #[pyo3(signature = (n, seed=None))]
@@ -1916,21 +2324,46 @@ impl PyHierarchicalArchimedeanCopula {
         &self,
         py: Python<'py>,
         n: usize,
-        seed: Option<u64>,
+        seed: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_sample(py, &self.inner, n, seed)
+    }
+
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {
+        Ok((slf.get_type(), (slf.get().to_json()?,)))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __eq__(&self, other: PyRef<'_, Self>) -> PyResult<bool> {
+        json_equal!(&self.inner, &other.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        let families = self.inner.families();
+        format!(
+            "_HierarchicalArchimedeanCopula(dim={}, families={}, parameters={})",
+            self.inner.dim(),
+            fmt_names(
+                families.iter().map(|family| hac_family_name(*family)),
+                families.len()
+            ),
+            fmt_vector(&self.inner.parameters())
+        )
     }
 }
 
 #[pyclass(
     skip_from_py_object,
     module = "rscopulas._rscopulas",
-    name = "_FactorCopula"
+    name = "_FactorCopula",
+    frozen
 )]
 #[derive(Clone)]
 struct PyFactorCopula {
@@ -1939,6 +2372,11 @@ struct PyFactorCopula {
 
 #[pymethods]
 impl PyFactorCopula {
+    #[new]
+    fn new(payload: &str) -> PyResult<Self> {
+        Self::from_json(payload)
+    }
+
     /// Construct a `Basic1F` factor copula from a list of link dictionaries.
     /// Each dict follows the same schema used elsewhere in the Python API —
     /// `{"family": str, "rotation": str, "parameters": [floats]}` — so users
@@ -1946,26 +2384,29 @@ impl PyFactorCopula {
     #[staticmethod]
     #[pyo3(signature = (links, quadrature_nodes=25, *, adaptive_quadrature=true, quadrature_max_nodes=4096, quadrature_rel_tol=1e-7))]
     fn from_links(
+        py: Python<'_>,
         links: &Bound<'_, PyList>,
         quadrature_nodes: usize,
         adaptive_quadrature: bool,
         quadrature_max_nodes: usize,
         quadrature_rel_tol: f64,
     ) -> PyResult<Self> {
-        let specs: Vec<rscopulas::PairCopulaSpec> = links
-            .iter()
-            .map(|item| pair_spec_from_py_dict(item.cast::<PyDict>()?))
-            .collect::<PyResult<Vec<_>>>()?;
-        FactorCopula::basic_1f(specs, quadrature_nodes)
-            .and_then(|model| {
-                model.with_quadrature(FactorQuadrature {
-                    adaptive: adaptive_quadrature,
-                    max_nodes: quadrature_max_nodes,
-                    rel_tol: quadrature_rel_tol,
-                })
-            })
-            .map(|inner| Self { inner })
-            .map_err(to_pyerr)
+        catch_internal_panic(|| {
+            let specs: Vec<PairCopulaSpec> = links
+                .iter()
+                .map(|item| pair_spec_from_py_dict(item.cast::<PyDict>()?))
+                .collect::<PyResult<Vec<_>>>()?;
+            let quadrature = FactorQuadrature {
+                adaptive: adaptive_quadrature,
+                max_nodes: quadrature_max_nodes,
+                rel_tol: quadrature_rel_tol,
+            };
+            let inner = detached(py, move || {
+                FactorCopula::basic_1f(specs, quadrature_nodes)
+                    .and_then(|model| model.with_quadrature(quadrature))
+            })?;
+            Ok(Self { inner })
+        })
     }
 
     #[staticmethod]
@@ -1987,6 +2428,7 @@ impl PyFactorCopula {
         quadrature_rel_tol=1e-7
     ))]
     fn fit(
+        py: Python<'_>,
         data: PyReadonlyArray2<'_, f64>,
         family_set: Option<Vec<String>>,
         include_rotations: bool,
@@ -2030,7 +2472,7 @@ impl PyFactorCopula {
                 model,
                 diagnostics,
                 std_errors,
-            } = FactorCopula::fit(&data, &options).map_err(to_pyerr)?;
+            } = detached(py, || FactorCopula::fit(&data, &options))?;
             Ok((Self { inner: model }, diagnostics.into(), std_errors))
         })
     }
@@ -2040,17 +2482,16 @@ impl PyFactorCopula {
     /// cross-version comparison provided both sides are on matching rscopulas
     /// minor versions.
     fn to_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.inner).map_err(|err| {
-            PyValueError::new_err(format!("failed to serialize factor copula: {err}"))
-        })
+        json_string!(&self.inner, "factor copula")
     }
 
     #[staticmethod]
     fn from_json(payload: &str) -> PyResult<Self> {
-        let inner: FactorCopula = serde_json::from_str(payload).map_err(|err| {
-            PyValueError::new_err(format!("failed to deserialize factor copula: {err}"))
-        })?;
-        Ok(Self { inner })
+        catch_internal_panic(|| {
+            Ok(Self {
+                inner: parse_json!(FactorCopula, payload, "factor copula")?,
+            })
+        })
     }
 
     #[getter]
@@ -2095,11 +2536,13 @@ impl PyFactorCopula {
     /// Layout matches the vine/HAC conventions so downstream tooling can share
     /// serialization code.
     fn links<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
-        for link in self.inner.links() {
-            list.append(pair_spec_to_py(py, link)?)?;
-        }
-        Ok(list)
+        catch_internal_panic(|| {
+            let list = PyList::empty(py);
+            for link in self.inner.links() {
+                list.append(pair_spec_to_py(py, link)?)?;
+            }
+            Ok(list)
+        })
     }
 
     #[pyo3(signature = (data, clip_eps=1e-12))]
@@ -2109,12 +2552,7 @@ impl PyFactorCopula {
         data: PyReadonlyArray2<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let data = pseudo_obs_from_py(data)?;
-        let values = self
-            .inner
-            .log_pdf(&data, &eval_options(clip_eps))
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_log_pdf(py, &self.inner, data, clip_eps)
     }
 
     #[pyo3(signature = (n, seed=None))]
@@ -2122,19 +2560,73 @@ impl PyFactorCopula {
         &self,
         py: Python<'py>,
         n: usize,
-        seed: Option<u64>,
+        seed: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let mut rng = rng_from_seed(seed);
-        let values = self
-            .inner
-            .sample(n, &mut rng, &sample_options())
-            .map_err(to_pyerr)?;
-        Ok(values.into_pyarray(py))
+        model_sample(py, &self.inner, n, seed)
     }
+
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {
+        Ok((slf.get_type(), (slf.get().to_json()?,)))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __eq__(&self, other: PyRef<'_, Self>) -> PyResult<bool> {
+        json_equal!(&self.inner, &other.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        let links = self.inner.links();
+        format!(
+            "_FactorCopula(dim={}, layout='{}', links={})",
+            self.inner.dim(),
+            factor_layout_name(self.inner.layout()),
+            fmt_names(
+                links.iter().map(|link| pair_family_name(link.family)),
+                links.len()
+            )
+        )
+    }
+}
+
+/// Draws an `(n, d)` matrix of uniforms from the same seeded Rust generator
+/// that `sample` uses, clipped away from 0 and 1 exactly like the core
+/// samplers. `VineCopula.sample_conditional` uses this so that a seed gives
+/// the same draws independently of NumPy's global random state.
+#[pyfunction]
+#[pyo3(signature = (n, d, seed=None))]
+fn uniform_matrix<'py>(
+    py: Python<'py>,
+    n: usize,
+    d: usize,
+    seed: Option<&Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    catch_internal_panic(|| {
+        positive_count(n, "n")?;
+        let mut rng = rng_from_seed(seed_from_py(seed)?);
+        let values = py.detach(move || {
+            let mut matrix = Array2::<f64>::zeros((n, d));
+            for value in matrix.iter_mut() {
+                *value = rng
+                    .random::<f64>()
+                    .clamp(UNIFORM_CLIP_EPS, 1.0 - UNIFORM_CLIP_EPS);
+            }
+            matrix
+        });
+        Ok(values.into_pyarray(py))
+    })
 }
 
 #[pymodule]
 fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+
     module.add("RscopulasError", py.get_type::<RscopulasError>())?;
     module.add("InvalidInputError", py.get_type::<InvalidInputError>())?;
     module.add("ModelFitError", py.get_type::<ModelFitError>())?;
@@ -2156,5 +2648,7 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyVineCopula>()?;
     module.add_class::<PyHierarchicalArchimedeanCopula>()?;
     module.add_class::<PyFactorCopula>()?;
+
+    module.add_function(wrap_pyfunction!(uniform_matrix, module)?)?;
     Ok(())
 }

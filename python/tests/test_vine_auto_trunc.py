@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rscopulas import GaussianCopula, VineCopula
+from rscopulas import GaussianCopula, InvalidInputError, ModelFitError, VineCopula
 
 # Family kernels and default family selection are tested separately.
 FAMILIES = ["independence", "gaussian"]
@@ -58,7 +58,7 @@ def test_fit_r_mbicv_accepts_custom_psi0() -> None:
 
 def test_fit_r_rejects_invalid_mbicv_psi0() -> None:
     data = _weak_chain_sample(6, 500, seed=11)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidInputError, match="psi0"):
         VineCopula.fit_r(data, family_set=FAMILIES, criterion="mbicv:1.5", select_trunc_lvl=True)
 
 
@@ -92,11 +92,55 @@ def test_fit_r_random_weighted_is_reproducible() -> None:
 
 def test_fit_c_rejects_non_kruskal() -> None:
     data = _correlated_sample(4, 200, seed=29)
-    with pytest.raises(Exception):
+    with pytest.raises(ModelFitError, match="tree_algorithm"):
         VineCopula.fit_c(data, tree_algorithm="prim")
 
 
 def test_fit_d_rejects_non_kruskal() -> None:
     data = _correlated_sample(4, 200, seed=31)
-    with pytest.raises(Exception):
+    with pytest.raises(ModelFitError, match="tree_algorithm"):
         VineCopula.fit_d(data, tree_algorithm="prim")
+
+
+def _n_independence_edges(model: VineCopula) -> int:
+    return sum(edge.family == "independence" for tree in model.trees for edge in tree.edges)
+
+
+def test_independence_test_level_reaches_the_fitter() -> None:
+    # Fix the C-vine order (order[0] is the first-tree hub) and stop after the
+    # first tree so the structure is identical across fits and only the
+    # per-edge independence decision moves. Hub 0 is strongly tied to columns
+    # 1-2 and nearly independent of columns 3-5.
+    data = _weak_chain_sample(6, 800, seed=37)
+    order = [0, 1, 2, 3, 4, 5]
+    kwargs = dict(family_set=["gaussian", "clayton"], order=order, truncation_level=1)
+    plain = VineCopula.fit_c(data, **kwargs).model
+    loose = VineCopula.fit_c(data, independence_test_level=0.05, **kwargs).model
+    strict = VineCopula.fit_c(data, independence_test_level=1e-6, **kwargs).model
+    assert _n_independence_edges(strict) >= _n_independence_edges(loose) >= _n_independence_edges(plain)
+    assert _n_independence_edges(strict) >= 1
+    # The strongly dependent edges around the anchor must survive the test.
+    assert any(edge.family != "independence" for edge in strict.trees[0].edges)
+
+    assert VineCopula.fit_d(data, independence_test_level=0.05, family_set=FAMILIES).model.dim == 6
+    assert VineCopula.fit_r(data, independence_test_level=0.05, family_set=FAMILIES).model.dim == 6
+    for fitter in (VineCopula.fit_c, VineCopula.fit_d, VineCopula.fit_r):
+        with pytest.raises(InvalidInputError, match="independence_test_level"):
+            fitter(data, family_set=FAMILIES, independence_test_level=1.0)
+
+
+CORE_DEFAULT_FAMILIES = {
+    "independence", "gaussian", "student_t", "clayton", "frank", "gumbel", "joe", "bb1", "bb7",
+}
+
+
+def test_default_family_set_follows_the_core_default() -> None:
+    # `family_set=None` must delegate to `VineFitOptions::default()`; the
+    # binding keeps no list of its own, so khoudraji/tll never sneak in.
+    data = _correlated_sample(4, 300, seed=41)
+    families = set()
+    for fitter in (VineCopula.fit_c, VineCopula.fit_d, VineCopula.fit_r):
+        model = fitter(data).model
+        families |= {edge.family for tree in model.trees for edge in tree.edges}
+    assert families
+    assert families <= CORE_DEFAULT_FAMILIES

@@ -47,11 +47,11 @@ Evaluate the log-density of the copula at each row of `data`.
 Draw `n` pseudo-observations from the copula.
 
 <ParamField body="n" type="int" required>
-  Number of samples to draw.
+  Number of samples to draw. Must be a positive `int` (NumPy integers are accepted); a float raises `TypeError` and `n < 1` raises `InvalidInputError`.
 </ParamField>
 
 <ParamField body="seed" type="int | None" default="None">
-  Random seed for reproducibility. Pass `None` for a non-deterministic draw.
+  Random seed for reproducibility: `None` for a non-deterministic draw, otherwise an integer in `[0, 2**64)` (negative or larger values raise `InvalidInputError`, non-integers `TypeError`). The same seed reproduces the draw regardless of NumPy's global random state, because sampling uses a seeded Rust generator.
 </ParamField>
 
 <ResponseField name="return" type="ndarray[float64]">
@@ -69,6 +69,41 @@ Draw `n` pseudo-observations from the copula.
 <ResponseField name="family" type="str">
   Family name string, e.g. `"gaussian"`, `"student_t"`, `"clayton"`.
 </ResponseField>
+
+### Serialization and copying
+
+Every model class in rscopulas — the six classes on this page plus `VineCopula`, `FactorCopula`, and `PairCopula` — shares the same persistence and value protocols.
+
+#### `to_json() → str` and `Model.from_json(payload) → Model`
+
+Serialize the model to a JSON string that mirrors the Rust `serde` representation, and rebuild it with the class method. Payloads are validated on load: malformed or out-of-range state (for example a negative Clayton `theta` or a non-positive-definite correlation matrix) raises `InvalidInputError`. Vine payloads carry a `format_version`, and unversioned payloads are rejected.
+
+#### `pickle`, `copy.copy`, `copy.deepcopy`
+
+Models pickle with any protocol and copy independently; a restored model reproduces `log_pdf` and seeded `sample` output exactly. (Fitted TLL pair-copula grids are re-normalized on load and agree to floating-point rounding.)
+
+#### `==` and `repr`
+
+`==` compares the serialized state, so a model equals its pickled or JSON round trip and differs from a model with other parameters or of another class. Models are deliberately unhashable. `repr` shows the class, family, dimension, and key parameters, truncated for large models:
+
+```python
+>>> GaussianCopula.from_params([[1.0, 0.5], [0.5, 1.0]])
+GaussianCopula(family='gaussian', dim=2, correlation=[[1, 0.5], [0.5, 1]])
+```
+
+```python
+import copy
+import pickle
+
+model = ClaytonCopula.from_params(dim=3, theta=1.5)
+assert pickle.loads(pickle.dumps(model)) == model
+assert copy.deepcopy(model) == model
+assert ClaytonCopula.from_json(model.to_json()) == model
+```
+
+### Threads
+
+Fitting, `log_pdf`, and `sample` release the GIL while the Rust core works, so other Python threads keep running during long fits, and a fitted model can be used from several threads at once.
 
 ---
 

@@ -32,6 +32,16 @@
 - You supply **pseudo-observations**; the library does **not** fit marginals for you.
 - Each entry must satisfy `0 < u < 1` (strict).
 - Workflow: transform raw data to uniforms → build `PseudoObs` / NumPy `float64` arrays → `fit` → `log_pdf` / `sample`.
+- In Python, `rscopulas.to_pseudo_obs(x, ties="average", scaling="n+1")` rank-transforms a raw `(n, d)` matrix (or a 1-D vector) into valid pseudo-observations; ties follow `scipy.stats.rankdata` semantics (`average`, `min`, `max`, `ordinal`) and NaN is rejected with a clear error.
+
+```python
+import numpy as np
+from rscopulas import GaussianCopula, to_pseudo_obs
+
+raw = np.random.default_rng(0).standard_normal((500, 3))
+u = to_pseudo_obs(raw)  # rank / (n + 1) per column, ties averaged
+fit = GaussianCopula.fit(u)
+```
 
 ## Quick start — Python
 
@@ -297,6 +307,11 @@ print("log_pdf:", model.log_pdf(u1, u2))
 
 - Models: `GaussianCopula`, `StudentTCopula`, Archimedean families, `HierarchicalArchimedeanCopula`, `VineCopula`, `PairCopula`.
 - `fit(...)` returns `FitResult` with `model` and `diagnostics` (`loglik`, `aic`, `bic`, `converged`, `n_iter`).
+- Every model supports `to_json()` / `from_json()`, `pickle`, `copy.deepcopy`, `==`, and a truncated `repr`.
+- Compute-bound calls (fitting, `log_pdf`, `sample`, Rosenblatt transforms) release the GIL, so other Python threads keep running during long fits.
+- Errors: `RscopulasError` is the base class; `InvalidInputError` is also a `ValueError` (bad values, unknown family strings, dimension mismatches); `ModelFitError`, `NumericalError`, `BackendError`, and `InternalError` cover the rest — see [docs/python.md](docs/python.md#exceptions).
+- Seeds: `seed=` must be `None` or an integer in `[0, 2**64)`; a seed reproduces draws (including `VineCopula.sample_conditional`) independently of NumPy's global RNG.
+- The package ships `py.typed`, a type stub for the compiled extension, and `rscopulas.__version__`.
 - Python uses `ExecPolicy::Auto` internally; GPU/device selection is not exposed yet.
 
 ## Current status

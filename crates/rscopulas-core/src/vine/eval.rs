@@ -25,12 +25,7 @@ impl VineCopula {
         clip_eps: f64,
     ) -> Result<Vec<f64>, CopulaError> {
         crate::data::validate_clip_eps(clip_eps)?;
-        if data.dim() != self.dim {
-            return Err(FitError::Failed {
-                reason: "input dimension does not match vine dimension",
-            }
-            .into());
-        }
+        crate::data::validate_dim(self.dim, data.dim())?;
 
         let runtime = self.compiled_runtime()?;
         let view = data.as_view();

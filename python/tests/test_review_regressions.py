@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from rscopulas import FactorCopula, HierarchicalArchimedeanCopula, NumericalError
+from rscopulas import FactorCopula, HierarchicalArchimedeanCopula, ModelFitError, NumericalError
 
 
 def test_factor_integration_controls_apply_to_fitting_and_round_trip():
@@ -44,5 +44,5 @@ def test_factor_tail_observations_do_not_abort_the_batch(family, theta):
 def test_hac_rejects_unused_monte_carlo_budget():
     tree = {"family": "clayton", "theta": 1.0, "children": [0, 1]}
     model = HierarchicalArchimedeanCopula.from_tree(tree)
-    with pytest.raises(Exception, match="mc_samples must be zero"):
+    with pytest.raises(ModelFitError, match="mc_samples must be zero"):
         HierarchicalArchimedeanCopula.fit(model.sample(20, seed=7), tree=tree, mc_samples=256)

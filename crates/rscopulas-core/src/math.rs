@@ -442,6 +442,381 @@ where
     (x, best, completed, false)
 }
 
+/// Outcome of a bounded scalar maximisation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScalarMaximum {
+    /// Location of the best point found.
+    pub x: f64,
+    /// Objective value at `x` (`-inf` if no finite value was encountered).
+    pub value: f64,
+    /// Number of objective evaluations consumed, including the start point.
+    pub evaluations: usize,
+    /// Whether the bracket around `x` shrank below the requested tolerance
+    /// before the iteration cap was reached.
+    pub converged: bool,
+}
+
+/// Bounded scalar maximisation of `f` on `[low, high]` with Brent's method
+/// (parabolic interpolation safeguarded by golden-section steps).
+///
+/// `start`, when strictly inside the bracket, seeds the search so that a good
+/// warm start (for example a Kendall-τ inversion) is refined rather than
+/// rediscovered; the returned value is never worse than `f(start)`. The
+/// search stops once the bracket around the incumbent is narrower than `tol`
+/// (absolute, plus a `1e-10·|x|` relative term) or after `max_iter`
+/// additional objective evaluations. Non-finite objective values are treated
+/// as arbitrarily bad, so the search backs away from invalid regions instead
+/// of propagating NaNs.
+pub fn maximize_scalar_brent<F>(
+    low: f64,
+    high: f64,
+    start: Option<f64>,
+    tol: f64,
+    max_iter: usize,
+    mut f: F,
+) -> ScalarMaximum
+where
+    F: FnMut(f64) -> f64,
+{
+    // Brent's `localmin` minimises; negate the objective and map non-finite
+    // values to +inf so comparisons stay total.
+    let mut g = |x: f64| {
+        let value = f(x);
+        if value.is_finite() {
+            -value
+        } else {
+            f64::INFINITY
+        }
+    };
+    let (mut a, mut b) = if low <= high {
+        (low, high)
+    } else {
+        (high, low)
+    };
+    let golden = 0.5 * (3.0 - 5.0_f64.sqrt());
+    let mut x = match start {
+        Some(seed) if seed.is_finite() && seed > a && seed < b => seed,
+        _ => a + golden * (b - a),
+    };
+    let mut w = x;
+    let mut v = x;
+    let mut fx = g(x);
+    let mut fw = fx;
+    let mut fv = fx;
+    let mut evaluations = 1usize;
+    let mut d = 0.0_f64;
+    let mut e = 0.0_f64;
+    let mut converged = false;
+
+    for _ in 0..max_iter {
+        let xm = 0.5 * (a + b);
+        let tol1 = 1e-10 * x.abs() + tol;
+        let tol2 = 2.0 * tol1;
+        if (x - xm).abs() <= tol2 - 0.5 * (b - a) {
+            converged = true;
+            break;
+        }
+        let mut golden_step = true;
+        if e.abs() > tol1 && fx.is_finite() && fw.is_finite() && fv.is_finite() {
+            // Parabola through (x, fx), (w, fw), (v, fv).
+            let r = (x - w) * (fx - fv);
+            let mut q = (x - v) * (fx - fw);
+            let mut p = (x - v) * q - (x - w) * r;
+            q = 2.0 * (q - r);
+            if q > 0.0 {
+                p = -p;
+            } else {
+                q = -q;
+            }
+            let previous = e;
+            e = d;
+            if p.abs() < (0.5 * q * previous).abs() && p > q * (a - x) && p < q * (b - x) {
+                d = p / q;
+                let u = x + d;
+                if u - a < tol2 || b - u < tol2 {
+                    d = if xm - x >= 0.0 { tol1 } else { -tol1 };
+                }
+                golden_step = false;
+            }
+        }
+        if golden_step {
+            e = if x >= xm { a - x } else { b - x };
+            d = golden * e;
+        }
+        let u = if d.abs() >= tol1 {
+            x + d
+        } else if d >= 0.0 {
+            x + tol1
+        } else {
+            x - tol1
+        };
+        let fu = g(u);
+        evaluations += 1;
+        if fu <= fx {
+            if u >= x {
+                a = x;
+            } else {
+                b = x;
+            }
+            v = w;
+            fv = fw;
+            w = x;
+            fw = fx;
+            x = u;
+            fx = fu;
+        } else {
+            if u < x {
+                a = u;
+            } else {
+                b = u;
+            }
+            if fu <= fw || w == x {
+                v = w;
+                fv = fw;
+                w = u;
+                fw = fu;
+            } else if fu <= fv || v == x || v == w {
+                v = u;
+                fv = fu;
+            }
+        }
+    }
+
+    ScalarMaximum {
+        x,
+        value: if fx.is_finite() {
+            -fx
+        } else {
+            f64::NEG_INFINITY
+        },
+        evaluations,
+        converged,
+    }
+}
+
+/// Tuning knobs for [`nelder_mead_maximize`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NelderMeadOptions {
+    /// Edge length of the initial simplex along every coordinate.
+    pub initial_step: f64,
+    /// Absolute tolerance on the spread of objective values across the
+    /// simplex vertices.
+    pub ftol: f64,
+    /// Absolute tolerance on the simplex diameter (max-norm distance from the
+    /// best vertex).
+    pub xtol: f64,
+    /// Cap on the number of simplex iterations, summed over restarts.
+    pub max_iter: usize,
+    /// Number of times the simplex is rebuilt around the incumbent (with a
+    /// halved step) after convergence, to escape degenerate simplices.
+    pub restarts: usize,
+}
+
+/// Outcome of [`nelder_mead_maximize`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct NelderMeadResult {
+    /// Best point found (inside the bounds).
+    pub x: Vec<f64>,
+    /// Objective value at `x` (`-inf` if no finite value was encountered).
+    pub value: f64,
+    /// Simplex iterations consumed over all restarts.
+    pub iterations: usize,
+    /// Objective evaluations consumed over all restarts.
+    pub evaluations: usize,
+    /// Whether the final simplex met both tolerances before the cap.
+    pub converged: bool,
+}
+
+/// Bounded Nelder–Mead maximisation of `f` starting from `x0`.
+///
+/// Trial points are projected onto the box `bounds`, non-finite objective
+/// values are treated as arbitrarily bad, and the incumbent is never replaced
+/// by a worse point, so the result is guaranteed to be at least as good as
+/// `f(x0)`. After each convergence the simplex is rebuilt around the incumbent
+/// with a halved step (up to `restarts` times) and the search resumes; a
+/// restart that fails to improve the objective by more than `ftol` ends the
+/// run early. This is intended as a polish for low-dimensional likelihoods
+/// that already have a grid or moment-based warm start.
+pub fn nelder_mead_maximize<F>(
+    x0: &[f64],
+    bounds: &[(f64, f64)],
+    options: &NelderMeadOptions,
+    mut f: F,
+) -> NelderMeadResult
+where
+    F: FnMut(&[f64]) -> f64,
+{
+    assert_eq!(x0.len(), bounds.len(), "one bound per coordinate");
+    let n = x0.len();
+    let project = |x: &mut [f64]| {
+        for (value, (low, high)) in x.iter_mut().zip(bounds) {
+            *value = value.clamp(*low, *high);
+        }
+    };
+    let mut evaluations = 0usize;
+    let mut g = |x: &[f64]| {
+        evaluations += 1;
+        let value = f(x);
+        if value.is_finite() {
+            -value
+        } else {
+            f64::INFINITY
+        }
+    };
+
+    let mut best_x = x0.to_vec();
+    project(&mut best_x);
+    let mut best_g = g(&best_x);
+    if n == 0 {
+        return NelderMeadResult {
+            x: best_x,
+            value: if best_g.is_finite() {
+                -best_g
+            } else {
+                f64::NEG_INFINITY
+            },
+            iterations: 0,
+            evaluations,
+            converged: true,
+        };
+    }
+
+    let mut iterations = 0usize;
+    let mut converged = false;
+    let mut step = options.initial_step.abs().max(f64::EPSILON);
+    for restart in 0..=options.restarts {
+        // Build the simplex around the incumbent, flipping the step direction
+        // when the forward point would leave the box.
+        let mut simplex: Vec<(Vec<f64>, f64)> = Vec::with_capacity(n + 1);
+        simplex.push((best_x.clone(), best_g));
+        for i in 0..n {
+            let mut vertex = best_x.clone();
+            let forward = vertex[i] + step;
+            vertex[i] = if forward <= bounds[i].1 {
+                forward
+            } else {
+                vertex[i] - step
+            };
+            project(&mut vertex);
+            let value = g(&vertex);
+            simplex.push((vertex, value));
+        }
+        let restart_start = best_g;
+        converged = false;
+
+        while iterations < options.max_iter {
+            iterations += 1;
+            simplex.sort_by(|left, right| left.1.total_cmp(&right.1));
+            let f_spread = simplex[n].1 - simplex[0].1;
+            let x_spread = simplex[1..]
+                .iter()
+                .flat_map(|(vertex, _)| {
+                    vertex.iter().zip(&simplex[0].0).map(|(a, b)| (a - b).abs())
+                })
+                .fold(0.0_f64, f64::max);
+            // An infinite spread means the validity boundary crosses the
+            // simplex; once the simplex has collapsed there is nothing left
+            // to resolve at this tolerance.
+            if x_spread <= options.xtol && (f_spread <= options.ftol || !f_spread.is_finite()) {
+                converged = true;
+                break;
+            }
+
+            let mut centroid = vec![0.0; n];
+            for (vertex, _) in &simplex[..n] {
+                for (c, v) in centroid.iter_mut().zip(vertex) {
+                    *c += v / n as f64;
+                }
+            }
+            let worst = simplex[n].clone();
+            let mut reflected: Vec<f64> = centroid
+                .iter()
+                .zip(&worst.0)
+                .map(|(c, w)| c + (c - w))
+                .collect();
+            project(&mut reflected);
+            let g_reflected = g(&reflected);
+
+            if g_reflected < simplex[0].1 {
+                let mut expanded: Vec<f64> = centroid
+                    .iter()
+                    .zip(&reflected)
+                    .map(|(c, r)| c + 2.0 * (r - c))
+                    .collect();
+                project(&mut expanded);
+                let g_expanded = g(&expanded);
+                simplex[n] = if g_expanded < g_reflected {
+                    (expanded, g_expanded)
+                } else {
+                    (reflected, g_reflected)
+                };
+            } else if g_reflected < simplex[n - 1].1 {
+                simplex[n] = (reflected, g_reflected);
+            } else {
+                let (mut contracted, threshold): (Vec<f64>, f64) = if g_reflected < worst.1 {
+                    (
+                        centroid
+                            .iter()
+                            .zip(&reflected)
+                            .map(|(c, r)| c + 0.5 * (r - c))
+                            .collect(),
+                        g_reflected,
+                    )
+                } else {
+                    (
+                        centroid
+                            .iter()
+                            .zip(&worst.0)
+                            .map(|(c, w)| c + 0.5 * (w - c))
+                            .collect(),
+                        worst.1,
+                    )
+                };
+                project(&mut contracted);
+                let g_contracted = g(&contracted);
+                if g_contracted <= threshold && g_contracted < worst.1 {
+                    simplex[n] = (contracted, g_contracted);
+                } else {
+                    let best_vertex = simplex[0].0.clone();
+                    for (vertex, value) in simplex.iter_mut().skip(1) {
+                        for (v, b) in vertex.iter_mut().zip(&best_vertex) {
+                            *v = b + 0.5 * (*v - b);
+                        }
+                        project(vertex);
+                        *value = g(vertex);
+                    }
+                }
+            }
+        }
+
+        simplex.sort_by(|left, right| left.1.total_cmp(&right.1));
+        if simplex[0].1 < best_g {
+            best_g = simplex[0].1;
+            best_x = simplex[0].0.clone();
+        }
+        if iterations >= options.max_iter {
+            break;
+        }
+        // Stop restarting once a rebuilt simplex no longer buys anything.
+        if restart > 0 && restart_start - best_g <= options.ftol {
+            break;
+        }
+        step *= 0.5;
+    }
+
+    NelderMeadResult {
+        x: best_x,
+        value: if best_g.is_finite() {
+            -best_g
+        } else {
+            f64::NEG_INFINITY
+        },
+        iterations,
+        evaluations,
+        converged,
+    }
+}
+
 /// Numerical Hessian via central differences.
 ///
 /// Computes
@@ -513,9 +888,137 @@ mod tests {
     use ndarray::array;
 
     use super::{
-        cholesky, coord_ascent_maximise, gauss_legendre_01, log_determinant_from_cholesky,
+        NelderMeadOptions, cholesky, coord_ascent_maximise, gauss_legendre_01,
+        log_determinant_from_cholesky, maximize_scalar_brent, nelder_mead_maximize,
         numerical_hessian, quadratic_form_from_cholesky,
     };
+
+    #[test]
+    fn brent_refines_a_warm_start_to_tolerance() {
+        let f = |x: f64| -(x - 1.3).powi(2) + 0.25;
+        let result = maximize_scalar_brent(-5.0, 5.0, Some(0.0), 1e-10, 200, f);
+        assert!(result.converged);
+        assert!((result.x - 1.3).abs() < 1e-7, "x = {}", result.x);
+        assert!((result.value - 0.25).abs() < 1e-12);
+        assert!(result.value >= f(0.0));
+        // Golden section needs ~50 evaluations to shrink a width-10 bracket
+        // to 1e-10; parabolic steps land on the optimum much earlier and the
+        // remainder is spent certifying the bracket.
+        assert!(
+            result.evaluations < 40,
+            "evaluations = {}",
+            result.evaluations
+        );
+    }
+
+    #[test]
+    fn brent_backs_away_from_non_finite_regions() {
+        let f = |x: f64| {
+            if x < 0.0 {
+                f64::NAN
+            } else {
+                -(x - 0.5).powi(2)
+            }
+        };
+        let result = maximize_scalar_brent(-2.0, 2.0, Some(-1.0), 1e-9, 200, f);
+        assert!((result.x - 0.5).abs() < 1e-6, "x = {}", result.x);
+        assert!(result.value.is_finite());
+    }
+
+    #[test]
+    fn brent_honours_the_iteration_cap() {
+        let result = maximize_scalar_brent(-5.0, 5.0, None, 1e-12, 3, |x| -(x * x));
+        assert_eq!(result.evaluations, 4);
+        assert!(!result.converged);
+        assert!(result.value.is_finite());
+    }
+
+    #[test]
+    fn brent_clamps_an_out_of_bracket_start() {
+        let result = maximize_scalar_brent(0.0, 1.0, Some(7.0), 1e-9, 100, |x| -(x - 0.25).powi(2));
+        assert!((result.x - 0.25).abs() < 1e-6);
+    }
+
+    fn nm_options() -> NelderMeadOptions {
+        NelderMeadOptions {
+            initial_step: 0.25,
+            ftol: 1e-10,
+            xtol: 1e-7,
+            max_iter: 500,
+            restarts: 2,
+        }
+    }
+
+    #[test]
+    fn nelder_mead_finds_quadratic_maximum() {
+        // argmax of -((x - 1.5)^2 + 2 (y + 0.5)^2 + 0.6 x y) solves the linear
+        // system 2(x - 1.5) + 0.6 y = 0, 4(y + 0.5) + 0.6 x = 0.
+        let f =
+            |x: &[f64]| -((x[0] - 1.5).powi(2) + 2.0 * (x[1] + 0.5).powi(2) + 0.6 * x[0] * x[1]);
+        let det = 2.0 * 4.0 - 0.6 * 0.6;
+        let x_star = (3.0 * 4.0 - 0.6 * (-2.0)) / det;
+        let y_star = (2.0 * (-2.0) - 0.6 * 3.0) / det;
+        let result =
+            nelder_mead_maximize(&[0.0, 0.0], &[(-5.0, 5.0), (-5.0, 5.0)], &nm_options(), f);
+        assert!(result.converged);
+        assert!((result.x[0] - x_star).abs() < 1e-5, "x = {:?}", result.x);
+        assert!((result.x[1] - y_star).abs() < 1e-5, "x = {:?}", result.x);
+        assert!(result.value >= f(&[0.0, 0.0]));
+        assert!(result.iterations <= 500);
+    }
+
+    #[test]
+    fn nelder_mead_respects_bounds_and_never_regresses() {
+        let f = |x: &[f64]| -((x[0] - 3.0).powi(2) + (x[1] + 4.0).powi(2));
+        let result =
+            nelder_mead_maximize(&[0.5, 0.5], &[(-1.0, 1.0), (-1.0, 1.0)], &nm_options(), f);
+        assert!(result.x[0] <= 1.0 && result.x[0] >= -1.0);
+        assert!(result.x[1] <= 1.0 && result.x[1] >= -1.0);
+        assert!((result.x[0] - 1.0).abs() < 1e-5, "x = {:?}", result.x);
+        assert!((result.x[1] + 1.0).abs() < 1e-5, "x = {:?}", result.x);
+        assert!(result.value >= f(&[0.5, 0.5]));
+    }
+
+    #[test]
+    fn nelder_mead_survives_invalid_regions_and_iteration_caps() {
+        let f = |x: &[f64]| {
+            if x[0] + x[1] > 1.0 {
+                f64::NAN
+            } else {
+                -((x[0] - 0.9).powi(2) + (x[1] - 0.9).powi(2))
+            }
+        };
+        let result =
+            nelder_mead_maximize(&[0.0, 0.0], &[(-2.0, 2.0), (-2.0, 2.0)], &nm_options(), f);
+        assert!(result.value.is_finite());
+        assert!(result.x[0] + result.x[1] <= 1.0 + 1e-9);
+        assert!(
+            (result.x[0] + result.x[1] - 1.0).abs() < 1e-4,
+            "x = {:?}",
+            result.x
+        );
+
+        let capped = nelder_mead_maximize(
+            &[0.0, 0.0],
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            &NelderMeadOptions {
+                max_iter: 5,
+                ..nm_options()
+            },
+            |x: &[f64]| -(x[0] * x[0] + x[1] * x[1]),
+        );
+        assert!(capped.iterations <= 5);
+        assert!(!capped.converged);
+        assert!(capped.value >= -0.0);
+    }
+
+    #[test]
+    fn nelder_mead_handles_empty_input() {
+        let result = nelder_mead_maximize(&[], &[], &nm_options(), |_: &[f64]| 4.0);
+        assert!(result.x.is_empty());
+        assert_eq!(result.value, 4.0);
+        assert!(result.converged);
+    }
 
     #[test]
     fn gauss_legendre_integrates_polynomials_exactly() {
