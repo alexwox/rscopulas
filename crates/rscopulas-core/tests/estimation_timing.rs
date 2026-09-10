@@ -103,6 +103,7 @@ fn default_r_vine_fit_timing_d4_n800() {
         PairCopulaFamily::Joe,
         PairCopulaFamily::Bb1,
         PairCopulaFamily::Bb7,
+        PairCopulaFamily::Khoudraji,
     ] {
         let single = VineFitOptions {
             family_set: vec![family],

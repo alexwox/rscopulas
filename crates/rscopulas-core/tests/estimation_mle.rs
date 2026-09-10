@@ -456,3 +456,60 @@ fn negative_frank_spec_evaluates_consistently_through_the_public_api() {
         tau[(0, 1)]
     );
 }
+
+#[test]
+fn khoudraji_fit_is_never_worse_than_the_r_joint_mle_on_the_reference_fixture() {
+    // `copula::fitCopula` maximised the joint likelihood of an
+    // Independence (x) Clayton Khoudraji copula in (theta, shape_1, shape_2)
+    // on these 96 rows. rscopulas additionally selects the base pair, so the
+    // model it returns must be at least as good as R's under both the raw
+    // likelihood and the AIC used for that selection. (The optimiser's
+    // agreement with R for the *same* base pair is pinned by a unit test in
+    // `paircopula::common`.)
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/reference/r-copula/v1_1_3/khoudraji_fit_case01.json");
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("fixture should exist"))
+            .expect("fixture should deserialize");
+    let rows = fixture["input_pobs"].as_array().expect("input_pobs");
+    let u1: Vec<f64> = rows.iter().map(|row| row[0].as_f64().unwrap()).collect();
+    let u2: Vec<f64> = rows.iter().map(|row| row[1].as_f64().unwrap()).collect();
+    let expected_theta = fixture["expected_theta"].as_f64().unwrap();
+    let expected_shapes = (
+        fixture["expected_shape_1"].as_f64().unwrap(),
+        fixture["expected_shape_2"].as_f64().unwrap(),
+    );
+
+    let r_solution = PairCopulaSpec::khoudraji(
+        PairCopulaSpec::independence(),
+        spec(F::Clayton, P::One(expected_theta)),
+        expected_shapes.0,
+        expected_shapes.1,
+    )
+    .expect("R solution should be a valid spec");
+    let r_loglik = loglik(&r_solution, &u1, &u2);
+    let r_aic = 2.0 * r_solution.parameter_count() as f64 - 2.0 * r_loglik;
+
+    let fit = fit_pair_copula(&u1, &u2, &single_family_options(F::Khoudraji))
+        .expect("khoudraji fit should succeed");
+    let P::Khoudraji(ref params) = fit.spec.params else {
+        panic!("expected khoudraji parameters");
+    };
+    println!(
+        "khoudraji fixture: fitted {:?} loglik {} aic {} vs R loglik {r_loglik} aic {r_aic} (theta {expected_theta}, shapes {expected_shapes:?})",
+        fit.spec, fit.loglik, fit.aic
+    );
+    fit.spec.validate().expect("fitted spec must validate");
+    assert!((0.0..=1.0).contains(&params.shape_first));
+    assert!((0.0..=1.0).contains(&params.shape_second));
+    assert!(
+        fit.loglik >= r_loglik - LOGLIK_SLACK,
+        "fitted loglik {} must reach R's joint MLE {r_loglik}",
+        fit.loglik
+    );
+    assert!(
+        fit.aic <= r_aic + 2.0 * LOGLIK_SLACK,
+        "selected model's AIC {} must not lose to R's model {r_aic}",
+        fit.aic
+    );
+}

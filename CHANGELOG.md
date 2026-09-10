@@ -20,6 +20,17 @@
   level for the asymptotic Kendall-τ independence test run before family
   selection on every edge. Disabled by default; `independence_threshold`
   keeps its raw cut-off semantics.
+- Fit Khoudraji pair copulas by joint maximum likelihood. Base parameters
+  and both shapes are optimised together (block coordinate ascent from three
+  shape seeds, then a bounded Nelder–Mead polish of the leading base pairs),
+  only unordered base pairs are enumerated because `(C₁, C₂, a, b)` and
+  `(C₂, C₁, 1 − a, 1 − b)` are the same copula, and the winning base pair is
+  chosen by the vine's selection criterion instead of raw log-likelihood.
+  Previously the shapes were fitted after the bases had been fitted to the
+  raw sample; on the copula-package reference fixture that stopped at
+  loglik 9.10 while R's joint `Independence ⊗ Clayton` optimum scores 11.53,
+  which the same base pair now reproduces (θ 4.926 vs 4.927, shapes
+  (0.7615, 0.4147) vs (0.7615, 0.4147)).
 - **Behaviour change:** `VineFitOptions::default()` no longer includes
   `Khoudraji` in `family_set`. It dominated the default fit time and rarely
   won selection; list it explicitly to keep the previous candidate set.

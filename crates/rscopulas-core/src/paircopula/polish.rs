@@ -272,12 +272,15 @@ pub(crate) fn fit_brackets(family: PairCopulaFamily) -> Vec<(f64, f64)> {
     }
 }
 
-fn logit(p: f64) -> f64 {
+/// Logit map used for parameters confined to (0, 1); clamps away from the
+/// endpoints so exact 0/1 inputs stay finite.
+pub(crate) fn logit(p: f64) -> f64 {
     let p = p.clamp(1e-12, 1.0 - 1e-12);
     (p / (1.0 - p)).ln()
 }
 
-fn inv_logit(x: f64) -> f64 {
+/// Inverse of [`logit`], evaluated without overflow for large |x|.
+pub(crate) fn inv_logit(x: f64) -> f64 {
     if x >= 0.0 {
         1.0 / (1.0 + (-x).exp())
     } else {
