@@ -208,6 +208,70 @@ pub(crate) fn encode_jacobian(spec: &PairCopulaSpec) -> Vec<f64> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pair-fit encoding.
+//
+// The sequential pair fitter polishes every parametric family jointly, which
+// for Student-t means ν must move as well. The factor polish above
+// deliberately holds ν fixed (its quadrature objective is nearly flat in ν),
+// so the pair-fit path gets its own encoding that appends `ln ν` for
+// Student-t and delegates to the shared encoding for every other family.
+// ---------------------------------------------------------------------------
+
+/// Largest |ρ| the pair-fit decoder emits for elliptical families. Keeps the
+/// Gaussian/Student-t kernels away from the `|ρ| = 1` singularity while
+/// still admitting τ ≈ 0.9999.
+const FIT_RHO_MAX: f64 = 1.0 - 1e-8;
+
+/// Unconstrained coordinates used by the pair-fit polish; `encode_params`
+/// plus `ln ν` for Student-t.
+pub(crate) fn encode_fit_params(spec: &PairCopulaSpec) -> Vec<f64> {
+    match (spec.family, &spec.params) {
+        (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
+            vec![rho.clamp(-FIT_RHO_MAX, FIT_RHO_MAX).atanh(), nu.ln()]
+        }
+        _ => encode_params(spec),
+    }
+}
+
+/// Inverse of [`encode_fit_params`]. Student-t decodes `(tanh x, exp y)`
+/// with ν clamped to [`super::student_t::NU_RANGE`]; every other family uses
+/// `decode_params`.
+pub(crate) fn decode_fit_params(template: &PairCopulaSpec, values: &[f64]) -> PairCopulaSpec {
+    match template.family {
+        PairCopulaFamily::StudentT => {
+            assert_eq!(
+                values.len(),
+                2,
+                "StudentT pair fit expects two unconstrained values (ρ, ν)"
+            );
+            let (nu_min, nu_max) = super::student_t::NU_RANGE;
+            PairCopulaSpec {
+                family: template.family,
+                rotation: template.rotation,
+                params: PairCopulaParams::Two(
+                    values[0].tanh().clamp(-FIT_RHO_MAX, FIT_RHO_MAX),
+                    values[1].exp().clamp(nu_min, nu_max),
+                ),
+            }
+        }
+        _ => decode_params(template, values),
+    }
+}
+
+/// Search box (in unconstrained space) matching [`encode_fit_params`].
+pub(crate) fn fit_brackets(family: PairCopulaFamily) -> Vec<(f64, f64)> {
+    match family {
+        PairCopulaFamily::StudentT => {
+            let (nu_min, nu_max) = super::student_t::NU_RANGE;
+            // tanh(±10) ≈ ±(1 − 4e-9) — wider than the decoder clamp so the
+            // box never binds before the clamp does.
+            vec![(-10.0, 10.0), (nu_min.ln(), nu_max.ln())]
+        }
+        _ => encode_brackets(family),
+    }
+}
+
 fn logit(p: f64) -> f64 {
     let p = p.clamp(1e-12, 1.0 - 1e-12);
     (p / (1.0 - p)).ln()

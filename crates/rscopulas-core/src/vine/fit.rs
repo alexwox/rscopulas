@@ -90,7 +90,26 @@ pub struct VineFitOptions {
     pub truncation_level: Option<usize>,
     /// Optional absolute-dependence threshold (in the current tree
     /// criterion's units) for selecting Independence at an edge.
+    ///
+    /// When set, an edge whose `|tree_criterion|` value is at or below the
+    /// threshold is assigned the independence copula without running family
+    /// selection. This is a raw cut-off that ignores the sample size; see
+    /// [`independence_test_level`](Self::independence_test_level) for the
+    /// sample-size-aware alternative. Both checks may be enabled at once, in
+    /// which case either one can trigger independence.
     pub independence_threshold: Option<f64>,
+    /// Optional significance level `alpha` for the asymptotic Kendall-τ
+    /// independence test applied before family selection on every edge.
+    ///
+    /// Under independence, `τ · sqrt(9 n (n − 1) / (2 (2 n + 5)))` is
+    /// asymptotically standard normal, so independence is rejected when that
+    /// statistic exceeds `z_{1 − alpha/2}` in absolute value; otherwise the
+    /// edge is assigned the independence copula (this matches vinecopulib's
+    /// `select_bicop` pre-test). `None` (the default) disables the test and
+    /// leaves the pre-0.4 behaviour unchanged; `alpha` must lie in `(0, 1)`.
+    /// The test always uses Kendall's τ regardless of `tree_criterion`.
+    #[serde(default)]
+    pub independence_test_level: Option<f64>,
     /// Measure used to weight edges in the candidate-edge graph.
     pub tree_criterion: TreeCriterion,
     /// Algorithm used to build each tree from the weighted candidate graph.
@@ -114,6 +133,7 @@ impl Default for VineFitOptions {
             criterion: SelectionCriterion::Aic,
             truncation_level: None,
             independence_threshold: None,
+            independence_test_level: None,
             tree_criterion: TreeCriterion::Tau,
             tree_algorithm: TreeAlgorithm::Kruskal,
             select_trunc_lvl: false,
@@ -130,6 +150,9 @@ impl VineFitOptions {
             || self
                 .independence_threshold
                 .is_some_and(|t| !t.is_finite() || !(0.0..=1.0).contains(&t))
+            || self
+                .independence_test_level
+                .is_some_and(|alpha| !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0)
             || matches!(self.criterion, SelectionCriterion::Mbicv { psi0 } if !psi0.is_finite() || psi0 <= 0.0 || psi0 >= 1.0)
         {
             return Err(FitError::Failed {

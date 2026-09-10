@@ -1,17 +1,20 @@
 use serde::{Deserialize, Serialize};
 
+use statrs::distribution::{ContinuousCDF, Normal};
+
 use crate::{
     backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
     domain::ExecPolicy,
     errors::{BackendError, CopulaError, FitError},
-    math::maximize_scalar,
+    math::{NelderMeadOptions, maximize_scalar_brent, nelder_mead_maximize},
     vine::{SelectionCriterion, VineFitOptions},
 };
 
 pub use super::tll::{TllOrder, TllParams};
 use super::{
-    bb1, bb6, bb7, bb8, clayton, frank, gaussian, gumbel, joe, khoudraji, rotated, student_t, tawn,
-    tll,
+    bb1, bb6, bb7, bb8, clayton, frank, gaussian, gumbel, joe, khoudraji,
+    polish::{decode_fit_params, encode_fit_params, fit_brackets},
+    rotated, student_t, tawn, tll,
 };
 
 /// Supported bivariate pair-copula families for vine edges.
@@ -195,7 +198,10 @@ impl PairCopulaSpec {
             (F::StudentT, P::Two(rho, nu)) => {
                 rho.is_finite() && rho.abs() < 1.0 && nu.is_finite() && *nu > 0.0
             }
-            (F::Clayton | F::Frank, P::One(theta)) => theta.is_finite() && *theta > 0.0,
+            (F::Clayton, P::One(theta)) => theta.is_finite() && *theta > 0.0,
+            // Frank covers the whole real line; θ = 0 is independence and has
+            // its own family.
+            (F::Frank, P::One(theta)) => theta.is_finite() && *theta != 0.0,
             (F::Gumbel | F::Joe, P::One(theta)) => theta.is_finite() && *theta >= 1.0,
             (F::Bb1, P::Two(theta, delta)) => {
                 theta.is_finite() && *theta > 0.0 && delta.is_finite() && *delta >= 1.0
@@ -352,6 +358,14 @@ impl PairCopulaSpec {
     /// Evaluates the pair-copula log-density at `(u1, u2)`.
     pub fn log_pdf(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
         self.validate_evaluation(u1, u2, clip_eps)?;
+        self.log_pdf_validated(u1, u2, clip_eps)
+    }
+
+    /// [`log_pdf`](Self::log_pdf) without the per-call input and parameter
+    /// validation. The pair-fit optimisers validate the sample once and the
+    /// candidate spec per objective evaluation, so they skip the per-row
+    /// checks here.
+    fn log_pdf_validated(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
         let ((x1, x2), rotation) = rotated::to_base_inputs(self.rotation, u1, u2, clip_eps);
         let base = match (self.family, &self.params) {
             (PairCopulaFamily::Independence, PairCopulaParams::None) => 0.0,
@@ -763,9 +777,7 @@ impl PairCopulaSpec {
             (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
                 clayton::cdf(u1, u2, *theta)
             }
-            (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
-                Ok(frank_cdf_stable(u1, u2, *theta).clamp(0.0, 1.0))
-            }
+            (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => frank::cdf(u1, u2, *theta),
             (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => gumbel::cdf(u1, u2, *theta),
             (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => joe::cdf(u1, u2, *theta),
             (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
@@ -800,43 +812,6 @@ impl PairCopulaSpec {
             .into()),
         }
     }
-}
-
-// Numerically stable Frank bivariate CDF. The naive evaluation suffers the
-// same cancellation as the legacy density: for large θ and u, v away from 0
-// all exponentials underflow to 1, and the ratio of differences collapses.
-// We rewrite the argument of the log in terms of (T1 + T2)/(1 - e^{-θ})
-// using the same identity employed by the density.
-fn frank_cdf_stable(u1: f64, u2: f64, theta: f64) -> f64 {
-    if !theta.is_finite() || theta <= 0.0 {
-        return u1 * u2;
-    }
-    // log(1 - e^{-x}) helper — inlined to avoid extra module boundary.
-    let log_one_minus_exp_neg = |x: f64| -> f64 {
-        if x.is_nan() || x <= 0.0 {
-            return f64::NEG_INFINITY;
-        }
-        if x > std::f64::consts::LN_2 {
-            (-((-x).exp())).ln_1p()
-        } else {
-            (-((-x).exp_m1())).ln()
-        }
-    };
-    let logsumexp2 = |a: f64, b: f64| -> f64 {
-        if a == f64::NEG_INFINITY {
-            return b;
-        }
-        if b == f64::NEG_INFINITY {
-            return a;
-        }
-        let m = a.max(b);
-        m + ((a - m).exp() + (b - m).exp()).ln()
-    };
-    let log_t1 = -theta * u1 + log_one_minus_exp_neg(theta * u2);
-    let log_t2 = -theta * u2 + log_one_minus_exp_neg(theta * (1.0 - u2));
-    let log_den = logsumexp2(log_t1, log_t2);
-    let log_d = log_one_minus_exp_neg(theta);
-    (log_d - log_den) / theta
 }
 
 pub(super) fn integrate_1d<F: Fn(f64) -> Result<f64, CopulaError>>(
@@ -909,6 +884,17 @@ pub fn fit_pair_copula(
             return finalize_pair_fit(PairCopulaSpec::independence(), u1, u2, options);
         }
     }
+    if let Some(alpha) = options.independence_test_level {
+        if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
+            return Err(FitError::Failed {
+                reason: "invalid independence test level",
+            }
+            .into());
+        }
+        if !crate::stats::kendall_tau_rejects_independence(tau, u1.len(), alpha) {
+            return finalize_pair_fit(PairCopulaSpec::independence(), u1, u2, options);
+        }
+    }
 
     let mut candidates = Vec::new();
     for family in &options.family_set {
@@ -919,6 +905,7 @@ pub fn fit_pair_copula(
                 u1,
                 u2,
                 tau,
+                options.base.clip_eps,
                 options.base.max_iter,
             ) {
                 Ok(spec) => spec,
@@ -1065,28 +1052,96 @@ fn candidate_rotations(
     }
 }
 
+/// Absolute tolerance (in natural parameter units) for the scalar searches
+/// that finish a one-parameter fit.
+const SCALAR_TOL: f64 = 1e-8;
+/// Looser tolerance for the inner searches of a two-parameter grid warm
+/// start. The joint polish that follows refines the result, so the warm
+/// start only needs to land in the right basin.
+const WARM_START_TOL: f64 = 1e-4;
+/// Tolerance for the Khoudraji shape coordinate searches.
+const KHOUDRAJI_SHAPE_TOL: f64 = 1e-4;
+/// Largest |ρ| the Gaussian MLE may return. Keeps `1 − ρ²` away from zero
+/// while still representing near-comonotone data.
+const GAUSSIAN_RHO_MAX: f64 = 1.0 - 1e-9;
+/// |ρ| bracket for the Student-t grid warm start; the joint polish may move
+/// closer to ±1 afterwards.
+const STUDENT_T_RHO_MAX: f64 = 0.9999;
+/// Below this |τ| Frank's τ inversion is numerically meaningless, so the fit
+/// starts from a small positive θ instead.
+const FRANK_TAU_FLOOR: f64 = 1e-10;
+
 fn fit_family_with_rotation(
     family: PairCopulaFamily,
     rotation: Rotation,
     u1: &[f64],
     u2: &[f64],
-    _tau: f64,
+    tau: f64,
+    clip_eps: f64,
     max_iter: usize,
 ) -> Result<PairCopulaSpec, CopulaError> {
     if family == PairCopulaFamily::Khoudraji {
-        return fit_khoudraji_with_rotation(rotation, u1, u2, _tau, max_iter);
+        return fit_khoudraji_with_rotation(rotation, u1, u2, tau, clip_eps, max_iter);
     }
 
-    let transformed = rotated::transform_sample(rotation, u1, u2);
-    let x1 = &transformed.0;
-    let x2 = &transformed.1;
-    let transformed_tau = rotated_tau(rotation, _tau);
+    let (x1, x2) = clipped_transform(rotation, u1, u2, clip_eps);
+    let transformed_tau = rotated_tau(rotation, tau);
 
-    fit_simple_family(family, transformed_tau, x1, x2, max_iter).map(|params| PairCopulaSpec {
-        family,
-        rotation,
-        params,
+    fit_simple_family(family, transformed_tau, &x1, &x2, clip_eps, max_iter).map(|params| {
+        PairCopulaSpec {
+            family,
+            rotation,
+            params,
+        }
     })
+}
+
+/// Rotates the sample into the base orientation and clips it exactly as the
+/// scoring pass in `finalize_pair_fit` does, so the optimisers and the
+/// reported log-likelihood evaluate the same objective.
+fn clipped_transform(
+    rotation: Rotation,
+    u1: &[f64],
+    u2: &[f64],
+    clip_eps: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    let (mut x1, mut x2) = rotated::transform_sample(rotation, u1, u2);
+    for value in x1.iter_mut().chain(x2.iter_mut()) {
+        *value = value.clamp(clip_eps, 1.0 - clip_eps);
+    }
+    (x1, x2)
+}
+
+/// Log-likelihood of a rotation-free candidate on an already rotated and
+/// clipped sample. Any non-finite row makes the whole objective `-inf`,
+/// mirroring how `finalize_pair_fit` scores candidates, so the optimisers
+/// never trade a valid fit for a numerically broken one.
+struct PairObjective<'a> {
+    family: PairCopulaFamily,
+    x1: &'a [f64],
+    x2: &'a [f64],
+    clip_eps: f64,
+}
+
+impl PairObjective<'_> {
+    fn loglik(&self, params: PairCopulaParams) -> f64 {
+        let spec = PairCopulaSpec {
+            family: self.family,
+            rotation: Rotation::R0,
+            params,
+        };
+        if spec.validate().is_err() {
+            return f64::NEG_INFINITY;
+        }
+        let mut total = 0.0;
+        for (&u, &v) in self.x1.iter().zip(self.x2) {
+            match spec.log_pdf_validated(u, v, self.clip_eps) {
+                Ok(value) if value.is_finite() => total += value,
+                _ => return f64::NEG_INFINITY,
+            }
+        }
+        total
+    }
 }
 
 fn fit_simple_family(
@@ -1094,208 +1149,128 @@ fn fit_simple_family(
     tau: f64,
     x1: &[f64],
     x2: &[f64],
+    clip_eps: f64,
     max_iter: usize,
 ) -> Result<PairCopulaParams, CopulaError> {
-    let search_iterations = max_iter.clamp(16, 64);
+    let objective = PairObjective {
+        family,
+        x1,
+        x2,
+        clip_eps,
+    };
     let params = match family {
         PairCopulaFamily::Independence => PairCopulaParams::None,
-        PairCopulaFamily::Gaussian => {
-            let rho = gaussian::tau_to_rho(tau);
-            PairCopulaParams::One(rho.clamp(-1.0 + f64::EPSILON, 1.0 - f64::EPSILON))
-        }
+        PairCopulaFamily::Gaussian => fit_gaussian_mle(tau, x1, x2, max_iter),
         PairCopulaFamily::StudentT => {
-            let mut best = None;
-            let mut best_loglik = f64::NEG_INFINITY;
+            // Grid warm start over ν. The t-quantiles depend on ν only, so
+            // each grid point inverts the CDF once and runs a cheap scalar
+            // search over ρ on the cached quantiles. The joint (ρ, ν) polish
+            // then makes ν continuous.
             let rho_seed = gaussian::tau_to_rho(tau).clamp(-0.95, 0.95);
+            let mut best: Option<(f64, f64, f64)> = None;
             for nu in student_t::candidate_nus() {
-                let rho = maximize_scalar(-0.98, 0.98, search_iterations, |rho| {
-                    x1.iter()
-                        .zip(x2.iter())
-                        .map(|(&u, &v)| {
-                            student_t::log_pdf(u, v, rho, nu).unwrap_or(f64::NEG_INFINITY)
-                        })
-                        .sum::<f64>()
-                });
-                let rho = if rho.is_finite() { rho } else { rho_seed };
-                let loglik = x1
-                    .iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| student_t::log_pdf(u, v, rho, nu).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>();
-                if loglik > best_loglik {
-                    best_loglik = loglik;
-                    best = Some((rho, nu));
+                let Ok(terms) = student_t::NuTerms::new(x1, x2, nu) else {
+                    continue;
+                };
+                let search = maximize_scalar_brent(
+                    -STUDENT_T_RHO_MAX,
+                    STUDENT_T_RHO_MAX,
+                    Some(rho_seed),
+                    SCALAR_TOL,
+                    max_iter,
+                    |rho| terms.loglik(rho),
+                );
+                if search.value.is_finite() && best.is_none_or(|(_, _, value)| search.value > value)
+                {
+                    best = Some((search.x, nu, search.value));
                 }
             }
-            let (rho, nu) = best.ok_or(FitError::Failed {
+            let (rho, nu, _) = best.ok_or(FitError::Failed {
                 reason: "student t pair fit failed",
             })?;
-            PairCopulaParams::Two(rho, nu)
+            polish_two_parameter(&objective, PairCopulaParams::Two(rho, nu), max_iter)
         }
         PairCopulaFamily::Clayton => {
             let init = clayton::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1e-6, upper, search_iterations, |theta| {
-                x1.iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| clayton::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>()
-            });
-            PairCopulaParams::One(theta)
+            one_parameter_mle(&objective, 1e-6, upper, init, max_iter)?
         }
         PairCopulaFamily::Frank => {
-            let init = frank::theta_from_tau(tau)?;
-            let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1e-6, upper, search_iterations, |theta| {
-                x1.iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| frank::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>()
-            });
-            PairCopulaParams::One(theta)
+            // θ and τ share their sign, so the search runs on the half-line
+            // matching τ and never crosses the excluded θ = 0.
+            let init = if tau.abs() < FRANK_TAU_FLOOR {
+                1e-3
+            } else {
+                frank::theta_from_tau(tau)?
+            };
+            let upper = (init.abs() * 4.0 + 2.0).max(20.0);
+            if init < 0.0 {
+                one_parameter_mle(&objective, -upper, -1e-6, init, max_iter)?
+            } else {
+                one_parameter_mle(&objective, 1e-6, upper, init, max_iter)?
+            }
         }
         PairCopulaFamily::Gumbel => {
             let init = gumbel::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1.0 + 1e-6, upper, search_iterations, |theta| {
-                x1.iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| gumbel::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>()
-            });
-            PairCopulaParams::One(theta)
+            one_parameter_mle(&objective, 1.0 + 1e-6, upper, init, max_iter)?
         }
         PairCopulaFamily::Joe => {
             let init = joe::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
-            let theta = maximize_scalar(1.0 + 1e-6, upper, search_iterations, |theta| {
-                x1.iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| joe::log_pdf(u, v, theta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>()
-            });
-            PairCopulaParams::One(theta)
+            one_parameter_mle(&objective, 1.0 + 1e-6, upper, init, max_iter)?
         }
         PairCopulaFamily::Bb1 => {
-            // 2-parameter family (θ > 0, δ ≥ 1). Mirrors the Student-t fit
-            // pattern: coarse outer grid over δ (the tail-dependence
-            // ingredient) with an inner 1-D MLE over θ (the Clayton
-            // ingredient), initialised from the closed-form τ relation
-            // τ = 1 - 2 / (δ(θ+2)) so each δ starts near a reasonable θ.
-            let mut best = None;
-            let mut best_loglik = f64::NEG_INFINITY;
-            for &delta in &[1.05_f64, 1.25, 1.5, 2.0, 3.0, 5.0] {
-                // Warm-start θ from τ if τ allows, otherwise fall back to
-                // the midpoint of the search bracket.
-                let init_theta = bb1::params_from_tau(tau, delta).unwrap_or(1.0);
-                let upper = (init_theta * 4.0 + 2.0).max(10.0);
-                let theta = maximize_scalar(1e-4, upper, search_iterations, |theta| {
-                    x1.iter()
-                        .zip(x2.iter())
-                        .map(|(&u, &v)| {
-                            bb1::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
-                        })
-                        .sum::<f64>()
-                });
-                let loglik = x1
-                    .iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| bb1::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>();
-                if loglik > best_loglik {
-                    best_loglik = loglik;
-                    best = Some((theta, delta));
-                }
-            }
-            let (theta, delta) = best.ok_or(FitError::Failed {
-                reason: "bb1 pair fit failed",
-            })?;
-            PairCopulaParams::Two(theta, delta)
+            // 2-parameter family (θ > 0, δ ≥ 1). Coarse outer grid over δ
+            // (the tail-dependence ingredient) with an inner 1-D search over
+            // θ (the Clayton ingredient), initialised from the closed-form τ
+            // relation τ = 1 - 2 / (δ(θ+2)) so each δ starts near a
+            // reasonable θ, followed by the joint polish.
+            let start = two_parameter_warm_start(
+                &objective,
+                &[1.05_f64, 1.25, 1.5, 2.0, 3.0, 5.0],
+                |delta| {
+                    let init_theta = bb1::params_from_tau(tau, delta).unwrap_or(1.0);
+                    (1e-4, (init_theta * 4.0 + 2.0).max(10.0), Some(init_theta))
+                },
+                max_iter,
+                "bb1 pair fit failed",
+            )?;
+            polish_two_parameter(&objective, start, max_iter)
         }
         PairCopulaFamily::Bb6 => {
             // θ ≥ 1, δ ≥ 1 — Joe-Gumbel blend. τ has no closed form so we
-            // just coarse-grid δ and maximise over θ in [1+ε, 20].
-            let mut best = None;
-            let mut best_loglik = f64::NEG_INFINITY;
-            for &delta in &[1.05_f64, 1.25, 1.5, 2.0, 3.0, 5.0] {
-                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
-                    x1.iter()
-                        .zip(x2.iter())
-                        .map(|(&u, &v)| {
-                            bb6::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
-                        })
-                        .sum::<f64>()
-                });
-                let loglik = x1
-                    .iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| bb6::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>();
-                if loglik > best_loglik {
-                    best_loglik = loglik;
-                    best = Some((theta, delta));
-                }
-            }
-            let (theta, delta) = best.ok_or(FitError::Failed {
-                reason: "bb6 pair fit failed",
-            })?;
-            PairCopulaParams::Two(theta, delta)
+            // just coarse-grid δ and search θ in [1+ε, 20] before polishing.
+            let start = two_parameter_warm_start(
+                &objective,
+                &[1.05_f64, 1.25, 1.5, 2.0, 3.0, 5.0],
+                |_| (1.0 + 1e-6, 20.0, None),
+                max_iter,
+                "bb6 pair fit failed",
+            )?;
+            polish_two_parameter(&objective, start, max_iter)
         }
         PairCopulaFamily::Bb7 => {
             // θ ≥ 1, δ > 0 — Joe-Clayton blend.
-            let mut best = None;
-            let mut best_loglik = f64::NEG_INFINITY;
-            for &delta in &[0.25_f64, 0.5, 1.0, 2.0, 4.0, 8.0] {
-                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
-                    x1.iter()
-                        .zip(x2.iter())
-                        .map(|(&u, &v)| {
-                            bb7::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
-                        })
-                        .sum::<f64>()
-                });
-                let loglik = x1
-                    .iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| bb7::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>();
-                if loglik > best_loglik {
-                    best_loglik = loglik;
-                    best = Some((theta, delta));
-                }
-            }
-            let (theta, delta) = best.ok_or(FitError::Failed {
-                reason: "bb7 pair fit failed",
-            })?;
-            PairCopulaParams::Two(theta, delta)
+            let start = two_parameter_warm_start(
+                &objective,
+                &[0.25_f64, 0.5, 1.0, 2.0, 4.0, 8.0],
+                |_| (1.0 + 1e-6, 20.0, None),
+                max_iter,
+                "bb7 pair fit failed",
+            )?;
+            polish_two_parameter(&objective, start, max_iter)
         }
         PairCopulaFamily::Bb8 => {
             // θ ≥ 1, δ ∈ (0, 1] — Joe-Frank blend.
-            let mut best = None;
-            let mut best_loglik = f64::NEG_INFINITY;
-            for &delta in &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6] {
-                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
-                    x1.iter()
-                        .zip(x2.iter())
-                        .map(|(&u, &v)| {
-                            bb8::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY)
-                        })
-                        .sum::<f64>()
-                });
-                let loglik = x1
-                    .iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| bb8::log_pdf(u, v, theta, delta).unwrap_or(f64::NEG_INFINITY))
-                    .sum::<f64>();
-                if loglik > best_loglik {
-                    best_loglik = loglik;
-                    best = Some((theta, delta));
-                }
-            }
-            let (theta, delta) = best.ok_or(FitError::Failed {
-                reason: "bb8 pair fit failed",
-            })?;
-            PairCopulaParams::Two(theta, delta)
+            let start = two_parameter_warm_start(
+                &objective,
+                &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6],
+                |_| (1.0 + 1e-6, 20.0, None),
+                max_iter,
+                "bb8 pair fit failed",
+            )?;
+            polish_two_parameter(&objective, start, max_iter)
         }
         PairCopulaFamily::Tll => {
             // Nonparametric — no scalar optimisation. Fit directly from the
@@ -1307,37 +1282,15 @@ fn fit_simple_family(
         PairCopulaFamily::Tawn1 | PairCopulaFamily::Tawn2 => {
             // Tawn1 has β = 1 fixed; Tawn2 has α = 1 fixed. In both cases the
             // free parameters are (θ, ψ) with θ ≥ 1 and ψ ∈ [0, 1]. Outer
-            // grid over ψ, inner MLE over θ — same pattern as BB6/7/8.
-            let is_tawn1 = matches!(family, PairCopulaFamily::Tawn1);
-            let mut best = None;
-            let mut best_loglik = f64::NEG_INFINITY;
-            for &psi in &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6] {
-                let theta = maximize_scalar(1.0 + 1e-6, 20.0, search_iterations, |theta| {
-                    x1.iter()
-                        .zip(x2.iter())
-                        .map(|(&u, &v)| {
-                            let (alpha, beta) = if is_tawn1 { (psi, 1.0) } else { (1.0, psi) };
-                            tawn::log_pdf(u, v, theta, alpha, beta).unwrap_or(f64::NEG_INFINITY)
-                        })
-                        .sum::<f64>()
-                });
-                let loglik = x1
-                    .iter()
-                    .zip(x2.iter())
-                    .map(|(&u, &v)| {
-                        let (alpha, beta) = if is_tawn1 { (psi, 1.0) } else { (1.0, psi) };
-                        tawn::log_pdf(u, v, theta, alpha, beta).unwrap_or(f64::NEG_INFINITY)
-                    })
-                    .sum::<f64>();
-                if loglik > best_loglik {
-                    best_loglik = loglik;
-                    best = Some((theta, psi));
-                }
-            }
-            let (theta, psi) = best.ok_or(FitError::Failed {
-                reason: "tawn pair fit failed",
-            })?;
-            PairCopulaParams::Two(theta, psi)
+            // grid over ψ, inner search over θ — same pattern as BB6/7/8.
+            let start = two_parameter_warm_start(
+                &objective,
+                &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6],
+                |_| (1.0 + 1e-6, 20.0, None),
+                max_iter,
+                "tawn pair fit failed",
+            )?;
+            polish_two_parameter(&objective, start, max_iter)
         }
         PairCopulaFamily::Khoudraji => {
             return Err(FitError::Failed {
@@ -1349,18 +1302,142 @@ fn fit_simple_family(
     Ok(params)
 }
 
+/// Gaussian pair MLE. The summed log-density collapses to a function of the
+/// three sufficient statistics `Σz₁²`, `Σz₂²`, `Σz₁z₂`, so the profile is
+/// essentially free to evaluate; it is maximised over `atanh ρ` with Brent's
+/// method, warm-started at the Kendall-τ inversion `ρ = sin(πτ/2)`. The
+/// result is never worse than that start.
+fn fit_gaussian_mle(tau: f64, x1: &[f64], x2: &[f64], max_iter: usize) -> PairCopulaParams {
+    let normal = Normal::new(0.0, 1.0).expect("standard normal parameters should be valid");
+    let (mut s11, mut s22, mut s12) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for (&u, &v) in x1.iter().zip(x2) {
+        let z1 = normal.inverse_cdf(u);
+        let z2 = normal.inverse_cdf(v);
+        s11 += z1 * z1;
+        s22 += z2 * z2;
+        s12 += z1 * z2;
+    }
+    let n = x1.len() as f64;
+    let profile = |t: f64| {
+        let rho = t.tanh();
+        let one_minus = 1.0 - rho * rho;
+        if one_minus.is_nan() || one_minus <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        -0.5 * n * one_minus.ln() - (rho * rho * (s11 + s22) - 2.0 * rho * s12) / (2.0 * one_minus)
+    };
+
+    let rho_start = gaussian::tau_to_rho(tau).clamp(-GAUSSIAN_RHO_MAX, GAUSSIAN_RHO_MAX);
+    let t_start = rho_start.atanh();
+    let t_max = GAUSSIAN_RHO_MAX.atanh();
+    let search = maximize_scalar_brent(-t_max, t_max, Some(t_start), 1e-10, max_iter, profile);
+    let rho = if search.value.is_finite() && search.value >= profile(t_start) {
+        search.x.tanh()
+    } else {
+        rho_start
+    };
+    PairCopulaParams::One(rho.clamp(-GAUSSIAN_RHO_MAX, GAUSSIAN_RHO_MAX))
+}
+
+/// Bracketed scalar MLE for a one-parameter family, warm-started at the
+/// moment-based `init` and stopped by tolerance or `max_iter`.
+fn one_parameter_mle(
+    objective: &PairObjective<'_>,
+    low: f64,
+    high: f64,
+    init: f64,
+    max_iter: usize,
+) -> Result<PairCopulaParams, CopulaError> {
+    let search = maximize_scalar_brent(low, high, Some(init), SCALAR_TOL, max_iter, |theta| {
+        objective.loglik(PairCopulaParams::One(theta))
+    });
+    if !search.value.is_finite() {
+        return Err(FitError::Failed {
+            reason: "pair-copula likelihood is not finite at any candidate",
+        }
+        .into());
+    }
+    Ok(PairCopulaParams::One(search.x))
+}
+
+/// Coarse warm start for a two-parameter family: for every value of the
+/// second parameter in `grid`, run a loosely converged scalar search over the
+/// first parameter inside the `(low, high, start)` bracket returned by
+/// `bracket`, and keep the best pair.
+fn two_parameter_warm_start<B>(
+    objective: &PairObjective<'_>,
+    grid: &[f64],
+    bracket: B,
+    max_iter: usize,
+    failure: &'static str,
+) -> Result<PairCopulaParams, CopulaError>
+where
+    B: Fn(f64) -> (f64, f64, Option<f64>),
+{
+    let mut best: Option<(f64, f64, f64)> = None;
+    for &second in grid {
+        let (low, high, start) = bracket(second);
+        let search = maximize_scalar_brent(low, high, start, WARM_START_TOL, max_iter, |first| {
+            objective.loglik(PairCopulaParams::Two(first, second))
+        });
+        if search.value.is_finite() && best.is_none_or(|(_, _, value)| search.value > value) {
+            best = Some((search.x, second, search.value));
+        }
+    }
+    let (first, second, _) = best.ok_or(FitError::Failed { reason: failure })?;
+    Ok(PairCopulaParams::Two(first, second))
+}
+
+/// Joint maximisation of a two-parameter family from a warm start, run with
+/// Nelder–Mead in the unconstrained space of `polish.rs`. Returns the warm
+/// start unchanged if the polish does not improve on it or produces an
+/// invalid spec, so the fitted log-likelihood never regresses.
+fn polish_two_parameter(
+    objective: &PairObjective<'_>,
+    start: PairCopulaParams,
+    max_iter: usize,
+) -> PairCopulaParams {
+    let template = PairCopulaSpec {
+        family: objective.family,
+        rotation: Rotation::R0,
+        params: start.clone(),
+    };
+    let x0 = encode_fit_params(&template);
+    let bounds = fit_brackets(objective.family);
+    if x0.len() != 2 || bounds.len() != 2 {
+        return start;
+    }
+    let start_value = objective.loglik(start.clone());
+    if !start_value.is_finite() {
+        return start;
+    }
+    let options = NelderMeadOptions {
+        initial_step: 0.2,
+        ftol: 1e-8 * (1.0 + start_value.abs()),
+        xtol: 1e-6,
+        max_iter,
+        restarts: 1,
+    };
+    let result = nelder_mead_maximize(&x0, &bounds, &options, |x| {
+        objective.loglik(decode_fit_params(&template, x).params)
+    });
+    let polished = decode_fit_params(&template, &result.x);
+    if result.value.is_finite() && result.value >= start_value && polished.validate().is_ok() {
+        polished.params
+    } else {
+        start
+    }
+}
+
 fn fit_khoudraji_with_rotation(
     rotation: Rotation,
     u1: &[f64],
     u2: &[f64],
     tau: f64,
+    clip_eps: f64,
     max_iter: usize,
 ) -> Result<PairCopulaSpec, CopulaError> {
-    let base_fit_iterations = max_iter.clamp(8, 16);
-    let shape_iterations = max_iter.clamp(8, 12);
-    let transformed = rotated::transform_sample(rotation, u1, u2);
-    let x1 = &transformed.0;
-    let x2 = &transformed.1;
+    let (x1, x2) = clipped_transform(rotation, u1, u2, clip_eps);
     let tau = rotated_tau(rotation, tau);
     let base_families = [
         PairCopulaFamily::Independence,
@@ -1371,7 +1448,7 @@ fn fit_khoudraji_with_rotation(
     ];
     let mut base_specs = Vec::new();
     for family in base_families {
-        let params = fit_simple_family(family, tau, x1, x2, base_fit_iterations)?;
+        let params = fit_simple_family(family, tau, &x1, &x2, clip_eps, max_iter)?;
         base_specs.push(PairCopulaSpec {
             family,
             rotation: Rotation::R0,
@@ -1384,7 +1461,7 @@ fn fit_khoudraji_with_rotation(
     for first in &base_specs {
         for second in &base_specs {
             let (shape_first, shape_second, loglik) =
-                optimize_khoudraji_shapes(first, second, u1, u2, rotation, shape_iterations)?;
+                optimize_khoudraji_shapes(first, second, u1, u2, rotation, clip_eps, max_iter)?;
             let spec = PairCopulaSpec {
                 family: PairCopulaFamily::Khoudraji,
                 rotation,
@@ -1417,12 +1494,14 @@ fn rotated_tau(rotation: Rotation, tau: f64) -> f64 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn optimize_khoudraji_shapes(
     first: &PairCopulaSpec,
     second: &PairCopulaSpec,
     u1: &[f64],
     u2: &[f64],
     rotation: Rotation,
+    clip_eps: f64,
     max_iter: usize,
 ) -> Result<(f64, f64, f64), CopulaError> {
     let seeds = [(0.2, 0.8), (0.5, 0.5)];
@@ -1431,17 +1510,60 @@ fn optimize_khoudraji_shapes(
 
     for (mut shape_first, mut shape_second) in seeds {
         for _ in 0..4 {
-            shape_first = maximize_scalar(0.0, 1.0, max_iter.max(8), |candidate| {
-                khoudraji_loglik(first, second, candidate, shape_second, u1, u2, rotation)
+            shape_first = maximize_scalar_brent(
+                0.0,
+                1.0,
+                Some(shape_first),
+                KHOUDRAJI_SHAPE_TOL,
+                max_iter,
+                |candidate| {
+                    khoudraji_loglik(
+                        first,
+                        second,
+                        candidate,
+                        shape_second,
+                        u1,
+                        u2,
+                        rotation,
+                        clip_eps,
+                    )
                     .unwrap_or(f64::NEG_INFINITY)
-            });
-            shape_second = maximize_scalar(0.0, 1.0, max_iter.max(8), |candidate| {
-                khoudraji_loglik(first, second, shape_first, candidate, u1, u2, rotation)
+                },
+            )
+            .x;
+            shape_second = maximize_scalar_brent(
+                0.0,
+                1.0,
+                Some(shape_second),
+                KHOUDRAJI_SHAPE_TOL,
+                max_iter,
+                |candidate| {
+                    khoudraji_loglik(
+                        first,
+                        second,
+                        shape_first,
+                        candidate,
+                        u1,
+                        u2,
+                        rotation,
+                        clip_eps,
+                    )
                     .unwrap_or(f64::NEG_INFINITY)
-            });
+                },
+            )
+            .x;
         }
 
-        let loglik = khoudraji_loglik(first, second, shape_first, shape_second, u1, u2, rotation)?;
+        let loglik = khoudraji_loglik(
+            first,
+            second,
+            shape_first,
+            shape_second,
+            u1,
+            u2,
+            rotation,
+            clip_eps,
+        )?;
         if loglik > best_loglik {
             best_loglik = loglik;
             best = Some((shape_first, shape_second, loglik));
@@ -1456,6 +1578,7 @@ fn optimize_khoudraji_shapes(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn khoudraji_loglik(
     first: &PairCopulaSpec,
     second: &PairCopulaSpec,
@@ -1464,6 +1587,7 @@ fn khoudraji_loglik(
     u1: &[f64],
     u2: &[f64],
     rotation: Rotation,
+    clip_eps: f64,
 ) -> Result<f64, CopulaError> {
     let spec = PairCopulaSpec {
         family: PairCopulaFamily::Khoudraji,
@@ -1475,7 +1599,7 @@ fn khoudraji_loglik(
             shape_second,
         )?),
     };
-    pair_loglik(&spec, u1, u2, 1e-12)
+    pair_loglik(&spec, u1, u2, clip_eps)
 }
 
 fn pair_loglik(
