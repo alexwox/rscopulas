@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-09-10
 
 - Fit Gaussian pair copulas by maximum likelihood (Brent's method on
   `atanh ρ`, warm-started at the Kendall-τ inversion) instead of τ inversion
