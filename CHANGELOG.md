@@ -19,6 +19,7 @@
 - Add `VineFitOptions::independence_test_level`: an optional significance
   level for the asymptotic Kendall-τ independence test run before family
   selection on every edge. Disabled by default; `independence_threshold`
+  keeps its raw cut-off semantics.
 - Fit Khoudraji pair copulas by joint maximum likelihood. Base parameters
   and both shapes are optimised together (block coordinate ascent from three
   shape seeds, then a bounded Nelder–Mead polish of the leading base pairs),
@@ -30,7 +31,6 @@
   loglik 9.10 while R's joint `Independence ⊗ Clayton` optimum scores 11.53,
   which the same base pair now reproduces (θ 4.926 vs 4.927, shapes
   (0.7615, 0.4147) vs (0.7615, 0.4147)).
-
 - **Behaviour change:** `VineFitOptions::default()` no longer includes
   `Khoudraji` in `family_set`. It dominated the default fit time and rarely
   won selection; list it explicitly to keep the previous candidate set.
@@ -97,7 +97,7 @@
   five-column vine fit takes about a second. `khoudraji` and `tll` stay
   opt-in; the accepted family strings are documented on `fit_r`.
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-09-10
 
 This minor release contains breaking corrections to the pre-1.0 numerical and
 serialization contracts. See [migration notes](docs/mdx/guides/migrating-to-0-3.mdx).
