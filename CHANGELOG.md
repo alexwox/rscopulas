@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0 — unreleased
+
+- Fit Gaussian pair copulas by maximum likelihood (Brent's method on
+  `atanh ρ`, warm-started at the Kendall-τ inversion) instead of τ inversion
+  alone, so AIC/BIC family selection no longer favours the MLE-fitted
+  Archimedean candidates by construction.
+- Polish every two-parameter pair family (Student-t, BB1, BB6, BB7, BB8,
+  Tawn1, Tawn2) with a bounded Nelder–Mead joint maximisation after the grid
+  warm start. Student-t degrees of freedom are now continuous on a log scale
+  over `[2, 200]` rather than a 24-point grid capped at 50.
+- Allow negative Frank parameters. `PairCopulaSpec::validate` accepts any
+  finite non-zero `θ`, the kernels, h-inverses, and CDF use the reflection
+  `c_{-θ}(u, v) = c_θ(1 − u, v)`, and the pair fitter can now select Frank
+  for negatively dependent pairs (previously such edges could fail with
+  "pair-copula selection produced no candidate" when Frank was the only
+  candidate).
+- Add `VineFitOptions::independence_test_level`: an optional significance
+  level for the asymptotic Kendall-τ independence test run before family
+  selection on every edge. Disabled by default; `independence_threshold`
+  keeps its raw cut-off semantics.
+- **Behaviour change:** `VineFitOptions::default()` no longer includes
+  `Khoudraji` in `family_set`. It dominated the default fit time and rarely
+  won selection; list it explicitly to keep the previous candidate set.
+- Honour `FitOptions::max_iter` in pair fitting. The previous silent clamps
+  (16–64 iterations for parametric families, 8–16 / 8–12 for Khoudraji) are
+  gone; all scalar searches now use Brent's method with tolerance-based early
+  stopping capped at `max_iter`, so the default of 500 does not add cost.
+- Add `math::maximize_scalar_brent`, `math::nelder_mead_maximize`,
+  `stats::kendall_tau_test_statistic`, and
+  `stats::kendall_tau_rejects_independence`.
+
 ## 0.3.0 — unreleased
 
 This minor release contains breaking corrections to the pre-1.0 numerical and

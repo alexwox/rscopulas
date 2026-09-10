@@ -123,6 +123,35 @@ pub fn kendall_tau_bivariate(x: &[f64], y: &[f64]) -> Result<f64, CopulaError> {
     }
 }
 
+/// Standardised statistic of the asymptotic Kendall-τ independence test.
+///
+/// Under independence `τ` is asymptotically normal with variance
+/// `2 (2n + 5) / (9 n (n − 1))`, so
+/// `τ · sqrt(9 n (n − 1) / (2 (2n + 5)))` is approximately standard normal.
+/// Returns `0.0` for fewer than two observations.
+pub fn kendall_tau_test_statistic(tau: f64, n: usize) -> f64 {
+    if n < 2 {
+        return 0.0;
+    }
+    let n = n as f64;
+    tau * (9.0 * n * (n - 1.0) / (2.0 * (2.0 * n + 5.0))).sqrt()
+}
+
+/// Two-sided asymptotic Kendall-τ independence test at significance level
+/// `alpha ∈ (0, 1)`: returns `true` when independence is rejected, i.e. when
+/// `|kendall_tau_test_statistic(tau, n)| > z_{1 − alpha/2}`. Invalid levels
+/// never reject.
+pub fn kendall_tau_rejects_independence(tau: f64, n: usize, alpha: f64) -> bool {
+    use statrs::distribution::{ContinuousCDF, Normal};
+    if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
+        return false;
+    }
+    let critical = Normal::new(0.0, 1.0)
+        .expect("standard normal parameters should be valid")
+        .inverse_cdf(1.0 - alpha / 2.0);
+    kendall_tau_test_statistic(tau, n).abs() > critical
+}
+
 fn decode_upper_triangle_index(mut index: usize, dim: usize) -> (usize, usize) {
     let mut left = 0usize;
     while left + 1 < dim {
