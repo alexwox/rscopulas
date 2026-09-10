@@ -11,10 +11,11 @@
 
 use ndarray::Array2;
 use rand::{SeedableRng, rngs::StdRng};
+use statrs::distribution::{Continuous, ContinuousCDF, Normal};
 
 use rscopulas::{
-    CopulaFamily, CopulaModel, FactorCopula, FactorFitOptions, FactorLayout, PairCopulaFamily,
-    PairCopulaParams, PairCopulaSpec, PseudoObs, Rotation,
+    CopulaFamily, CopulaModel, EvalOptions, FactorCopula, FactorFitOptions, FactorLayout,
+    PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PseudoObs, Rotation,
 };
 
 fn frank_link(theta: f64) -> PairCopulaSpec {
@@ -551,6 +552,113 @@ fn factor_copula_fit_vs_independence_baseline() {
         "expected strong log-likelihood gain over independence, got {}",
         fit.diagnostics.loglik
     );
+}
+
+fn joe_link(theta: f64) -> PairCopulaSpec {
+    PairCopulaSpec {
+        family: PairCopulaFamily::Joe,
+        rotation: Rotation::R0,
+        params: PairCopulaParams::One(theta),
+    }
+}
+
+fn survival_gumbel_link(theta: f64) -> PairCopulaSpec {
+    PairCopulaSpec {
+        rotation: Rotation::R180,
+        ..gumbel_link(theta)
+    }
+}
+
+/// Brute-force reference for the Basic1F log-density at one observation: a
+/// midpoint rule with `n` points on the latent normal score over [-8, 8],
+/// accumulated in log space through the public pair-copula API. It shares no
+/// code with the adaptive quadrature under test. With 1e6 points the spacing
+/// (1.6e-5) resolves the ~1e-3-wide posterior spikes of the cases below to
+/// well under 1e-5; the 4e6-point rule agrees to six decimals.
+fn midpoint_log_pdf(links: &[PairCopulaSpec], obs: &[f64], n: usize) -> f64 {
+    let normal = Normal::new(0.0, 1.0).unwrap();
+    let step = 16.0 / n as f64;
+    let mut terms = Vec::with_capacity(n);
+    for index in 0..n {
+        let z = -8.0 + (index as f64 + 0.5) * step;
+        let v = normal.cdf(z);
+        let mut term = normal.ln_pdf(z) + step.ln();
+        for (link, &u) in links.iter().zip(obs) {
+            term += link
+                .log_pdf(u, v, f64::EPSILON / 2.0)
+                .expect("pair density should evaluate on the midpoint grid");
+        }
+        terms.push(term);
+    }
+    let max = terms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    max + terms.iter().map(|t| (t - max).exp()).sum::<f64>().ln()
+}
+
+fn single_row_log_pdf(model: &FactorCopula, obs: &[f64]) -> f64 {
+    let data = PseudoObs::new(Array2::from_shape_vec((1, obs.len()), obs.to_vec()).unwrap())
+        .expect("observation should be valid");
+    model
+        .log_pdf(&data, &EvalOptions::default())
+        .expect("log_pdf should evaluate")[0]
+}
+
+#[test]
+fn factor_copula_resolves_joe_spike_at_extreme_observation() {
+    // Three Joe(40) links at u = 1 - 1e-10 concentrate the latent posterior in
+    // a spike about 1e-3 normal-score units wide, centred on the observation's
+    // score z = 6.36, which is also a mesh break. Both comparison rules of the
+    // adaptive quadrature were blind to the half of the spike inside the long
+    // interval [0, 6.36]: their nearest nodes sit 0.03 and 0.13 away, where the
+    // integrand is e⁻²⁶ and e⁻⁹⁶ of the peak, so they agreed the interval was
+    // empty and log_pdf returned 49.3268 while reporting convergence. The
+    // reference 50.0112 is confirmed by the midpoint rule here, a 4e6-point
+    // midpoint rule, rel_tol = 1e-10 and fixed 4096-node quadrature.
+    let links = vec![joe_link(40.0); 3];
+    let obs = [1.0 - 1e-10; 3];
+    let reference = midpoint_log_pdf(&links, &obs, 1_000_000);
+    assert!(
+        (reference - 50.0112).abs() < 1e-4,
+        "midpoint reference {reference} disagrees with the documented 50.0112"
+    );
+    let model = FactorCopula::basic_1f(links, 25).expect("model should be valid");
+    let value = single_row_log_pdf(&model, &obs);
+    assert!(
+        (value - 50.0112).abs() < 1e-4,
+        "default quadrature returned {value}, expected 50.0112 ± 1e-4"
+    );
+    assert!(
+        (value - reference).abs() < 5e-5,
+        "default quadrature {value} vs midpoint reference {reference}"
+    );
+}
+
+#[test]
+fn factor_copula_resolves_clayton_gumbel_spikes_at_extreme_observations() {
+    // Same failure mode in the lower tail: three Clayton(30) links at u = 1e-12
+    // (the default clip) returned 58.0018 against a reference of 58.6835 —
+    // again exactly half the spike. The mixed Clayton(30) / survival-Gumbel(20)
+    // / Clayton(30) case at u = 1e-9 sits just inside the regime the old mesh
+    // happened to resolve and pins the reference value going forward.
+    let cases: [(Vec<PairCopulaSpec>, [f64; 3]); 2] = [
+        (vec![clayton_link(30.0); 3], [1e-12; 3]),
+        (
+            vec![
+                clayton_link(30.0),
+                survival_gumbel_link(20.0),
+                clayton_link(30.0),
+            ],
+            [1e-9; 3],
+        ),
+    ];
+    for (links, obs) in cases {
+        let reference = midpoint_log_pdf(&links, &obs, 1_000_000);
+        let model = FactorCopula::basic_1f(links.clone(), 25).expect("model should be valid");
+        let value = single_row_log_pdf(&model, &obs);
+        assert!(
+            (value - reference).abs() < 1e-4,
+            "{links:?} at {obs:?}: default quadrature {value} vs midpoint reference {reference}"
+        );
+    }
 }
 
 #[test]
