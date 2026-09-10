@@ -24,6 +24,8 @@ pub enum InputError {
     EmptyObservations,
     #[error("expected at least two dimensions, got {0}")]
     DimensionTooSmall(usize),
+    #[error("input dimension {got} does not match model dimension {expected}")]
+    DimensionMismatch { expected: usize, got: usize },
     #[error("all values must be finite")]
     NonFiniteValue,
     #[error(

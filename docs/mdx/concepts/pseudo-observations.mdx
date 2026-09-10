@@ -17,6 +17,23 @@ Pseudo-observations live strictly inside `(0, 1)` — not at the boundary. Value
 There are three standard approaches, depending on how much you know about your data's marginal distributions.
 
 <AccordionGroup>
+  <Accordion title="rscopulas.to_pseudo_obs (built-in rank transform)">
+    The package ships a NumPy-only helper that performs the rank-based transform for you, handles ties, and rejects NaN with a clear error. It accepts a 1-D vector or an `(n, d)` matrix and returns `float64` values strictly inside `(0, 1)`.
+
+    ```python
+    import numpy as np
+    from rscopulas import GaussianCopula, to_pseudo_obs
+
+    X = np.array([[1.2, 3.4], [2.5, 1.1], [0.8, 4.2], [3.1, 2.9]])
+    U = to_pseudo_obs(X)                     # rank / (n + 1), ties averaged
+    U_min = to_pseudo_obs(X, ties="min")     # or "max", "ordinal"
+    U_hazen = to_pseudo_obs(X, scaling="n")  # (rank - 0.5) / n
+    fit = GaussianCopula.fit(U)
+    ```
+
+    `ties` follows `scipy.stats.rankdata` semantics (`average`, `min`, `max`, `ordinal`) without requiring SciPy. NaN entries raise `InvalidInputError` naming the first offending row and column; `±inf` are ranked at the ends.
+  </Accordion>
+
   <Accordion title="Rank-based (recommended for unknown marginals)">
     The rank-based approach makes no assumptions about the shape of each marginal distribution. You rank the observations within each column and divide by `n + 1` (the Hazen correction) to keep values away from 0 and 1.
 
@@ -93,7 +110,7 @@ Rscopulas enforces strict validation on all input arrays. Any violation raises a
 
 ### Python errors
 
-In Python, invalid input raises `InvalidInputError`. Check that your transformation produces no boundary values before calling `.fit()`:
+In Python, invalid input raises `InvalidInputError` (a subclass of both `RscopulasError` and `ValueError`). `to_pseudo_obs` never produces boundary values; if you build the matrix yourself, check it before calling `.fit()`:
 
 ```python
 import numpy as np

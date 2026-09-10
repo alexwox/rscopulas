@@ -347,13 +347,7 @@ fn fit_mean_tau(
 }
 
 fn validate_input_dim(expected_dim: usize, data: &PseudoObs) -> Result<(), CopulaError> {
-    if data.dim() != expected_dim {
-        return Err(FitError::Failed {
-            reason: "input dimension does not match model dimension",
-        }
-        .into());
-    }
-
+    crate::data::validate_dim(expected_dim, data.dim())?;
     Ok(())
 }
 

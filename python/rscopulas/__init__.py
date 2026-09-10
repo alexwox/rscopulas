@@ -1,3 +1,13 @@
+"""Copula modeling on validated pseudo-observations, backed by a Rust core.
+
+Compute-bound calls (fitting, ``log_pdf``, sampling, Rosenblatt transforms)
+release the GIL, so other Python threads keep running while Rust works.
+Every model supports ``to_json``/``from_json``, ``pickle``, ``copy``,
+``==``, and ``repr``.
+"""
+
+from importlib.metadata import PackageNotFoundError, version as _package_version
+
 from ._models import (
     ClaytonCopula,
     FactorCopula,
@@ -16,6 +26,7 @@ from ._models import (
     VineStructureInfo,
     VineTreeInfo,
 )
+from ._pseudo_obs import to_pseudo_obs
 from ._rscopulas import (
     BackendError,
     InternalError,
@@ -25,6 +36,13 @@ from ._rscopulas import (
     NumericalError,
     RscopulasError,
 )
+from ._rscopulas import __version__ as _extension_version
+
+try:
+    __version__ = _package_version("rscopulas")
+except PackageNotFoundError:  # pragma: no cover - source checkout without metadata
+    # Fall back to the version compiled into the extension module.
+    __version__ = str(_extension_version)
 
 __all__ = [
     "BackendError",
@@ -50,4 +68,5 @@ __all__ = [
     "VineEdgeInfo",
     "VineStructureInfo",
     "VineTreeInfo",
+    "to_pseudo_obs",
 ]

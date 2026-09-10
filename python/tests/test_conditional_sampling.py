@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rscopulas import NonPrefixConditioningError, VineCopula
+from rscopulas import InvalidInputError, NonPrefixConditioningError, VineCopula
 
 
 def _pseudo_obs(n: int, d: int, rng: np.random.Generator) -> np.ndarray:
@@ -107,10 +107,10 @@ def test_rosenblatt_shapes(mixed_vine: VineCopula) -> None:
 
 
 def test_rosenblatt_rejects_wrong_dim(mixed_vine: VineCopula) -> None:
-    bad = np.zeros((10, mixed_vine.dim + 1))
-    with pytest.raises(Exception):
+    bad = np.full((10, mixed_vine.dim + 1), 0.5)
+    with pytest.raises(InvalidInputError, match="dimension"):
         mixed_vine.rosenblatt(bad)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidInputError, match="dimension"):
         mixed_vine.inverse_rosenblatt(bad)
 
 
