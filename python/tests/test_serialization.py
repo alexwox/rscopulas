@@ -62,6 +62,39 @@ MODEL_FACTORIES = {
 }
 
 
+def _first_json_difference(left: Any, right: Any, path: str = "$") -> str | None:
+    """Return the first differing path between two parsed JSON payloads."""
+    if type(left) is not type(right):
+        return f"{path}: {type(left).__name__} != {type(right).__name__} ({left!r} vs {right!r})"
+    if isinstance(left, dict):
+        for key in sorted(set(left) | set(right)):
+            if key not in left or key not in right:
+                return f"{path}.{key}: present on one side only"
+            found = _first_json_difference(left[key], right[key], f"{path}.{key}")
+            if found:
+                return found
+        return None
+    if isinstance(left, list):
+        if len(left) != len(right):
+            return f"{path}: length {len(left)} != {len(right)}"
+        for idx, (a, b) in enumerate(zip(left, right)):
+            found = _first_json_difference(a, b, f"{path}[{idx}]")
+            if found:
+                return found
+        return None
+    if left != right:
+        return f"{path}: {left!r} != {right!r}"
+    return None
+
+
+def assert_models_equal(restored: Any, model: Any) -> None:
+    """`restored == model`, with the first differing serialized field on failure."""
+    if restored == model:
+        return
+    diff = _first_json_difference(json.loads(restored.to_json()), json.loads(model.to_json()))
+    raise AssertionError(f"{restored!r} != {model!r}; first serialized difference: {diff}")
+
+
 @pytest.fixture(scope="module", params=sorted(MODEL_FACTORIES))
 def model(request: pytest.FixtureRequest) -> Any:
     return MODEL_FACTORIES[request.param]()
@@ -72,7 +105,7 @@ def test_pickle_round_trip_preserves_log_pdf_exactly(model: Any) -> None:
         restored = pickle.loads(pickle.dumps(model, protocol=protocol))
         assert type(restored) is type(model)
         assert restored._core is not model._core
-        assert restored == model
+        assert_models_equal(restored, model)
         np.testing.assert_array_equal(restored.log_pdf(DATA3), model.log_pdf(DATA3))
         np.testing.assert_array_equal(restored.sample(5, seed=9), model.sample(5, seed=9))
 
@@ -81,7 +114,7 @@ def test_deepcopy_and_copy_are_independent(model: Any) -> None:
     for clone in (copy.deepcopy(model), copy.copy(model)):
         assert clone is not model
         assert clone._core is not model._core
-        assert clone == model
+        assert_models_equal(clone, model)
         np.testing.assert_array_equal(clone.log_pdf(DATA3), model.log_pdf(DATA3))
 
 
@@ -89,7 +122,7 @@ def test_json_round_trip(model: Any) -> None:
     payload = model.to_json()
     assert isinstance(json.loads(payload), dict)
     restored = type(model).from_json(payload)
-    assert restored == model
+    assert_models_equal(restored, model)
     assert restored.dim == model.dim
     assert restored.family == model.family
     np.testing.assert_array_equal(restored.log_pdf(DATA3), model.log_pdf(DATA3))
