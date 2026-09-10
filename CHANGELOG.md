@@ -68,6 +68,11 @@
   `log_pdf`/`composite_log_pdf`, `sample`, the Rosenblatt transforms, pair
   batch kernels, and TLL fits). Other Python threads keep running during
   long fits; every model type is `Send + Sync`.
+- Make JSON serialization bit-exact. serde_json's default float parser is
+  best-effort and can be one ulp off, so `from_json`, pickle and `copy` could
+  return a model that compared unequal to the original (observed on Windows
+  CI for a fitted vine); the `float_roundtrip` feature is now enabled and a
+  regression test round-trips fitted models and a sweep of doubles exactly.
 - Add `to_json`/`from_json`, `pickle`, `copy`/`deepcopy`, `==`, and `repr` to
   every Python model class (`GaussianCopula`, `StudentTCopula`,
   `ClaytonCopula`, `FrankCopula`, `GumbelCopula`, `VineCopula`,

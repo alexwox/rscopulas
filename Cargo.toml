@@ -21,6 +21,6 @@ rand_distr = "0.5.1"
 rayon = "1.11"
 rscopulas = { version = "0.4.0", path = "crates/rscopulas-core" }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 statrs = "0.18.0"
 thiserror = "2.0"
