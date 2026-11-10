@@ -413,7 +413,9 @@ fn bivariate_midranks(x: &[f64], y: &[f64]) -> Vec<f64> {
             let mut index = y_rank[member] + 1;
             while index <= y_levels {
                 tree[index] += 1;
-                index += index & index.wrapping_neg();
+                // Advance by the lowest set bit: fill the bits below it,
+                // then carry.
+                index = (index | (index - 1)) + 1;
             }
         }
         start = end;
