@@ -6,11 +6,20 @@ Performance work on the numerical core. Measured on an Apple M3 Pro against
 0.4.0 with `examples/perf_suite.rs`, both builds run back to back (medians;
 all 110 cases in `benchmarks/perf/`; figures move by ~10 % between runs):
 default R-vine fit about 10×, C/D-vine fit about 30×, default pair fit
-20–30×, factor-copula fit 16–26×, nested Archimedean sampling 22–35×,
-inverse h-functions 7–14×, mixed-vine sampling 7–8×, mixed-vine density 4×,
-Gaussian-vine density 46×. Scalar densities and h-functions of the
+20–30×, factor-copula fit 16–26×, nested Clayton and Frank sampling over
+100× (and now exact, see below), inverse h-functions 7–14×, mixed-vine
+sampling 7–8×, mixed-vine density 4×, Gaussian-vine density 46×. Scalar densities and h-functions of the
 Archimedean pair families are unchanged; no case is slower.
 
+- Independent correctness checks, none of which descend from an earlier
+  release of this crate:
+  `tests/reference_pair_kernels.rs` compares density, both h-functions and
+  both inverses of Clayton, Gumbel, Frank, Joe and BB1/6/7/8 with values
+  obtained by differentiating the closed-form distribution functions at 400
+  digits (`scripts/reference/generate_pair_kernel_truth.py`), on a grid that
+  reaches 1e-6 from the edges: log-densities agree to 1e-10 relative,
+  h-functions to 1e-11. `tests/reference_hac.rs` checks every same-family
+  nested sampler against the closed-form nested distribution function.
 - Add a golden-snapshot regression suite
   (`tests/golden_snapshots.rs`, fixtures under `fixtures/golden/v1/`): every
   pair kernel, fitter, sampler, transform and statistic on fixed inputs,
@@ -53,9 +62,19 @@ Archimedean pair families are unchanged; no case is slower.
 - Factor copula: density rows are integrated concurrently, the joint polish
   uses Brent's method along each coordinate, and sampling applies the inverse
   h-functions in parallel (the random stream is unchanged).
-- Nested Archimedean sampling draws its random numbers sequentially and
-  solves for the nested frailties in parallel with a superlinear root search;
-  seeded output is unchanged.
+- **Fix: nested Clayton and Frank sampling was wrong.** In every release up
+  to 0.4.0, `HierarchicalArchimedeanCopula::sample` drew the frailty of a
+  Clayton node nested in a Clayton node (or Frank in Frank) by inverting a
+  12-term Stehfest approximation of its Laplace transform. The result missed
+  the model's distribution function by up to 0.2 and did not even have
+  uniform marginals when the inner parameter was large. The frailties are now
+  drawn exactly: an exponentially tilted stable variate by rejection for
+  Clayton, a sum of tilted Sibuya variates for Frank (Hofert 2011), with the
+  tilted stable limit above a parent frailty of 10,000 as in R's `copula`.
+  Seeded output of nested Clayton and Frank trees changes; nested Gumbel and
+  exchangeable trees are unchanged. Frank frailties are carried in logs, so
+  large `theta` no longer fails with "frailty exceeds f64 range". Random
+  numbers are still drawn sequentially and rows are finished in parallel.
 - TLL fits tabulate the separable kernel per axis (bit-identical grids,
   12× faster). Hoeffding's D uses an O(n log n) sweep instead of the O(n²)
   pairwise count (identical values).

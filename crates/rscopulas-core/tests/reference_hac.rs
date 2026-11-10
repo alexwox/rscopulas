@@ -169,3 +169,146 @@ fn exchangeable_hac_matches_exact_exchangeable_log_pdf() {
         assert!((left - right).abs() < 1e-10);
     }
 }
+
+// --- Nested samplers against the closed-form nested distribution function ---
+//
+// A nested Archimedean copula has the distribution function
+// `C(u) = ψ(Σ_children ψ⁻¹(C_child(u)))`, which involves no frailty at all,
+// so it checks the frailty-based sampler independently: the fraction of a
+// sample falling below a point must match `C` there to within binomial noise.
+
+fn generator(family: HacFamily, theta: f64, t: f64) -> f64 {
+    match family {
+        HacFamily::Gumbel => (-t.powf(1.0 / theta)).exp(),
+        HacFamily::Clayton => (1.0 + t).powf(-1.0 / theta),
+        HacFamily::Frank => -(-(-t).exp() * (-theta).exp_m1()).ln_1p() / theta,
+    }
+}
+
+fn generator_inverse(family: HacFamily, theta: f64, u: f64) -> f64 {
+    match family {
+        HacFamily::Gumbel => (-u.ln()).powf(theta),
+        HacFamily::Clayton => u.powf(-theta) - 1.0,
+        HacFamily::Frank => -((-theta * u).exp_m1() / (-theta).exp_m1()).ln(),
+    }
+}
+
+fn nested_cdf(tree: &HacTree, point: &[f64]) -> f64 {
+    match tree {
+        HacTree::Leaf(index) => point[*index],
+        HacTree::Node(node) => generator(
+            node.family,
+            node.theta,
+            node.children
+                .iter()
+                .map(|child| generator_inverse(node.family, node.theta, nested_cdf(child, point)))
+                .sum(),
+        ),
+    }
+}
+
+fn node(family: HacFamily, theta: f64, children: Vec<HacTree>) -> HacTree {
+    HacTree::Node(HacNode::new(family, theta, children))
+}
+
+/// Largest standardised gap between the empirical and exact distribution
+/// function over a fixed set of points, and the largest standardised
+/// marginal Kolmogorov–Smirnov distance.
+fn sampler_discrepancy(tree: HacTree, n: usize, seed: u64) -> (f64, f64) {
+    use rand::Rng;
+    let model = HierarchicalArchimedeanCopula::new(tree.clone()).expect("valid tree");
+    let dim = model.dim();
+    let mut rng = StdRng::seed_from_u64(seed);
+    let sample = model
+        .sample(n, &mut rng, &Default::default())
+        .expect("sampling should succeed");
+
+    let mut points = StdRng::seed_from_u64(seed ^ 0x9e37_79b9);
+    let mut worst_z = 0.0_f64;
+    for idx in 0..120 {
+        // A third each: anywhere, near the diagonal, in the upper corner.
+        let anchor: f64 = points.random_range(0.05..0.95);
+        let point: Vec<f64> = (0..dim)
+            .map(|_| match idx % 3 {
+                0 => points.random_range(0.03..0.97),
+                1 => (anchor + points.random_range(-0.04..0.04)).clamp(0.01, 0.99),
+                _ => points.random_range(0.9..0.999),
+            })
+            .collect();
+        let exact = nested_cdf(&tree, &point);
+        let below = sample
+            .rows()
+            .into_iter()
+            .filter(|row| row.iter().zip(&point).all(|(x, p)| x <= p))
+            .count();
+        let standard_error = (exact * (1.0 - exact) / n as f64).sqrt();
+        worst_z = worst_z.max((below as f64 / n as f64 - exact).abs() / standard_error);
+    }
+
+    let mut worst_ks = 0.0_f64;
+    for col in 0..dim {
+        let mut column = sample.column(col).to_vec();
+        column.sort_by(f64::total_cmp);
+        let ks = column
+            .iter()
+            .enumerate()
+            .map(|(idx, x)| (x - (idx as f64 + 0.5) / n as f64).abs())
+            .fold(0.0, f64::max);
+        worst_ks = worst_ks.max(ks * (n as f64).sqrt());
+    }
+    (worst_z, worst_ks)
+}
+
+#[test]
+fn nested_samplers_follow_the_nested_distribution_function() {
+    use HacFamily::{Clayton, Frank, Gumbel};
+    let leaf = HacTree::Leaf;
+    let two_level = |family, outer, inner| {
+        node(
+            family,
+            outer,
+            vec![leaf(0), node(family, inner, vec![leaf(1), leaf(2)])],
+        )
+    };
+    let three_level = |family, a, b, c| {
+        node(
+            family,
+            a,
+            vec![
+                leaf(0),
+                node(
+                    family,
+                    b,
+                    vec![leaf(1), node(family, c, vec![leaf(2), leaf(3)])],
+                ),
+                leaf(4),
+            ],
+        )
+    };
+    let cases: Vec<(&str, HacTree)> = vec![
+        ("gumbel 1.3 > 2.5", two_level(Gumbel, 1.3, 2.5)),
+        ("gumbel 1.3 > 2.5 > 6", three_level(Gumbel, 1.3, 2.5, 6.0)),
+        ("clayton 0.4 > 2", two_level(Clayton, 0.4, 2.0)),
+        ("clayton 0.4 > 2 > 7", three_level(Clayton, 0.4, 2.0, 7.0)),
+        ("clayton 0.05 > 12", two_level(Clayton, 0.05, 12.0)),
+        ("clayton 15 > 19", two_level(Clayton, 15.0, 19.0)),
+        ("frank 1.5 > 6", two_level(Frank, 1.5, 6.0)),
+        ("frank 1.5 > 6 > 18", three_level(Frank, 1.5, 6.0, 18.0)),
+        ("frank 0.2 > 0.3", two_level(Frank, 0.2, 0.3)),
+        // Parent frailties around and far above the stable-limit threshold.
+        ("frank 9.2 > 20", two_level(Frank, 9.2, 20.0)),
+        ("frank 12 > 18", two_level(Frank, 12.0, 18.0)),
+    ];
+    let n = 200_000;
+    for (label, tree) in cases {
+        let (z, ks) = sampler_discrepancy(tree, n, 2024);
+        // 120 points: |z| above 4.5 has probability below 1e-3 under the
+        // null; the samplers these replaced scored 13 to 600 at n = 2e6.
+        assert!(
+            z < 4.5,
+            "{label}: distribution function off by {z:.1} standard errors"
+        );
+        // Kolmogorov: 2.0 is the 99.93 % point.
+        assert!(ks < 2.0, "{label}: marginal KS statistic {ks:.2}");
+    }
+}

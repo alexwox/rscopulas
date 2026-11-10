@@ -93,15 +93,21 @@ The default `fit_method="composite_mle"` optimizes pairwise scores at each node.
 
 ### Reliable scenarios for Monte Carlo use
 
-Two scenarios are validated and safe to use today:
+These scenarios are validated and safe to use:
 
 - **Exchangeable Archimedean trees** — A single node over all leaves. Equivalent to a standard multivariate Archimedean copula; sampling is the same code path as `ClaytonCopula`, `FrankCopula`, or `GumbelCopula`.
-- **Nested same-family Gumbel** — Inner Gumbel clusters nested under an outer Gumbel root. This uses a closed-form frailty update for the inner group. Simulation tests verify that samples stay in `(0, 1)` and that Kendall's tau blocks are consistent with the tree structure.
+- **Nested same-family Gumbel** — The inner frailty is the outer one times a positive stable variate, drawn directly.
+- **Nested same-family Clayton** — The inner frailty is an exponentially tilted stable variate, drawn exactly by rejection (Hofert 2011).
+- **Nested same-family Frank** — The inner frailty is a sum of as many tilted Sibuya variates as the outer frailty. The sum is drawn term by term up to an outer frailty of 10,000, which is exact. Above that it is replaced by its tilted stable limit, as in R's `copula` package; the outer frailty only gets that large when the outer parameter is roughly 9 or more.
 
-For this reason, rscopulas example scripts use nested Gumbel exclusively when demonstrating HAC sampling.
+A nested Archimedean copula has a closed-form distribution function that involves no frailty. The test suite draws 200,000 observations from each of these configurations and checks that the fraction falling below each of 120 points matches that function to within binomial noise.
+
+<Note>
+Releases before 0.5.0 drew nested Clayton and Frank frailties by numerically inverting a Laplace transform. That method was inaccurate: marginals were visibly non-uniform when the inner parameter was large. Samples from nested Clayton and Frank trees therefore differ from earlier releases for the same seed. Nested Gumbel and exchangeable trees are unchanged.
+</Note>
 
 <Tip>
-If your fitted tree contains mixed families, you can use `composite_log_pdf` for explicit pairwise scoring. Reserve `sample()` for exchangeable or nested same-family Gumbel configurations.
+If your fitted tree contains mixed families, you can use `composite_log_pdf` for explicit pairwise scoring. Reserve `sample()` for exchangeable or same-family configurations.
 </Tip>
 
 ## Fit diagnostics
