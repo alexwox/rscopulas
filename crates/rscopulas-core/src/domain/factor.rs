@@ -27,15 +27,17 @@
 //! infrastructure (quadrature, fit driver, serialization, Python wrapper)
 //! is laid out so those additions are local.
 
+use crate::special::StdNormal as Normal;
 use ndarray::Array2;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use statrs::distribution::{ContinuousCDF, Normal};
 
 use crate::{
     data::PseudoObs,
     errors::{CopulaError, FitError},
-    math::{coord_ascent_with_diagnostics, gauss_legendre_01, inverse, numerical_hessian},
+    math::{
+        CoordinateSearch, coord_ascent_with_search, gauss_legendre_01, inverse, numerical_hessian,
+    },
     paircopula::{
         PairCopulaFamily, PairCopulaSpec, decode_params, encode_brackets, encode_jacobian,
         encode_params, fit_pair_copula,
@@ -340,9 +342,7 @@ impl FactorCopula {
                 } else {
                     *rho
                 };
-                let z = Normal::new(0.0, 1.0)
-                    .unwrap()
-                    .inverse_cdf(obs[j].clamp(clip_eps, 1.0 - clip_eps));
+                let z = Normal.inverse_cdf(obs[j].clamp(clip_eps, 1.0 - clip_eps));
                 let variance = 1.0 - rho * rho;
                 for (term, &v) in log_terms.iter_mut().zip(normal_nodes) {
                     *term += -0.5 * variance.ln()
@@ -369,11 +369,19 @@ impl CopulaModel for FactorCopula {
 
     fn log_pdf(&self, data: &PseudoObs, options: &EvalOptions) -> Result<Vec<f64>, CopulaError> {
         options.validate()?;
-        crate::backend::resolve_strategy(
+        // Rows are independent integrals over the latent factor; each one
+        // costs a few hundred integrand evaluations, so even short batches
+        // are worth spreading over the pool.
+        let strategy = match crate::backend::resolve_strategy(
             options.exec,
             crate::backend::Operation::DensityEval,
             data.n_obs(),
-        )?;
+        )? {
+            crate::backend::ExecutionStrategy::CpuSerial if data.n_obs() >= 8 => {
+                crate::backend::ExecutionStrategy::CpuParallel
+            }
+            other => other,
+        };
         let view = data.as_view();
         if view.ncols() != self.dim {
             return Err(FitError::Failed {
@@ -420,21 +428,26 @@ impl CopulaModel for FactorCopula {
             }
             return super::GaussianCopula::new(correlation)?.log_pdf(data, options);
         }
-        let normal = Normal::new(0.0, 1.0).unwrap();
+        let normal = Normal;
         if !self.quadrature.adaptive {
             let (nodes, weights) = factor_quadrature(self.quadrature_nodes);
             let normal_nodes: Vec<_> = nodes.iter().map(|&v| normal.inverse_cdf(v)).collect();
-            return view
-                .rows()
-                .into_iter()
-                .map(|row| {
-                    let obs: Vec<_> = row
+            let mut out = vec![0.0; data.n_obs()];
+            crate::backend::try_fill_rows_chunked(
+                &mut out,
+                strategy,
+                FACTOR_ROW_CHUNK,
+                || (),
+                |row_idx, _| {
+                    let obs: Vec<_> = view
+                        .row(row_idx)
                         .iter()
                         .map(|u| u.clamp(options.clip_eps, 1.0 - options.clip_eps))
                         .collect();
                     self.log_pdf_single(&obs, &nodes, &weights, &normal_nodes, f64::EPSILON / 2.0)
-                })
-                .collect();
+                },
+            )?;
+            return Ok(out);
         }
         // Include TLL knots, where derivatives change, in every row's mesh.
         let mut knots = Vec::new();
@@ -458,14 +471,23 @@ impl CopulaModel for FactorCopula {
                 }
             }
         }
-        view.rows()
-            .into_iter()
-            .map(|row| {
-                let obs: Vec<_> = row
+        let mut out = vec![0.0; data.n_obs()];
+        crate::backend::try_fill_rows_chunked(
+            &mut out,
+            strategy,
+            FACTOR_ROW_CHUNK,
+            || (),
+            |row_idx, _| {
+                let obs: Vec<_> = view
+                    .row(row_idx)
                     .iter()
                     .map(|u| u.clamp(options.clip_eps, 1.0 - options.clip_eps))
                     .collect();
                 let normal_obs: Vec<_> = obs.iter().map(|&u| normal.inverse_cdf(u)).collect();
+                // ln u and ln(1 − u) of the observation are the same at every
+                // latent node of this row's integral.
+                let log_obs: Vec<f64> = obs.iter().map(|u| u.ln()).collect();
+                let log_survival_obs: Vec<f64> = obs.iter().map(|u| (-u).ln_1p()).collect();
                 // Normal score of each observation as its link sees the latent:
                 // 90°/270° rotations read the latent through `1 - v`.
                 let link_scores: Vec<f64> = normal_obs
@@ -495,8 +517,8 @@ impl CopulaModel for FactorCopula {
                             // Clipping latent integration nodes at 1e-12 creates an
                             // artificial tail plateau and prevents convergence.
                             match link.log_pdf_from_log_probabilities(
-                                [obs[j].ln(), point.log_v],
-                                [(-obs[j]).ln_1p(), point.log_sv],
+                                [log_obs[j], point.log_v],
+                                [log_survival_obs[j], point.log_sv],
                             ) {
                                 Some(value) => Ok(value),
                                 None => link.log_pdf(obs[j], point.v, f64::EPSILON / 2.0),
@@ -587,8 +609,9 @@ impl CopulaModel for FactorCopula {
                     self.quadrature_nodes,
                     self.quadrature,
                 )
-            })
-            .collect()
+            },
+        )?;
+        Ok(out)
     }
 
     fn sample<R: Rng + ?Sized>(
@@ -604,19 +627,49 @@ impl CopulaModel for FactorCopula {
         // on an anchored tree, but specialised to a star graph with V at the
         // centre.
         let clip_eps = 1e-12;
-        let mut out = Array2::<f64>::zeros((n, self.dim));
-        for row in 0..n {
-            let v = rng.random::<f64>().clamp(clip_eps, 1.0 - clip_eps);
-            for (j, link) in self.links.iter().enumerate() {
-                let p = rng.random::<f64>().clamp(clip_eps, 1.0 - clip_eps);
-                let u = link.inv_first_given_second(p, v, clip_eps)?;
-                out[(row, j)] = u.clamp(clip_eps, 1.0 - clip_eps);
+        let dim = self.dim;
+        // The uniforms are drawn row by row in the original order (latent
+        // first, then one per link); the inverse h-functions, which consume
+        // no randomness, are then applied in parallel.
+        let mut values = vec![0.0; n * dim];
+        let mut latent = vec![0.0; n];
+        for (row, v) in values.chunks_exact_mut(dim).zip(latent.iter_mut()) {
+            *v = rng.random::<f64>().clamp(clip_eps, 1.0 - clip_eps);
+            for p in row.iter_mut() {
+                *p = rng.random::<f64>().clamp(clip_eps, 1.0 - clip_eps);
             }
         }
-        Ok(out)
+        let fill = |(row, v): (&mut [f64], &f64)| -> Result<(), CopulaError> {
+            for (slot, link) in row.iter_mut().zip(&self.links) {
+                let u = link.inv_first_given_second(*slot, *v, clip_eps)?;
+                *slot = u.clamp(clip_eps, 1.0 - clip_eps);
+            }
+            Ok(())
+        };
+        if n >= 64 {
+            use rayon::prelude::*;
+            values
+                .par_chunks_mut(dim)
+                .zip(latent.par_iter())
+                .with_min_len(32)
+                .try_for_each(fill)?;
+        } else {
+            values
+                .chunks_mut(dim)
+                .zip(latent.iter())
+                .try_for_each(fill)?;
+        }
+        Ok(Array2::from_shape_vec((n, dim), values)
+            .expect("sample buffer should match the requested shape"))
     }
 }
 
+/// Rows per parallel task of the density evaluation. Every row is a full
+/// adaptive quadrature, so tasks are kept small.
+const FACTOR_ROW_CHUNK: usize = 4;
+/// Absolute tolerance (unconstrained units) of each coordinate search in the
+/// joint polish.
+const POLISH_COORDINATE_TOL: f64 = 1e-7;
 /// Half-width of the latent normal-score range covered by the adaptive rule.
 const LATENT_RANGE: f64 = 8.0;
 /// A break whose log-integrand exceeds the nearest fine-rule node by more
@@ -843,7 +896,7 @@ fn factor_quadrature(n: usize) -> (Vec<f64>, Vec<f64>) {
     cache
         .entry(n)
         .or_insert_with(|| {
-            let normal = Normal::new(0.0, 1.0).unwrap();
+            let normal = Normal;
             let (mut nodes, mut weights) = gauss_legendre_01(n);
             for (node, weight) in nodes.iter_mut().zip(weights.iter_mut()) {
                 let z = 16.0 * *node - 8.0;
@@ -898,7 +951,7 @@ fn fit_basic_1f(
     // marginal distribution matches V ~ U(0, 1) exactly (avoids spurious
     // tail-mass when the sum's variance is mis-specified), and so rotations
     // like R180 can still pick up lower-tail asymmetry in the raw data.
-    let normal = Normal::new(0.0, 1.0).expect("standard normal parameters should be valid");
+    let normal = Normal;
     let mut score_sum = vec![0.0_f64; n];
     for i in 0..n {
         let mut s = 0.0;
@@ -1033,12 +1086,12 @@ fn fit_links_against_latent(
     v_pseudo: &[f64],
     options: &VineFitOptions,
 ) -> Result<Vec<PairCopulaSpec>, CopulaError> {
-    let mut links = Vec::with_capacity(columns.len());
-    for column in columns {
-        let result = fit_pair_copula(column, v_pseudo, options)?;
-        links.push(result.spec);
-    }
-    Ok(links)
+    // One independent pair fit per observed variable.
+    crate::backend::parallel_try_map_range_collect(
+        columns.len(),
+        crate::backend::ExecutionStrategy::CpuParallel,
+        |idx| fit_pair_copula(&columns[idx], v_pseudo, options).map(|result| result.spec),
+    )
 }
 
 /// Sum of log-densities over the pseudo-observations (the factor copula
@@ -1069,42 +1122,44 @@ fn posterior_latent_mean(
     clip: f64,
 ) -> Result<Vec<f64>, CopulaError> {
     let (nodes, weights) = gauss_legendre_01(model.quadrature_nodes);
+    let log_weights: Vec<f64> = weights.iter().map(|w| w.ln()).collect();
     let view = data.as_view();
-    let mut out = Vec::with_capacity(view.nrows());
-    let mut obs = vec![0.0_f64; model.dim];
-    let mut log_terms = vec![0.0_f64; nodes.len()];
-    for row in view.rows() {
-        for (dst, src) in obs.iter_mut().zip(row.iter()) {
-            *dst = *src;
-        }
-        // Compute log of the unnormalised posterior at each quadrature node.
-        for (idx, (v, w)) in nodes.iter().zip(weights.iter()).enumerate() {
-            let mut s = w.ln();
-            for (j, link) in model.links.iter().enumerate() {
-                s += link.log_pdf(obs[j], *v, clip)?;
-                if !s.is_finite() {
-                    break;
+    let mut out = vec![0.0; view.nrows()];
+    crate::backend::try_fill_rows_chunked(
+        &mut out,
+        crate::backend::ExecutionStrategy::CpuParallel,
+        16,
+        || vec![0.0_f64; nodes.len()],
+        |row_idx, log_terms| {
+            let row = view.row(row_idx);
+            // Compute log of the unnormalised posterior at each quadrature node.
+            for (idx, (v, log_w)) in nodes.iter().zip(&log_weights).enumerate() {
+                let mut s = *log_w;
+                for (link, obs) in model.links.iter().zip(row.iter()) {
+                    s += link.log_pdf(*obs, *v, clip)?;
+                    if !s.is_finite() {
+                        break;
+                    }
                 }
+                log_terms[idx] = s;
             }
-            log_terms[idx] = s;
-        }
-        // Normalise via the usual log-sum-exp shift and compute the weighted
-        // mean of `v` under the posterior.
-        let m = log_terms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        if !m.is_finite() {
-            out.push(0.5);
-            continue;
-        }
-        let mut num = 0.0;
-        let mut den = 0.0;
-        for (idx, &log_term) in log_terms.iter().enumerate() {
-            let w = (log_term - m).exp();
-            num += nodes[idx] * w;
-            den += w;
-        }
-        let posterior = if den > 0.0 { num / den } else { 0.5 };
-        out.push(posterior.clamp(clip, 1.0 - clip));
-    }
+            // Normalise via the usual log-sum-exp shift and compute the weighted
+            // mean of `v` under the posterior.
+            let m = log_terms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            if !m.is_finite() {
+                return Ok(0.5);
+            }
+            let mut num = 0.0;
+            let mut den = 0.0;
+            for (idx, &log_term) in log_terms.iter().enumerate() {
+                let w = (log_term - m).exp();
+                num += nodes[idx] * w;
+                den += w;
+            }
+            let posterior = if den > 0.0 { num / den } else { 0.5 };
+            Ok(posterior.clamp(clip, 1.0 - clip))
+        },
+    )?;
     Ok(out)
 }
 
@@ -1160,8 +1215,20 @@ fn polish_factor_model(
         }
     };
 
-    let (x_polished, polished_loglik, cycles, converged) =
-        coord_ascent_with_diagnostics(&x0, &brackets, rel_tol, max_cycles, 60, evaluate);
+    // Each coordinate search covers the full bracket, seeded at the current
+    // value. The coordinate tolerance sits far below what the cycle-level
+    // `rel_tol` on the log-likelihood can resolve.
+    let (x_polished, polished_loglik, cycles, converged) = coord_ascent_with_search(
+        &x0,
+        &brackets,
+        rel_tol,
+        max_cycles,
+        CoordinateSearch::Brent {
+            tol: POLISH_COORDINATE_TOL,
+            max_iter: 60,
+        },
+        evaluate,
+    );
 
     let polished_model = build_model_from_flat(
         &template_links,
@@ -1387,7 +1454,7 @@ mod tests {
             rotation: crate::paircopula::Rotation::R180,
             params: crate::paircopula::PairCopulaParams::One(3.0),
         };
-        let normal = Normal::new(0.0, 1.0).unwrap();
+        let normal = Normal;
         for (u, q) in [(0.2, 0.1), (0.95, 0.5), (0.5, 0.999)] {
             let z = conditional_quantile_score(&link, u, q, &normal).unwrap();
             let expected = link.inv_second_given_first(u, q, 1e-12).unwrap();

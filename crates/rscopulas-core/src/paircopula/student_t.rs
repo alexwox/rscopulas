@@ -1,17 +1,18 @@
-use statrs::{
-    distribution::{Continuous, ContinuousCDF, StudentsT},
-    function::gamma::ln_gamma,
+use crate::{
+    errors::{CopulaError, FitError},
+    special::StudentT,
 };
 
-use crate::errors::{CopulaError, FitError};
+const LN_2PI: f64 = 1.837_877_066_409_345_3;
 
-fn t_dist(nu: f64) -> Result<StudentsT, CopulaError> {
-    StudentsT::new(0.0, 1.0, nu).map_err(|_| {
-        FitError::Failed {
+fn t_dist(nu: f64) -> Result<StudentT, CopulaError> {
+    if !nu.is_finite() || nu <= 0.0 {
+        return Err(FitError::Failed {
             reason: "student t pair nu must be positive",
         }
-        .into()
-    })
+        .into());
+    }
+    Ok(StudentT::new(nu))
 }
 
 /// Admissible range for the degrees of freedom in pair fits. The lower end
@@ -40,39 +41,37 @@ pub fn candidate_nus() -> Vec<f64> {
 /// candidate ρ.
 pub struct NuTerms {
     nu: f64,
-    constant: f64,
-    x: Vec<f64>,
-    y: Vec<f64>,
-    log_marginals: Vec<f64>,
+    /// `Σ x²+y²` and `Σ xy` are not sufficient for the t likelihood, so the
+    /// per-row products are kept: `sq[i] = xᵢ² + yᵢ²`, `xy[i] = xᵢ yᵢ`.
+    sq: Vec<f64>,
+    xy: Vec<f64>,
+    /// `Σ [ln f_ν(xᵢ) + ln f_ν(yᵢ)]`, the ρ-free part of the log-likelihood.
+    log_marginal_sum: f64,
+    finite: bool,
 }
 
 impl NuTerms {
     pub fn new(u1: &[f64], u2: &[f64], nu: f64) -> Result<Self, CopulaError> {
-        if !nu.is_finite() || nu <= 0.0 {
-            return Err(FitError::Failed {
-                reason: "student t pair nu must be positive",
-            }
-            .into());
-        }
         let dist = t_dist(nu)?;
-        let mut x = Vec::with_capacity(u1.len());
-        let mut y = Vec::with_capacity(u1.len());
-        let mut log_marginals = Vec::with_capacity(u1.len());
+        let mut sq = Vec::with_capacity(u1.len());
+        let mut xy = Vec::with_capacity(u1.len());
+        let mut log_marginal_sum = 0.0;
+        let mut finite = true;
         for (&u, &v) in u1.iter().zip(u2) {
-            let qx = dist.inverse_cdf(u);
-            let qy = dist.inverse_cdf(v);
-            x.push(qx);
-            y.push(qy);
-            log_marginals.push(dist.ln_pdf(qx) + dist.ln_pdf(qy));
+            let qx = dist.ppf(u);
+            let qy = dist.ppf(v);
+            let log_marginal = dist.ln_pdf(qx) + dist.ln_pdf(qy);
+            finite &= log_marginal.is_finite();
+            log_marginal_sum += log_marginal;
+            sq.push(qx * qx + qy * qy);
+            xy.push(qx * qy);
         }
-        let constant =
-            ln_gamma((nu + 2.0) / 2.0) - ln_gamma(nu / 2.0) - (nu * std::f64::consts::PI).ln();
         Ok(Self {
             nu,
-            constant,
-            x,
-            y,
-            log_marginals,
+            sq,
+            xy,
+            log_marginal_sum,
+            finite,
         })
     }
 
@@ -80,21 +79,42 @@ impl NuTerms {
     /// `rho`, or `-inf` when `rho` is outside `(-1, 1)` or any row is
     /// non-finite.
     pub fn loglik(&self, rho: f64) -> f64 {
-        if !rho.is_finite() || rho.abs() >= 1.0 {
+        if !rho.is_finite() || rho.abs() >= 1.0 || !self.finite {
             return f64::NEG_INFINITY;
         }
         let one_minus = 1.0 - rho * rho;
-        let shared = self.constant - 0.5 * one_minus.ln();
-        let mut total = 0.0;
-        for ((&x, &y), &log_marginal) in self.x.iter().zip(&self.y).zip(&self.log_marginals) {
-            let quad = (x * x - 2.0 * rho * x * y + y * y) / one_minus;
-            let value = shared - 0.5 * (self.nu + 2.0) * (1.0 + quad / self.nu).ln() - log_marginal;
-            if !value.is_finite() {
-                return f64::NEG_INFINITY;
+        let scale = 1.0 / (one_minus * self.nu);
+        let two_rho = 2.0 * rho;
+        // Σ ln(1 + quad/ν) accumulated as a product in chunks: one `ln` per
+        // chunk instead of one per row. Each factor is ≥ 1 and the chunk is
+        // short enough that the running product cannot overflow unless a row
+        // is itself astronomically large, which the finiteness check catches.
+        let mut log_sum = 0.0;
+        for (sq, xy) in self.sq.chunks(8).zip(self.xy.chunks(8)) {
+            let mut product = 1.0_f64;
+            for (&s, &c) in sq.iter().zip(xy) {
+                product *= 1.0 + (s - two_rho * c) * scale;
             }
-            total += value;
+            if !product.is_finite() {
+                // Fall back to per-row logs for this chunk.
+                let mut chunk = 0.0;
+                for (&s, &c) in sq.iter().zip(xy) {
+                    chunk += (1.0 + (s - two_rho * c) * scale).ln();
+                }
+                log_sum += chunk;
+            } else {
+                log_sum += product.ln();
+            }
         }
-        total
+        let n = self.sq.len() as f64;
+        let total = n * (-LN_2PI - 0.5 * one_minus.ln())
+            - 0.5 * (self.nu + 2.0) * log_sum
+            - self.log_marginal_sum;
+        if total.is_finite() {
+            total
+        } else {
+            f64::NEG_INFINITY
+        }
     }
 }
 
@@ -102,8 +122,8 @@ pub fn cdf(u: f64, v: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     // Student-t Plackett integral from the countermonotone limit rho=-1.
     // Unlike Gaussian copulas, rho=0 is not independence for finite nu.
     let dist = t_dist(nu)?;
-    let x = dist.inverse_cdf(u);
-    let y = dist.inverse_cdf(v);
+    let x = dist.ppf(u);
+    let y = dist.ppf(v);
     let value = super::common::integrate_1d(
         &|t| {
             let r = t.sin();
@@ -119,59 +139,146 @@ pub fn cdf(u: f64, v: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     Ok((lower + value).clamp(lower, u.min(v)))
 }
 
-pub fn log_pdf(u1: f64, u2: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
+fn validate(rho: f64, nu: f64) -> Result<(), CopulaError> {
     if !rho.is_finite() || rho.abs() >= 1.0 || !nu.is_finite() || nu <= 0.0 {
         return Err(FitError::Failed {
             reason: "student t pair parameters are invalid",
         }
         .into());
     }
+    Ok(())
+}
 
-    let dist = t_dist(nu)?;
-    let x = dist.inverse_cdf(u1);
-    let y = dist.inverse_cdf(u2);
+/// Log-density at t-quantiles `(x, y)`. The bivariate normalising constant
+/// `ln Γ(ν/2 + 1) − ln Γ(ν/2) − ln(νπ)` collapses to `−ln 2π`.
+#[inline]
+fn log_pdf_from_quantiles(dist: &StudentT, x: f64, y: f64, rho: f64) -> f64 {
+    let nu = dist.nu();
     let one_minus = 1.0 - rho * rho;
     let quad = (x * x - 2.0 * rho * x * y + y * y) / one_minus;
-    let mv_log_pdf = ln_gamma((nu + 2.0) / 2.0)
-        - ln_gamma(nu / 2.0)
-        - 0.5 * one_minus.ln()
-        - (nu * std::f64::consts::PI).ln()
-        - 0.5 * (nu + 2.0) * (1.0 + quad / nu).ln();
-    Ok(mv_log_pdf - dist.ln_pdf(x) - dist.ln_pdf(y))
+    let mv_log_pdf = -LN_2PI - 0.5 * one_minus.ln() - 0.5 * (nu + 2.0) * (1.0 + quad / nu).ln();
+    mv_log_pdf - dist.ln_pdf(x) - dist.ln_pdf(y)
+}
+
+pub fn log_pdf(u1: f64, u2: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
+    validate(rho, nu)?;
+    let dist = StudentT::new(nu);
+    Ok(log_pdf_from_quantiles(
+        &dist,
+        dist.ppf(u1),
+        dist.ppf(u2),
+        rho,
+    ))
+}
+
+/// Precomputed `ν`-dependent state for evaluating many points of one
+/// Student t pair copula.
+pub(super) struct Kernel {
+    dist: StudentT,
+    cond: StudentT,
+    rho: f64,
+    /// `sqrt((1 − ρ²) / (ν + 1))`.
+    cond_scale: f64,
+}
+
+impl Kernel {
+    pub(super) fn new(rho: f64, nu: f64) -> Result<Self, CopulaError> {
+        validate(rho, nu)?;
+        let dist = StudentT::new(nu);
+        Ok(Self {
+            dist,
+            cond: dist.with_one_more_df(),
+            rho,
+            cond_scale: ((1.0 - rho * rho) / (nu + 1.0)).sqrt(),
+        })
+    }
+
+    /// `(log c, h_{1|2}, h_{2|1})` from one pair of quantile evaluations.
+    #[inline]
+    pub(super) fn eval3(&self, u1: f64, u2: f64) -> (f64, f64, f64) {
+        let nu = self.dist.nu();
+        let x = self.dist.ppf(u1);
+        let y = self.dist.ppf(u2);
+        (
+            log_pdf_from_quantiles(&self.dist, x, y, self.rho),
+            self.cond
+                .cdf((x - self.rho * y) / ((nu + y * y).sqrt() * self.cond_scale)),
+            self.cond
+                .cdf((y - self.rho * x) / ((nu + x * x).sqrt() * self.cond_scale)),
+        )
+    }
+}
+
+impl Kernel {
+    /// `(h_{1|2}, h_{2|1})` from one pair of quantile evaluations.
+    #[inline]
+    pub(super) fn cond_both(&self, u1: f64, u2: f64) -> (f64, f64) {
+        let nu = self.dist.nu();
+        let x = self.dist.ppf(u1);
+        let y = self.dist.ppf(u2);
+        (
+            self.cond
+                .cdf((x - self.rho * y) / ((nu + y * y).sqrt() * self.cond_scale)),
+            self.cond
+                .cdf((y - self.rho * x) / ((nu + x * x).sqrt() * self.cond_scale)),
+        )
+    }
+
+    /// `h_{2|1}⁻¹(p | u1)` followed by `h_{1|2}(u1 | ·)` at the result
+    /// clamped to `[clip, 1 − clip]`. The second step reuses the t-quantile
+    /// of the first unless the clamp moved it.
+    #[inline]
+    pub(super) fn inverse_then_cond(&self, u1: f64, p: f64, clip: f64) -> (f64, f64) {
+        let nu = self.dist.nu();
+        let x = self.dist.ppf(u1);
+        let quantile = self.rho * x + (nu + x * x).sqrt() * self.cond_scale * self.cond.ppf(p);
+        let solved = self.dist.cdf(quantile);
+        let clamped = solved.clamp(clip, 1.0 - clip);
+        let y = if clamped == solved {
+            quantile
+        } else {
+            self.dist.ppf(clamped)
+        };
+        (
+            solved,
+            self.cond
+                .cdf((x - self.rho * y) / ((nu + y * y).sqrt() * self.cond_scale)),
+        )
+    }
 }
 
 pub fn cond_first_given_second(u1: f64, u2: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     let dist = t_dist(nu)?;
-    let cond = t_dist(nu + 1.0)?;
-    let x = dist.inverse_cdf(u1);
-    let y = dist.inverse_cdf(u2);
+    let cond = dist.with_one_more_df();
+    let x = dist.ppf(u1);
+    let y = dist.ppf(u2);
     let scale = (((nu + y * y) * (1.0 - rho * rho)) / (nu + 1.0)).sqrt();
     Ok(cond.cdf((x - rho * y) / scale))
 }
 
 pub fn cond_second_given_first(u1: f64, u2: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     let dist = t_dist(nu)?;
-    let cond = t_dist(nu + 1.0)?;
-    let x = dist.inverse_cdf(u1);
-    let y = dist.inverse_cdf(u2);
+    let cond = dist.with_one_more_df();
+    let x = dist.ppf(u1);
+    let y = dist.ppf(u2);
     let scale = (((nu + x * x) * (1.0 - rho * rho)) / (nu + 1.0)).sqrt();
     Ok(cond.cdf((y - rho * x) / scale))
 }
 
 pub fn inv_first_given_second(p: f64, u2: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     let dist = t_dist(nu)?;
-    let cond = t_dist(nu + 1.0)?;
-    let y = dist.inverse_cdf(u2);
-    let q = cond.inverse_cdf(p);
+    let cond = dist.with_one_more_df();
+    let y = dist.ppf(u2);
+    let q = cond.ppf(p);
     let scale = (((nu + y * y) * (1.0 - rho * rho)) / (nu + 1.0)).sqrt();
     Ok(dist.cdf(rho * y + scale * q))
 }
 
 pub fn inv_second_given_first(u1: f64, p: f64, rho: f64, nu: f64) -> Result<f64, CopulaError> {
     let dist = t_dist(nu)?;
-    let cond = t_dist(nu + 1.0)?;
-    let x = dist.inverse_cdf(u1);
-    let q = cond.inverse_cdf(p);
+    let cond = dist.with_one_more_df();
+    let x = dist.ppf(u1);
+    let q = cond.ppf(p);
     let scale = (((nu + x * x) * (1.0 - rho * rho)) / (nu + 1.0)).sqrt();
     Ok(dist.cdf(rho * x + scale * q))
 }

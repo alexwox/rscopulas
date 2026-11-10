@@ -142,13 +142,10 @@ pub fn kendall_tau_test_statistic(tau: f64, n: usize) -> f64 {
 /// `|kendall_tau_test_statistic(tau, n)| > z_{1 − alpha/2}`. Invalid levels
 /// never reject.
 pub fn kendall_tau_rejects_independence(tau: f64, n: usize, alpha: f64) -> bool {
-    use statrs::distribution::{ContinuousCDF, Normal};
     if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
         return false;
     }
-    let critical = Normal::new(0.0, 1.0)
-        .expect("standard normal parameters should be valid")
-        .inverse_cdf(1.0 - alpha / 2.0);
+    let critical = crate::special::norm_ppf(1.0 - alpha / 2.0);
     kendall_tau_test_statistic(tau, n).abs() > critical
 }
 
@@ -361,6 +358,90 @@ fn midranks(values: &[f64]) -> Vec<f64> {
 /// coordinate) plus ¼·(count of ties in both). Defined on 1-based ranks to
 /// match Hoeffding's original formulation.
 fn bivariate_midranks(x: &[f64], y: &[f64]) -> Vec<f64> {
+    // O(n log n) sweep: observations are visited in order of increasing `x`,
+    // one tie group at a time, against a Fenwick tree over the ranks of `y`
+    // holding every observation with a strictly smaller `x`. All quantities
+    // are integer counts, so the result is exactly what the pairwise
+    // definition gives.
+    let n = x.len();
+    let y_rank = dense_ranks(y);
+    let y_levels = y_rank.iter().copied().max().map_or(0, |max| max + 1);
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| x[a].total_cmp(&x[b]).then(y_rank[a].cmp(&y_rank[b])));
+
+    let mut tree = vec![0u32; y_levels + 1];
+    // Number of inserted observations with y-rank < `rank`.
+    let below = |tree: &[u32], rank: usize| -> u32 {
+        let mut index = rank;
+        let mut total = 0;
+        while index > 0 {
+            total += tree[index];
+            index &= index - 1;
+        }
+        total
+    };
+    let mut q = vec![1.0_f64; n];
+    let mut start = 0;
+    while start < n {
+        let mut end = start + 1;
+        while end < n && x[order[end]] == x[order[start]] {
+            end += 1;
+        }
+        // Within the tie group (equal x, sorted by y): `smaller` members have
+        // a smaller y, `equal - 1` others share both coordinates.
+        let mut run_start = start;
+        while run_start < end {
+            let rank = y_rank[order[run_start]];
+            let mut run_end = run_start + 1;
+            while run_end < end && y_rank[order[run_end]] == rank {
+                run_end += 1;
+            }
+            let x_less_y_less = below(&tree, rank);
+            let x_less_y_equal = below(&tree, rank + 1) - x_less_y_less;
+            let x_equal_y_less = (run_start - start) as u32;
+            let both_equal = (run_end - run_start - 1) as u32;
+            let value = 1.0
+                + f64::from(x_less_y_less)
+                + 0.5 * f64::from(x_less_y_equal + x_equal_y_less)
+                + 0.25 * f64::from(both_equal);
+            for &member in &order[run_start..run_end] {
+                q[member] = value;
+            }
+            run_start = run_end;
+        }
+        for &member in &order[start..end] {
+            let mut index = y_rank[member] + 1;
+            while index <= y_levels {
+                tree[index] += 1;
+                // Advance by the lowest set bit: fill the bits below it,
+                // then carry.
+                index = (index | (index - 1)) + 1;
+            }
+        }
+        start = end;
+    }
+    q
+}
+
+/// Zero-based dense ranks: equal values share a rank and ranks have no gaps.
+fn dense_ranks(values: &[f64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..values.len()).collect();
+    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
+    let mut ranks = vec![0usize; values.len()];
+    let mut rank = 0;
+    for (position, &index) in order.iter().enumerate() {
+        if position > 0 && values[index] != values[order[position - 1]] {
+            rank += 1;
+        }
+        ranks[index] = rank;
+    }
+    ranks
+}
+
+/// Pairwise definition of [`bivariate_midranks`], kept as the reference the
+/// fast sweep is tested against.
+#[cfg(test)]
+fn bivariate_midranks_pairwise(x: &[f64], y: &[f64]) -> Vec<f64> {
     let n = x.len();
     let mut q = vec![1.0_f64; n];
     for i in 0..n {
@@ -431,6 +512,35 @@ mod tests {
         hoeffding_d_bivariate, kendall_tau_matrix, spearman_rho_bivariate, try_hoeffding_d_matrix,
         try_spearman_rho_matrix,
     };
+
+    #[test]
+    fn bivariate_midranks_sweep_matches_pairwise_definition() {
+        // Deterministic pseudo-random inputs with every kind of tie: in x
+        // only, in y only, in both, and none.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = |levels: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % levels) as f64
+        };
+        for (n, x_levels, y_levels) in [
+            (5usize, 2u64, 2u64),
+            (40, 6, 9),
+            (257, 1_000_000, 1_000_000),
+            (300, 4, 1_000_000),
+            (300, 1_000_000, 3),
+            (64, 1, 5),
+        ] {
+            let x: Vec<f64> = (0..n).map(|_| next(x_levels)).collect();
+            let y: Vec<f64> = (0..n).map(|_| next(y_levels)).collect();
+            assert_eq!(
+                super::bivariate_midranks(&x, &y),
+                super::bivariate_midranks_pairwise(&x, &y),
+                "n {n}, levels ({x_levels}, {y_levels})"
+            );
+        }
+    }
 
     #[test]
     fn kendall_tau_detects_positive_dependence() {

@@ -494,34 +494,34 @@ fn fit_canonical_vine(
     };
 
     for tree in edge_defs {
-        let mut fitted_edges = Vec::with_capacity(tree.edges.len());
-        for edge in tree.edges {
+        // The edges of one tree only read the previous tree's conditionals,
+        // so they are fitted concurrently (same dispatch rule as the R-vine).
+        let strategy = resolve_strategy(
+            options.base.exec,
+            Operation::PairFitScoring,
+            tree.edges.len(),
+        )?;
+        let truncated = tree.level > options.truncation_level.unwrap_or(data.dim() - 1);
+        let previous = internal_trees.last();
+        let fitted_edges = parallel_try_map_range_collect(tree.edges.len(), strategy, |idx| {
+            let edge = &tree.edges[idx];
             let left_data = if edge.conditioning.is_empty() {
                 shared_column(data, edge.conditioned.0)
             } else {
-                resolve_internal_conditional(
-                    internal_trees.last(),
-                    edge.conditioned.0,
-                    &edge.conditioning,
-                )?
+                resolve_internal_conditional(previous, edge.conditioned.0, &edge.conditioning)?
             };
             let right_data = if edge.conditioning.is_empty() {
                 shared_column(data, edge.conditioned.1)
             } else {
-                resolve_internal_conditional(
-                    internal_trees.last(),
-                    edge.conditioned.1,
-                    &edge.conditioning,
-                )?
+                resolve_internal_conditional(previous, edge.conditioned.1, &edge.conditioning)?
             };
 
-            let fit = if tree.level > options.truncation_level.unwrap_or(data.dim() - 1) {
+            let fit = if truncated {
                 truncated_pair_fit(&left_data, &right_data)
             } else {
                 fit_pair_copula(left_data.as_ref(), right_data.as_ref(), options)?
             };
-            iterations += 1;
-            fitted_edges.push(FittedGraphEdge {
+            Ok(FittedGraphEdge {
                 conditioned: edge.conditioned,
                 conditioning: edge.conditioning.clone(),
                 parent_endpoints: edge.conditioned,
@@ -529,8 +529,9 @@ fn fit_canonical_vine(
                 cond_on_first: Arc::from(fit.cond_on_first),
                 cond_on_second: Arc::from(fit.cond_on_second),
                 loglik: fit.loglik,
-            });
-        }
+            })
+        })?;
+        iterations += fitted_edges.len();
 
         stats.push(TreeStats {
             loglik: fitted_edges.iter().map(|edge| edge.loglik).sum(),

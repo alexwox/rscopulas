@@ -75,17 +75,7 @@ pub fn inv_first_given_second(
     // Bisection mirrors the Gumbel pattern — Joe's inverse h has no closed
     // form (its equation is transcendental in (1-u1)^θ) so numerical root
     // finding is the standard treatment here.
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_first_given_second(mid, u2, theta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(|mid| cond_first_given_second(mid, u2, theta), p, clip_eps)
 }
 
 pub fn inv_second_given_first(
@@ -94,17 +84,7 @@ pub fn inv_second_given_first(
     theta: f64,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_second_given_first(u1, mid, theta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(|mid| cond_second_given_first(u1, mid, theta), p, clip_eps)
 }
 
 pub(super) fn log_pdf_from_log_survival(x: f64, y: f64, theta: f64) -> f64 {
@@ -113,4 +93,33 @@ pub(super) fn log_pdf_from_log_survival(x: f64, y: f64, theta: f64) -> f64 {
     }
     let s = log_sum_survival(x, y, theta);
     (theta - 1.0) * (x + y) + (1.0 / theta - 2.0) * s + logaddexp(s, (theta - 1.0).ln())
+}
+
+/// `(log c, h_{1|2}, h_{2|1})` sharing the Joe terms. Each component is
+/// bit-identical to its stand-alone function.
+#[inline]
+pub(super) fn eval3(u1: f64, u2: f64, theta: f64) -> (f64, f64, f64) {
+    let (x, y, s) = terms(u1, u2, theta);
+    let density = if theta == 1.0 {
+        0.0
+    } else {
+        (theta - 1.0) * (x + y) + (1.0 / theta - 2.0) * s + logaddexp(s, (theta - 1.0).ln())
+    };
+    let shared = (1.0 / theta - 1.0) * s;
+    (
+        density,
+        (shared + log1mexp(theta * x) + (theta - 1.0) * y).exp(),
+        (shared + log1mexp(theta * y) + (theta - 1.0) * x).exp(),
+    )
+}
+
+/// `(h_{1|2}, h_{2|1})`, bit-identical to the stand-alone functions.
+#[inline]
+pub(super) fn cond_both(u1: f64, u2: f64, theta: f64) -> (f64, f64) {
+    let (x, y, s) = terms(u1, u2, theta);
+    let shared = (1.0 / theta - 1.0) * s;
+    (
+        (shared + log1mexp(theta * x) + (theta - 1.0) * y).exp(),
+        (shared + log1mexp(theta * y) + (theta - 1.0) * x).exp(),
+    )
 }

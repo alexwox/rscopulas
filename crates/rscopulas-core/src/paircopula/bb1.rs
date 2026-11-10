@@ -100,17 +100,11 @@ pub fn inv_first_given_second(
     // No closed form: bisect over u1 ∈ [clip_eps, 1 - clip_eps]. The h-function
     // is strictly increasing in u1 (Joe 2014, §5.3) so the 90-iter bisection
     // recovers ~double-precision in the bracket.
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_first_given_second(mid, u2, theta, delta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_first_given_second(mid, u2, theta, delta),
+        p,
+        clip_eps,
+    )
 }
 
 pub fn inv_second_given_first(
@@ -120,17 +114,11 @@ pub fn inv_second_given_first(
     delta: f64,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_second_given_first(u1, mid, theta, delta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_second_given_first(u1, mid, theta, delta),
+        p,
+        clip_eps,
+    )
 }
 
 pub fn cdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {
@@ -138,12 +126,78 @@ pub fn cdf(u1: f64, u2: f64, theta: f64, delta: f64) -> Result<f64, CopulaError>
     Ok((-log1pa / theta).exp())
 }
 
+/// BB1 log-density with its parameter-only terms evaluated once, for callers
+/// that evaluate many points at fixed parameters (a likelihood pass).
+pub(super) struct Density {
+    theta: f64,
+    delta: f64,
+    /// `ln θ + ln(δ − 1)`.
+    log_theta_delta_minus_one: f64,
+    /// `ln(1 + θδ)`.
+    log1p_theta_delta: f64,
+}
+
+impl Density {
+    pub(super) fn new(theta: f64, delta: f64) -> Self {
+        Self {
+            theta,
+            delta,
+            log_theta_delta_minus_one: theta.ln() + (delta - 1.0).ln(),
+            log1p_theta_delta: (theta * delta).ln_1p(),
+        }
+    }
+
+    /// Log-density at `(ln u₁, ln u₂)`.
+    #[inline]
+    pub(super) fn log_pdf_from_logs(&self, u: f64, v: f64) -> f64 {
+        let (theta, delta) = (self.theta, self.delta);
+        let (x, y, s, log1pa) = terms_from_logs(u, v, theta, delta);
+        let bracket = logaddexp(
+            self.log_theta_delta_minus_one,
+            s / delta + self.log1p_theta_delta,
+        );
+        (1.0 / delta - 2.0) * s + (-1.0 / theta - 2.0) * log1pa + bracket - (theta + 1.0) * (u + v)
+            + (delta - 1.0) * (x + y)
+    }
+}
+
 pub(super) fn log_pdf_from_logs(u: f64, v: f64, theta: f64, delta: f64) -> f64 {
-    let (x, y, s, log1pa) = terms_from_logs(u, v, theta, delta);
-    let bracket = logaddexp(
-        theta.ln() + (delta - 1.0).ln(),
-        s / delta + (theta * delta).ln_1p(),
-    );
-    (1.0 / delta - 2.0) * s + (-1.0 / theta - 2.0) * log1pa + bracket - (theta + 1.0) * (u + v)
-        + (delta - 1.0) * (x + y)
+    Density::new(theta, delta).log_pdf_from_logs(u, v)
+}
+
+impl Density {
+    /// `(h_{1|2}, h_{2|1})`, bit-identical to the stand-alone functions.
+    #[inline]
+    pub(super) fn cond_both(&self, u1: f64, u2: f64) -> (f64, f64) {
+        let (theta, delta) = (self.theta, self.delta);
+        let (lu, lv) = (u1.ln(), u2.ln());
+        let (x, y, s, log1pa) = terms_from_logs(lu, lv, theta, delta);
+        let shared = (-1.0 / theta - 1.0) * log1pa + (1.0 / delta - 1.0) * s;
+        (
+            (shared - (theta + 1.0) * lv + (delta - 1.0) * y).exp(),
+            (shared - (theta + 1.0) * lu + (delta - 1.0) * x).exp(),
+        )
+    }
+
+    /// `(log c, h_{1|2}, h_{2|1})` sharing the BB1 terms. Each component is
+    /// bit-identical to its stand-alone function.
+    #[inline]
+    pub(super) fn eval3(&self, u1: f64, u2: f64) -> (f64, f64, f64) {
+        let (theta, delta) = (self.theta, self.delta);
+        let (lu, lv) = (u1.ln(), u2.ln());
+        let (x, y, s, log1pa) = terms_from_logs(lu, lv, theta, delta);
+        let bracket = logaddexp(
+            self.log_theta_delta_minus_one,
+            s / delta + self.log1p_theta_delta,
+        );
+        let density = (1.0 / delta - 2.0) * s + (-1.0 / theta - 2.0) * log1pa + bracket
+            - (theta + 1.0) * (lu + lv)
+            + (delta - 1.0) * (x + y);
+        let shared = (-1.0 / theta - 1.0) * log1pa + (1.0 / delta - 1.0) * s;
+        (
+            density,
+            (shared - (theta + 1.0) * lv + (delta - 1.0) * y).exp(),
+            (shared - (theta + 1.0) * lu + (delta - 1.0) * x).exp(),
+        )
+    }
 }

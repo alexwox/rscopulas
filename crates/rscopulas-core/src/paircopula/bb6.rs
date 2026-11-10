@@ -89,17 +89,11 @@ pub fn inv_first_given_second(
     delta: f64,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_first_given_second(mid, u2, theta, delta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_first_given_second(mid, u2, theta, delta),
+        p,
+        clip_eps,
+    )
 }
 
 pub fn inv_second_given_first(
@@ -109,17 +103,11 @@ pub fn inv_second_given_first(
     delta: f64,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_second_given_first(u1, mid, theta, delta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_second_given_first(u1, mid, theta, delta),
+        p,
+        clip_eps,
+    )
 }
 
 pub fn cdf(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaError> {

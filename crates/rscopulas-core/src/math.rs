@@ -370,6 +370,75 @@ where
     )
 }
 
+/// Root of a continuous `f` on a bracket `[a, b]` with `f(a)` and `f(b)` of
+/// opposite sign, by Chandrupatla's method (inverse quadratic interpolation
+/// safeguarded by bisection).
+///
+/// `fa` and `fb` are the already-evaluated end values. The search stops once
+/// the bracket is narrower than `2 (abs_tol + rel_tol |x|)` or after
+/// `max_iter` evaluations, and returns the end of the final bracket with the
+/// smaller residual. Smooth functions converge superlinearly — typically
+/// 6–12 evaluations where bisection to the same tolerance needs 40–60.
+pub(crate) fn find_root_bracketed<F>(
+    bracket: (f64, f64),
+    values: (f64, f64),
+    abs_tol: f64,
+    rel_tol: f64,
+    max_iter: usize,
+    mut f: F,
+) -> f64
+where
+    F: FnMut(f64) -> f64,
+{
+    let (mut a, mut b) = bracket;
+    let (mut fa, mut fb) = values;
+    if fa == 0.0 {
+        return a;
+    }
+    if fb == 0.0 {
+        return b;
+    }
+    let (mut c, mut fc);
+    let mut t = 0.5;
+    for _ in 0..max_iter {
+        let xt = a + t * (b - a);
+        let ft = f(xt);
+        if (ft < 0.0) == (fa < 0.0) {
+            c = a;
+            fc = fa;
+        } else {
+            c = b;
+            fc = fb;
+            b = a;
+            fb = fa;
+        }
+        a = xt;
+        fa = ft;
+        let (xm, fm) = if fa.abs() < fb.abs() {
+            (a, fa)
+        } else {
+            (b, fb)
+        };
+        if fm == 0.0 {
+            return xm;
+        }
+        let tol = 2.0 * f64::EPSILON * xm.abs() + abs_tol + rel_tol * xm.abs();
+        let t_lim = tol / (b - c).abs();
+        if t_lim > 0.5 {
+            return xm;
+        }
+        let xi = (a - b) / (c - b);
+        let phi = (fa - fb) / (fc - fb);
+        t = if phi * phi < xi && (1.0 - phi) * (1.0 - phi) < 1.0 - xi {
+            fa / (fb - fa) * fc / (fb - fc) + (c - a) / (b - a) * fa / (fc - fa) * fb / (fc - fb)
+        } else {
+            0.5
+        };
+        t = t.clamp(t_lim, 1.0 - t_lim);
+    }
+    if fa.abs() < fb.abs() { a } else { b }
+}
+
 /// Coordinate-ascent maximisation of `f: Rᵖ → R` using the crate's golden-
 /// section step along each axis. One "cycle" sweeps every coordinate once.
 ///
@@ -399,12 +468,46 @@ where
     (x, value)
 }
 
+/// Line search used along each coordinate of a coordinate ascent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum CoordinateSearch {
+    /// Golden section on the full bracket, at most this many iterations
+    /// (the bracket is shrunk to 1e-10 relative).
+    Golden(usize),
+    /// Brent's method on the full bracket, seeded at the current value and
+    /// stopped at this absolute tolerance on the coordinate. Reaches the
+    /// same optimum in a third of the evaluations when the objective is
+    /// smooth, and never returns a point worse than the current one.
+    Brent { tol: f64, max_iter: usize },
+}
+
 pub(crate) fn coord_ascent_with_diagnostics<F>(
     x0: &[f64],
     brackets: &[(f64, f64)],
     rel_tol: f64,
     max_cycles: usize,
     iters_per_coord: usize,
+    f: F,
+) -> (Vec<f64>, f64, usize, bool)
+where
+    F: Fn(&[f64]) -> f64,
+{
+    coord_ascent_with_search(
+        x0,
+        brackets,
+        rel_tol,
+        max_cycles,
+        CoordinateSearch::Golden(iters_per_coord),
+        f,
+    )
+}
+
+pub(crate) fn coord_ascent_with_search<F>(
+    x0: &[f64],
+    brackets: &[(f64, f64)],
+    rel_tol: f64,
+    max_cycles: usize,
+    search: CoordinateSearch,
     f: F,
 ) -> (Vec<f64>, f64, usize, bool)
 where
@@ -422,11 +525,26 @@ where
         completed += 1;
         for k in 0..x.len() {
             let mut candidate = x.clone();
-            let coordinate =
-                maximize_scalar(brackets[k].0, brackets[k].1, iters_per_coord, |value| {
-                    candidate[k] = value;
-                    f(&candidate)
-                });
+            let objective = |value: f64| {
+                candidate[k] = value;
+                f(&candidate)
+            };
+            let coordinate = match search {
+                CoordinateSearch::Golden(iterations) => {
+                    maximize_scalar(brackets[k].0, brackets[k].1, iterations, objective)
+                }
+                CoordinateSearch::Brent { tol, max_iter } => {
+                    maximize_scalar_brent(
+                        brackets[k].0,
+                        brackets[k].1,
+                        Some(x[k]),
+                        tol,
+                        max_iter,
+                        objective,
+                    )
+                    .x
+                }
+            };
             candidate[k] = coordinate;
             let value = f(&candidate);
             // A bounded scalar search must never discard a better warm start.
@@ -817,6 +935,527 @@ where
     }
 }
 
+/// Tuning knobs for [`quasi_newton_maximize`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuasiNewtonOptions {
+    /// Convergence threshold on the *predicted* remaining gain
+    /// `½ gᵀ H⁻¹ g` of the quadratic model (absolute, in objective units).
+    pub ftol: f64,
+    /// Step length (per coordinate) used along a coordinate whose curvature
+    /// cannot be estimated.
+    pub initial_step: f64,
+    /// Cap on quasi-Newton iterations.
+    pub max_iter: usize,
+    /// Evaluate the finite-difference stencils of each gradient and Hessian
+    /// on the rayon pool. Worth it when one objective evaluation is a pass over a
+    /// sample; pure overhead for cheap objectives.
+    pub parallel_gradient: bool,
+}
+
+/// Outcome of [`quasi_newton_maximize`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuasiNewtonResult {
+    /// Best point found (inside the bounds).
+    pub x: Vec<f64>,
+    /// Objective value at `x` (`-inf` if no finite value was encountered).
+    pub value: f64,
+    /// Quasi-Newton iterations consumed.
+    pub iterations: usize,
+    /// Objective evaluations consumed, including gradient stencils.
+    pub evaluations: usize,
+    /// Whether the predicted remaining gain fell below `ftol`. When `false`
+    /// the search stalled (line-search failure, non-finite stencil, or the
+    /// iteration cap) and `x` is merely the best point seen; callers that
+    /// need a certified optimum should continue with a derivative-free
+    /// method from there.
+    pub converged: bool,
+}
+
+/// Bounded quasi-Newton maximisation of a smooth `f` starting from `x0`,
+/// with finite-difference derivatives.
+///
+/// This is the fast polish for likelihoods that already have a warm start in
+/// the right basin: where Nelder–Mead needs a few hundred evaluations to
+/// shrink a simplex to convergence, this needs a few dozen.
+///
+/// * The curvature model starts from a finite-difference Hessian at `x0`, so
+///   the first step is a Newton step. Copula parameters in log/logit
+///   coordinates are routinely strongly correlated and differ by orders of
+///   magnitude in curvature; a scaled identity or a diagonal would call a
+///   ridge converged while there is still likelihood to gain along it.
+/// * Later iterations update that model by BFGS from central-difference
+///   gradients (`2n` evaluations each, optionally in parallel).
+/// * Bounds are handled as an active set: a coordinate on a bound with the
+///   gradient pointing outwards is frozen, a step stops exactly at the first
+///   bound it reaches, and the model is rebuilt whenever the active set
+///   changes.
+///
+/// Non-finite objective values are treated as arbitrarily bad in the line
+/// search, and a non-finite derivative stencil ends the search with
+/// `converged = false`. The returned point is never worse than `f(x0)`.
+pub fn quasi_newton_maximize<F>(
+    x0: &[f64],
+    bounds: &[(f64, f64)],
+    options: &QuasiNewtonOptions,
+    f: F,
+) -> QuasiNewtonResult
+where
+    F: Fn(&[f64]) -> f64 + Sync,
+{
+    /// Largest move of any coordinate in one iteration (unconstrained units).
+    const MAX_STEP: f64 = 1.0;
+    /// Relative stencil widths for first and second differences.
+    const GRADIENT_STEP: f64 = 6.0e-6;
+    const HESSIAN_STEP: f64 = 1.0e-3;
+
+    assert_eq!(x0.len(), bounds.len(), "one bound per coordinate");
+    let n = x0.len();
+    let evaluations = std::sync::atomic::AtomicUsize::new(0);
+    // Minimise g = −f; non-finite objective values become +inf.
+    let g = |x: &[f64]| {
+        evaluations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let value = f(x);
+        if value.is_finite() {
+            -value
+        } else {
+            f64::INFINITY
+        }
+    };
+    let finish = |x: Vec<f64>, gx: f64, iterations: usize, converged: bool| QuasiNewtonResult {
+        x,
+        value: if gx.is_finite() {
+            -gx
+        } else {
+            f64::NEG_INFINITY
+        },
+        iterations,
+        evaluations: evaluations.load(std::sync::atomic::Ordering::Relaxed),
+        converged,
+    };
+    // Runs `job(0..len)` serially or on the pool.
+    let map = |len: usize, job: &(dyn Fn(usize) -> f64 + Sync)| -> Vec<f64> {
+        if options.parallel_gradient && len > 1 {
+            use rayon::prelude::*;
+            (0..len).into_par_iter().map(job).collect()
+        } else {
+            (0..len).map(job).collect()
+        }
+    };
+
+    let mut x: Vec<f64> = x0
+        .iter()
+        .zip(bounds)
+        .map(|(value, (low, high))| value.clamp(*low, *high))
+        .collect();
+    let mut gx = g(&x);
+    if n == 0 || !gx.is_finite() {
+        return finish(x, gx, 0, n == 0 && gx.is_finite());
+    }
+
+    // Central differences, one-sided at a bound. `None` when a stencil point
+    // is non-finite.
+    let gradient = |x: &[f64], gx: f64| -> Option<Vec<f64>> {
+        let slopes = map(n, &|i| {
+            let h = GRADIENT_STEP * x[i].abs().max(1.0);
+            let (low, high) = bounds[i];
+            let mut point = x.to_vec();
+            let up = (x[i] + h).min(high);
+            let down = (x[i] - h).max(low);
+            if up == down {
+                return 0.0;
+            }
+            let value_up = if up > x[i] {
+                point[i] = up;
+                g(&point)
+            } else {
+                gx
+            };
+            let value_down = if down < x[i] {
+                point[i] = down;
+                g(&point)
+            } else {
+                gx
+            };
+            (value_up - value_down) / (up - down)
+        });
+        slopes
+            .iter()
+            .all(|slope| slope.is_finite())
+            .then_some(slopes)
+    };
+    let pinned = |x: &[f64], grad: &[f64]| -> Vec<bool> {
+        (0..n)
+            .map(|i| {
+                (x[i] <= bounds[i].0 && grad[i] > 0.0) || (x[i] >= bounds[i].1 && grad[i] < 0.0)
+            })
+            .collect()
+    };
+
+    // Inverse-Hessian model on the free coordinates (row-major, zero rows and
+    // columns for frozen ones), from a finite-difference Hessian when that is
+    // positive definite and from its usable diagonal otherwise.
+    let model = |x: &[f64], gx: f64, grad: &[f64], frozen: &[bool]| -> Vec<f64> {
+        let free: Vec<usize> = (0..n).filter(|&i| !frozen[i]).collect();
+        let k = free.len();
+        let mut inverse = vec![0.0; n * n];
+        if k == 0 {
+            return inverse;
+        }
+        // Step towards the side with room; second differences are symmetric
+        // in the step sign, so a one-sided stencil pair is fine at a bound.
+        let steps: Vec<f64> = free
+            .iter()
+            .map(|&i| {
+                let h = HESSIAN_STEP * x[i].abs().max(1.0);
+                if x[i] + h <= bounds[i].1 { h } else { -h }
+            })
+            .collect();
+        let shifted = |moves: &[(usize, f64)]| {
+            let mut point = x.to_vec();
+            for &(i, delta) in moves {
+                point[i] += delta;
+            }
+            if point
+                .iter()
+                .zip(bounds)
+                .any(|(value, (low, high))| value < low || value > high)
+            {
+                f64::NAN
+            } else {
+                g(&point)
+            }
+        };
+        let forward = map(k, &|a| shifted(&[(free[a], steps[a])]));
+        let backward = map(k, &|a| shifted(&[(free[a], -steps[a])]));
+        let pairs: Vec<(usize, usize)> = (0..k)
+            .flat_map(|a| ((a + 1)..k).map(move |b| (a, b)))
+            .collect();
+        // Mixed partials by the symmetric four-point stencil. Its O(h²)
+        // error matters: along a likelihood ridge the Hessian is nearly
+        // singular, and a first-order cross term is enough to wipe out the
+        // small eigenvalue that says how far the ridge still climbs.
+        let cross = map(pairs.len(), &|p| {
+            let (a, b) = pairs[p];
+            let (i, j) = (free[a], free[b]);
+            let (hi, hj) = (steps[a], steps[b]);
+            let corners = [
+                shifted(&[(i, hi), (j, hj)]),
+                shifted(&[(i, hi), (j, -hj)]),
+                shifted(&[(i, -hi), (j, hj)]),
+                shifted(&[(i, -hi), (j, -hj)]),
+            ];
+            (corners[0] - corners[1] - corners[2] + corners[3]) / (4.0 * hi * hj)
+        });
+
+        let mut hessian = Array2::<f64>::zeros((k, k));
+        for a in 0..k {
+            hessian[(a, a)] = (forward[a] - 2.0 * gx + backward[a]) / (steps[a] * steps[a]);
+        }
+        for (p, &(a, b)) in pairs.iter().enumerate() {
+            hessian[(a, b)] = cross[p];
+            hessian[(b, a)] = cross[p];
+        }
+        if hessian.iter().all(|value| value.is_finite())
+            && cholesky(&hessian).is_ok()
+            && let Ok(inverted) = self::inverse(&hessian)
+        {
+            for a in 0..k {
+                for b in 0..k {
+                    inverse[free[a] * n + free[b]] = inverted[(a, b)];
+                }
+            }
+            return inverse;
+        }
+        // Not a usable bowl (non-finite stencil, saddle, or flat stretch):
+        // keep each coordinate's own curvature where it is clearly positive,
+        // and otherwise the step that moves it by `initial_step`.
+        for (a, &i) in free.iter().enumerate() {
+            let slope = grad[i].abs().max(f64::MIN_POSITIVE);
+            let curvature = hessian[(a, a)];
+            let floor = 64.0 * f64::EPSILON * gx.abs().max(1.0) / (steps[a] * steps[a]);
+            inverse[i * n + i] = if curvature.is_finite() && curvature > floor {
+                (1.0 / curvature).min(MAX_STEP / slope)
+            } else {
+                options.initial_step / slope
+            };
+        }
+        inverse
+    };
+
+    let Some(mut grad) = gradient(&x, gx) else {
+        return finish(x, gx, 0, false);
+    };
+    let mut frozen = pinned(&x, &grad);
+    let mut inverse = model(&x, gx, &grad, &frozen);
+    // Whether `inverse` was just rebuilt (no BFGS update absorbed yet).
+    let mut fresh = true;
+
+    let mut iterations = 0usize;
+    let mut converged = false;
+    let mut direction = vec![0.0; n];
+    let mut trial = vec![0.0; n];
+    while iterations < options.max_iter {
+        let mut predicted = 0.0;
+        for i in 0..n {
+            direction[i] = 0.0;
+            if frozen[i] {
+                continue;
+            }
+            for j in 0..n {
+                direction[i] -= inverse[i * n + j] * grad[j];
+            }
+            predicted -= 0.5 * direction[i] * grad[i];
+        }
+        if predicted.is_nan() || predicted <= 0.0 {
+            if (0..n).all(|i| frozen[i] || grad[i] == 0.0) {
+                converged = true;
+                break;
+            }
+            // Not a descent direction: the curvature model is unusable.
+            if fresh {
+                break;
+            }
+            inverse = model(&x, gx, &grad, &frozen);
+            fresh = true;
+            continue;
+        }
+        if predicted <= options.ftol {
+            converged = true;
+            break;
+        }
+        iterations += 1;
+
+        // Trust region: no coordinate moves more than `MAX_STEP` at once,
+        // and the step ends at the first bound it reaches.
+        let longest = direction.iter().fold(0.0_f64, |acc, d| acc.max(d.abs()));
+        let mut step = (MAX_STEP / longest).min(1.0);
+        let mut hits_bound = false;
+        for i in 0..n {
+            let room = if direction[i] > 0.0 {
+                (bounds[i].1 - x[i]) / direction[i]
+            } else if direction[i] < 0.0 {
+                (bounds[i].0 - x[i]) / direction[i]
+            } else {
+                f64::INFINITY
+            };
+            if room < step {
+                step = room;
+                hits_bound = true;
+            }
+        }
+        let slope: f64 = direction.iter().zip(&grad).map(|(d, v)| d * v).sum();
+        let mut accepted = None;
+        for attempt in 0..40 {
+            for i in 0..n {
+                trial[i] = (x[i] + step * direction[i]).clamp(bounds[i].0, bounds[i].1);
+            }
+            if attempt == 0 && hits_bound {
+                // Land exactly on the bound so the coordinate can be frozen.
+                for i in 0..n {
+                    let target = if direction[i] > 0.0 {
+                        bounds[i].1
+                    } else {
+                        bounds[i].0
+                    };
+                    if direction[i] != 0.0
+                        && (target - trial[i]).abs() <= 1e-12 * target.abs().max(1.0)
+                    {
+                        trial[i] = target;
+                    }
+                }
+            }
+            if trial == x {
+                break;
+            }
+            let value = g(&trial);
+            if value <= gx + 1e-4 * step * slope {
+                accepted = Some(value);
+                break;
+            }
+            step *= if value.is_finite() { 0.5 } else { 0.25 };
+        }
+        let Some(value) = accepted else {
+            if fresh {
+                // Even a Newton step from a fresh model cannot improve:
+                // stationary to within the resolution of the objective.
+                converged = predicted <= 1e3 * options.ftol;
+                break;
+            }
+            inverse = model(&x, gx, &grad, &frozen);
+            fresh = true;
+            continue;
+        };
+        let Some(new_grad) = gradient(&trial, value) else {
+            // Keep the improvement but stop: the stencil left the domain.
+            x.copy_from_slice(&trial);
+            gx = value;
+            break;
+        };
+
+        let new_frozen = pinned(&trial, &new_grad);
+        if new_frozen != frozen {
+            // The active set changed: curvature gathered in the old subspace
+            // does not carry over.
+            x.copy_from_slice(&trial);
+            gx = value;
+            grad = new_grad;
+            frozen = new_frozen;
+            inverse = model(&x, gx, &grad, &frozen);
+            fresh = true;
+            continue;
+        }
+
+        // BFGS update of the inverse Hessian with s = Δx, y = Δgrad on the
+        // free coordinates.
+        let s: Vec<f64> = (0..n)
+            .map(|i| if frozen[i] { 0.0 } else { trial[i] - x[i] })
+            .collect();
+        let y: Vec<f64> = (0..n)
+            .map(|i| {
+                if frozen[i] {
+                    0.0
+                } else {
+                    new_grad[i] - grad[i]
+                }
+            })
+            .collect();
+        let sy: f64 = s.iter().zip(&y).map(|(a, b)| a * b).sum();
+        let yy: f64 = y.iter().map(|v| v * v).sum();
+        let ss: f64 = s.iter().map(|v| v * v).sum();
+        if sy > 1e-10 * (ss * yy).sqrt() && sy > 0.0 {
+            let hy: Vec<f64> = (0..n)
+                .map(|i| (0..n).map(|j| inverse[i * n + j] * y[j]).sum())
+                .collect();
+            let yhy: f64 = y.iter().zip(&hy).map(|(a, b)| a * b).sum();
+            let factor = (1.0 + yhy / sy) / sy;
+            for i in 0..n {
+                for j in 0..n {
+                    inverse[i * n + j] += factor * s[i] * s[j] - (hy[i] * s[j] + s[i] * hy[j]) / sy;
+                }
+            }
+            fresh = false;
+        }
+        x.copy_from_slice(&trial);
+        gx = value;
+        grad = new_grad;
+    }
+    finish(x, gx, iterations, converged)
+}
+
+/// Maximises a smooth likelihood from a warm start: quasi-Newton for speed,
+/// coordinate probes for robustness, Nelder–Mead as the last resort.
+///
+/// [`quasi_newton_maximize`] converges in a few dozen evaluations but, like
+/// any gradient method, declares victory wherever the gradient vanishes. In
+/// the log/logit coordinates used for copula parameters that also happens on
+/// plateaus — a parameter saturating towards a bound flattens the objective
+/// without being optimal. After each quasi-Newton run every coordinate is
+/// therefore probed at a few large offsets and at its bounds; an improving
+/// probe restarts the search from there. Only if the quasi-Newton search
+/// cannot certify convergence does the (several times more expensive)
+/// simplex search run, from the best point found.
+///
+/// `tol` is the absolute objective tolerance. The result is never worse than
+/// `f(x0)`; `(x, value)` is returned.
+pub(crate) fn polish_maximize<F>(
+    x0: &[f64],
+    bounds: &[(f64, f64)],
+    tol: f64,
+    max_iter: usize,
+    parallel: bool,
+    f: F,
+) -> (Vec<f64>, f64)
+where
+    F: Fn(&[f64]) -> f64 + Sync,
+{
+    /// Offsets (in unconstrained units) at which each coordinate is probed.
+    const PROBE_OFFSETS: [f64; 4] = [-3.0, -1.0, 1.0, 3.0];
+    /// Quasi-Newton runs before giving up on probes improving the optimum.
+    const MAX_ROUNDS: usize = 4;
+
+    let options = QuasiNewtonOptions {
+        ftol: tol,
+        initial_step: 0.2,
+        max_iter,
+        parallel_gradient: parallel,
+    };
+    let mut x: Vec<f64> = x0
+        .iter()
+        .zip(bounds)
+        .map(|(value, (low, high))| value.clamp(*low, *high))
+        .collect();
+    let mut value = f(&x);
+    let mut certified = false;
+    for _ in 0..MAX_ROUNDS {
+        let run = quasi_newton_maximize(&x, bounds, &options, &f);
+        if run.value.is_finite() && run.value >= value {
+            x = run.x;
+            value = run.value;
+        }
+        certified = run.converged;
+        if !certified {
+            break;
+        }
+        // Probe each coordinate far from the incumbent.
+        let mut probes: Vec<Vec<f64>> = Vec::new();
+        for (i, &(low, high)) in bounds.iter().enumerate() {
+            let mut targets: Vec<f64> = PROBE_OFFSETS
+                .iter()
+                .map(|offset| (x[i] + offset).clamp(low, high))
+                .collect();
+            targets.push(low);
+            targets.push(high);
+            targets.sort_by(f64::total_cmp);
+            targets.dedup();
+            for target in targets {
+                if target != x[i] {
+                    let mut probe = x.clone();
+                    probe[i] = target;
+                    probes.push(probe);
+                }
+            }
+        }
+        let values: Vec<f64> = if parallel {
+            use rayon::prelude::*;
+            probes.par_iter().map(|probe| f(probe)).collect()
+        } else {
+            probes.iter().map(|probe| f(probe)).collect()
+        };
+        let mut improved = false;
+        let mut best = value;
+        for (probe, probe_value) in probes.into_iter().zip(values) {
+            if probe_value.is_finite() && probe_value > best + tol {
+                best = probe_value;
+                x = probe;
+                improved = true;
+            }
+        }
+        if !improved {
+            break;
+        }
+        value = best;
+    }
+    if !certified {
+        let simplex = nelder_mead_maximize(
+            &x,
+            bounds,
+            &NelderMeadOptions {
+                initial_step: 0.2,
+                ftol: tol,
+                xtol: 1e-6,
+                max_iter,
+                restarts: 1,
+            },
+            &f,
+        );
+        if simplex.value.is_finite() && simplex.value >= value {
+            x = simplex.x;
+            value = simplex.value;
+        }
+    }
+    (x, value)
+}
+
 /// Numerical Hessian via central differences.
 ///
 /// Computes
@@ -888,9 +1527,9 @@ mod tests {
     use ndarray::array;
 
     use super::{
-        NelderMeadOptions, cholesky, coord_ascent_maximise, gauss_legendre_01,
+        NelderMeadOptions, QuasiNewtonOptions, cholesky, coord_ascent_maximise, gauss_legendre_01,
         log_determinant_from_cholesky, maximize_scalar_brent, nelder_mead_maximize,
-        numerical_hessian, quadratic_form_from_cholesky,
+        numerical_hessian, quadratic_form_from_cholesky, quasi_newton_maximize,
     };
 
     #[test]
@@ -1010,6 +1649,138 @@ mod tests {
         assert!(capped.iterations <= 5);
         assert!(!capped.converged);
         assert!(capped.value >= -0.0);
+    }
+
+    fn qn_options() -> QuasiNewtonOptions {
+        QuasiNewtonOptions {
+            ftol: 1e-12,
+            initial_step: 0.2,
+            max_iter: 200,
+            parallel_gradient: false,
+        }
+    }
+
+    #[test]
+    fn quasi_newton_finds_quadratic_maximum_in_few_evaluations() {
+        let f =
+            |x: &[f64]| -((x[0] - 1.5).powi(2) + 2.0 * (x[1] + 0.5).powi(2) + 0.6 * x[0] * x[1]);
+        let det = 2.0 * 4.0 - 0.6 * 0.6;
+        let x_star = (3.0 * 4.0 - 0.6 * (-2.0)) / det;
+        let y_star = (2.0 * (-2.0) - 0.6 * 3.0) / det;
+        let result =
+            quasi_newton_maximize(&[0.0, 0.0], &[(-5.0, 5.0), (-5.0, 5.0)], &qn_options(), f);
+        assert!(result.converged);
+        assert!((result.x[0] - x_star).abs() < 1e-6, "x = {:?}", result.x);
+        assert!((result.x[1] - y_star).abs() < 1e-6, "x = {:?}", result.x);
+        assert!(
+            result.evaluations < 80,
+            "evaluations = {}",
+            result.evaluations
+        );
+    }
+
+    #[test]
+    fn quasi_newton_handles_a_curved_valley() {
+        // Rosenbrock, the classic test of curvature tracking.
+        let f = |x: &[f64]| -((1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0] * x[0]).powi(2));
+        let result = quasi_newton_maximize(
+            &[-1.2, 1.0],
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            &QuasiNewtonOptions {
+                max_iter: 500,
+                ..qn_options()
+            },
+            f,
+        );
+        assert!(result.converged, "result = {result:?}");
+        assert!((result.x[0] - 1.0).abs() < 1e-4, "x = {:?}", result.x);
+        assert!((result.x[1] - 1.0).abs() < 1e-4, "x = {:?}", result.x);
+    }
+
+    #[test]
+    fn quasi_newton_stops_on_active_bounds() {
+        let f = |x: &[f64]| -((x[0] - 3.0).powi(2) + (x[1] + 4.0).powi(2));
+        let result =
+            quasi_newton_maximize(&[0.5, 0.5], &[(-1.0, 1.0), (-1.0, 1.0)], &qn_options(), f);
+        assert!(result.converged, "result = {result:?}");
+        assert_eq!(result.x, vec![1.0, -1.0]);
+        assert!(result.value >= f(&[0.5, 0.5]));
+    }
+
+    #[test]
+    fn quasi_newton_mixes_free_and_bound_coordinates() {
+        // Optimum at x = 0.3 (interior), y at its upper bound.
+        let f = |x: &[f64]| -((x[0] - 0.3).powi(2)) + 2.0 * x[1] - 0.1 * x[0] * x[1];
+        let result =
+            quasi_newton_maximize(&[-0.5, 0.0], &[(-1.0, 1.0), (-1.0, 1.0)], &qn_options(), f);
+        assert!(result.converged, "result = {result:?}");
+        assert_eq!(result.x[1], 1.0);
+        assert!((result.x[0] - 0.25).abs() < 1e-6, "x = {:?}", result.x);
+    }
+
+    #[test]
+    fn quasi_newton_never_regresses_and_reports_invalid_regions() {
+        // NaN beyond x + y > 1: the optimum sits on the validity boundary,
+        // which a gradient method cannot certify.
+        let f = |x: &[f64]| {
+            if x[0] + x[1] > 1.0 {
+                f64::NAN
+            } else {
+                -((x[0] - 0.9).powi(2) + (x[1] - 0.9).powi(2))
+            }
+        };
+        let start = [0.0, 0.0];
+        let result = quasi_newton_maximize(&start, &[(-2.0, 2.0), (-2.0, 2.0)], &qn_options(), f);
+        assert!(result.value.is_finite());
+        assert!(result.value >= f(&start));
+        assert!(result.x[0] + result.x[1] <= 1.0);
+
+        let invalid = quasi_newton_maximize(&[5.0], &[(-9.0, 9.0)], &qn_options(), |_| f64::NAN);
+        assert!(!invalid.converged);
+        assert_eq!(invalid.value, f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn quasi_newton_parallel_gradient_matches_serial() {
+        let f = |x: &[f64]| -(x[0].exp() - 2.0 * x[0] + (x[1] - 0.4).powi(4) + x[2] * x[2]);
+        let bounds = [(-3.0, 3.0); 3];
+        let serial = quasi_newton_maximize(&[1.0, 1.0, 1.0], &bounds, &qn_options(), f);
+        let parallel = quasi_newton_maximize(
+            &[1.0, 1.0, 1.0],
+            &bounds,
+            &QuasiNewtonOptions {
+                parallel_gradient: true,
+                ..qn_options()
+            },
+            f,
+        );
+        assert_eq!(serial.x, parallel.x);
+        assert_eq!(serial.value, parallel.value);
+        assert!((serial.x[0] - 2.0_f64.ln()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bracketed_root_converges_fast_on_smooth_functions() {
+        let mut calls = 0usize;
+        let root = super::find_root_bracketed((0.0, 4.0), (-2.0, 14.0), 0.0, 1e-13, 200, |x| {
+            calls += 1;
+            x * x - 2.0
+        });
+        assert!(
+            (root - std::f64::consts::SQRT_2).abs() < 1e-12,
+            "root = {root}"
+        );
+        assert!(calls <= 14, "calls = {calls}");
+
+        // Monotone but far from polynomial: a CDF-like sigmoid.
+        let g = |x: f64| 1.0 / (1.0 + (-(x - 37.5) * 3.0).exp()) - 0.25;
+        let root = super::find_root_bracketed((0.0, 100.0), (g(0.0), g(100.0)), 0.0, 1e-12, 200, g);
+        assert!(g(root).abs() < 1e-10, "residual = {}", g(root));
+        // Exact zero at an end point is returned as is.
+        assert_eq!(
+            super::find_root_bracketed((1.0, 2.0), (0.0, 3.0), 0.0, 1e-12, 50, |x| x),
+            1.0
+        );
     }
 
     #[test]

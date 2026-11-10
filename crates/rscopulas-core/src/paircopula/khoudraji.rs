@@ -64,10 +64,20 @@ pub fn cond_first_given_second(
     params: &KhoudrajiParams,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let parts = evaluate_parts(u1, u2, params, clip_eps)?;
-    Ok((parts.dv_first * parts.h12_first * parts.cdf_second
-        + parts.cdf_first * parts.dv_second * parts.h12_second)
-        .clamp(clip_eps, 1.0 - clip_eps))
+    // ∂C/∂u₂ needs each base copula's CDF and its h-function in the second
+    // argument only; the densities and the other pair of h-functions that
+    // the log-density uses are not evaluated.
+    let m = Margins::new(u1, u2, params, clip_eps);
+    let cdf_first = params.first.cdf(m.x1, m.y1, clip_eps)?;
+    let cdf_second = params.second.cdf(m.x2, m.y2, clip_eps)?;
+    let h12_first = params.first.cond_first_given_second(m.x1, m.y1, clip_eps)?;
+    let h12_second = params
+        .second
+        .cond_first_given_second(m.x2, m.y2, clip_eps)?;
+    Ok(
+        (m.dv_first * h12_first * cdf_second + cdf_first * m.dv_second * h12_second)
+            .clamp(clip_eps, 1.0 - clip_eps),
+    )
 }
 
 pub fn cond_second_given_first(
@@ -76,10 +86,17 @@ pub fn cond_second_given_first(
     params: &KhoudrajiParams,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let parts = evaluate_parts(u1, u2, params, clip_eps)?;
-    Ok((parts.du_first * parts.h21_first * parts.cdf_second
-        + parts.cdf_first * parts.du_second * parts.h21_second)
-        .clamp(clip_eps, 1.0 - clip_eps))
+    let m = Margins::new(u1, u2, params, clip_eps);
+    let cdf_first = params.first.cdf(m.x1, m.y1, clip_eps)?;
+    let cdf_second = params.second.cdf(m.x2, m.y2, clip_eps)?;
+    let h21_first = params.first.cond_second_given_first(m.x1, m.y1, clip_eps)?;
+    let h21_second = params
+        .second
+        .cond_second_given_first(m.x2, m.y2, clip_eps)?;
+    Ok(
+        (m.du_first * h21_first * cdf_second + cdf_first * m.du_second * h21_second)
+            .clamp(clip_eps, 1.0 - clip_eps),
+    )
 }
 
 pub fn inv_first_given_second(
@@ -108,37 +125,64 @@ pub fn inv_second_given_first(
     )
 }
 
+/// Power-transformed margins `u^(1−a), v^(1−b)` (first base copula) and
+/// `u^a, v^b` (second), with the derivatives of those powers.
+struct Margins {
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    du_first: f64,
+    dv_first: f64,
+    du_second: f64,
+    dv_second: f64,
+}
+
+impl Margins {
+    fn new(u1: f64, u2: f64, params: &KhoudrajiParams, clip_eps: f64) -> Self {
+        let u1 = u1.clamp(clip_eps, 1.0 - clip_eps);
+        let u2 = u2.clamp(clip_eps, 1.0 - clip_eps);
+        let alpha = 1.0 - params.shape_first;
+        let beta = 1.0 - params.shape_second;
+        let a = params.shape_first;
+        let b = params.shape_second;
+        Self {
+            x1: power_margin(u1, alpha, clip_eps),
+            y1: power_margin(u2, beta, clip_eps),
+            x2: power_margin(u1, a, clip_eps),
+            y2: power_margin(u2, b, clip_eps),
+            du_first: power_derivative(u1, alpha),
+            dv_first: power_derivative(u2, beta),
+            du_second: power_derivative(u1, a),
+            dv_second: power_derivative(u2, b),
+        }
+    }
+}
+
 fn evaluate_parts(
     u1: f64,
     u2: f64,
     params: &KhoudrajiParams,
     clip_eps: f64,
 ) -> Result<KhoudrajiParts, CopulaError> {
-    let u1 = u1.clamp(clip_eps, 1.0 - clip_eps);
-    let u2 = u2.clamp(clip_eps, 1.0 - clip_eps);
-    let alpha = 1.0 - params.shape_first;
-    let beta = 1.0 - params.shape_second;
-    let a = params.shape_first;
-    let b = params.shape_second;
-
-    let x1 = power_margin(u1, alpha, clip_eps);
-    let y1 = power_margin(u2, beta, clip_eps);
-    let x2 = power_margin(u1, a, clip_eps);
-    let y2 = power_margin(u2, b, clip_eps);
-
+    let m = Margins::new(u1, u2, params, clip_eps);
     Ok(KhoudrajiParts {
-        cdf_first: params.first.cdf(x1, y1, clip_eps)?,
-        cdf_second: params.second.cdf(x2, y2, clip_eps)?,
-        h12_first: params.first.cond_first_given_second(x1, y1, clip_eps)?,
-        h21_first: params.first.cond_second_given_first(x1, y1, clip_eps)?,
-        h12_second: params.second.cond_first_given_second(x2, y2, clip_eps)?,
-        h21_second: params.second.cond_second_given_first(x2, y2, clip_eps)?,
-        log_pdf_first: params.first.log_pdf(x1, y1, clip_eps)?,
-        log_pdf_second: params.second.log_pdf(x2, y2, clip_eps)?,
-        du_first: power_derivative(u1, alpha),
-        dv_first: power_derivative(u2, beta),
-        du_second: power_derivative(u1, a),
-        dv_second: power_derivative(u2, b),
+        cdf_first: params.first.cdf(m.x1, m.y1, clip_eps)?,
+        cdf_second: params.second.cdf(m.x2, m.y2, clip_eps)?,
+        h12_first: params.first.cond_first_given_second(m.x1, m.y1, clip_eps)?,
+        h21_first: params.first.cond_second_given_first(m.x1, m.y1, clip_eps)?,
+        h12_second: params
+            .second
+            .cond_first_given_second(m.x2, m.y2, clip_eps)?,
+        h21_second: params
+            .second
+            .cond_second_given_first(m.x2, m.y2, clip_eps)?,
+        log_pdf_first: params.first.log_pdf(m.x1, m.y1, clip_eps)?,
+        log_pdf_second: params.second.log_pdf(m.x2, m.y2, clip_eps)?,
+        du_first: m.du_first,
+        dv_first: m.dv_first,
+        du_second: m.du_second,
+        dv_second: m.dv_second,
     })
 }
 
@@ -158,27 +202,7 @@ fn invert_monotone<F>(f: F, target: f64, clip_eps: f64) -> Result<f64, CopulaErr
 where
     F: Fn(f64) -> Result<f64, CopulaError>,
 {
-    let target = target.clamp(clip_eps, 1.0 - clip_eps);
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    let low_value = f(low)?;
-    if low_value >= target {
-        return Ok(low);
-    }
-    let high_value = f(high)?;
-    if high_value <= target {
-        return Ok(high);
-    }
-    for _ in 0..64 {
-        let mid = 0.5 * (low + high);
-        let value = f(mid)?;
-        if value < target {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(f, target.clamp(clip_eps, 1.0 - clip_eps), clip_eps)
 }
 
 fn ln_if_positive(value: f64) -> f64 {

@@ -42,8 +42,19 @@ pub(crate) mod frank {
         }
     }
 
-    pub(crate) fn log_abs_generator_derivative(dim: usize, log_q: f64, theta: f64) -> f64 {
-        let numerator_poly = derivative_polynomial(dim, log_q.exp());
+    /// `coefficients` must come from [`derivative_coefficients`] for `dim`.
+    pub(crate) fn log_abs_generator_derivative(
+        dim: usize,
+        coefficients: &[f64],
+        log_q: f64,
+        theta: f64,
+    ) -> f64 {
+        let q = log_q.exp();
+        let numerator_poly: f64 = coefficients
+            .iter()
+            .enumerate()
+            .map(|(idx, coeff)| coeff * q.powi(idx as i32))
+            .sum();
         log_q + numerator_poly.abs().ln() - (dim as f64) * crate::math::log1mexp(log_q) - theta.ln()
     }
 
@@ -76,7 +87,10 @@ pub(crate) mod frank {
         Ok(0.5 * (low + high))
     }
 
-    fn derivative_polynomial(dim: usize, q: f64) -> f64 {
+    /// Coefficients (ascending powers of `q`) of the polynomial in the
+    /// numerator of the `dim`-th derivative of the Frank generator. They
+    /// depend on the dimension only, so a density pass builds them once.
+    pub(crate) fn derivative_coefficients(dim: usize) -> Vec<f64> {
         let mut coeffs = vec![1.0];
         for n in 1..dim {
             let mut deriv = vec![0.0; coeffs.len().saturating_sub(1)];
@@ -95,19 +109,35 @@ pub(crate) mod frank {
             }
             coeffs = next;
         }
-
         coeffs
-            .iter()
-            .enumerate()
-            .map(|(idx, coeff)| coeff * q.powi(idx as i32))
-            .sum()
     }
 
+    /// First Debye function `D₁(θ) = (1/θ) ∫₀^θ x / (eˣ − 1) dx`.
+    ///
+    /// The integrand is analytic with its nearest singularities at `±2πi`,
+    /// so a 64-point Gauss–Legendre rule on `[0, min(θ, 40)]` is exact to
+    /// double precision; beyond 40 the integrand is below `2e-16` and the
+    /// remainder is dropped.
     fn debye_1(theta: f64) -> f64 {
+        use std::sync::OnceLock;
         if theta.abs() < 1e-6 {
             return 1.0 - theta / 4.0 + theta * theta / 36.0;
         }
+        static RULE: OnceLock<(Vec<f64>, Vec<f64>)> = OnceLock::new();
+        let (nodes, weights) = RULE.get_or_init(|| crate::math::gauss_legendre_01(64));
+        let upper = theta.min(40.0);
+        let mut total = 0.0;
+        for (node, weight) in nodes.iter().zip(weights) {
+            let x = upper * node;
+            total += weight * x / x.exp_m1();
+        }
+        upper * total / theta
+    }
 
+    /// Composite Simpson evaluation of `D₁`, the rule used before the
+    /// Gauss–Legendre one; kept as an independent check.
+    #[cfg(test)]
+    fn debye_1_simpson(theta: f64) -> f64 {
         let intervals = 1024usize;
         let step = theta / intervals as f64;
         let integrand = |x: f64| -> f64 { if x == 0.0 { 1.0 } else { x / x.exp_m1() } };
@@ -128,29 +158,80 @@ pub(crate) mod frank {
     fn tau(theta: f64) -> f64 {
         1.0 - 4.0 / theta + 4.0 * debye_1(theta) / theta
     }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn debye_gauss_legendre_matches_simpson_and_the_large_theta_limit() {
+            for theta in [1e-3, 0.1, 1.0, 4.5, 12.0, 30.0] {
+                let (fast, reference) = (super::debye_1(theta), super::debye_1_simpson(theta));
+                // Simpson with 1024 panels is itself good to ~1e-10 at θ = 30.
+                assert!(
+                    (fast - reference).abs() < 2e-10,
+                    "theta {theta}: {fast} vs {reference}"
+                );
+            }
+            // D₁(θ) → π²/(6θ) as θ → ∞.
+            for theta in [60.0, 1e3, 1e6] {
+                let limit = std::f64::consts::PI.powi(2) / (6.0 * theta);
+                let value = super::debye_1(theta);
+                assert!(
+                    (value - limit).abs() < 1e-14 * limit,
+                    "theta {theta}: {value}"
+                );
+            }
+        }
+    }
 }
 
 pub(crate) mod joe {
     use crate::errors::{CopulaError, FitError};
 
-    // Kendall's tau for the Joe copula via the series representation
-    //   τ(θ) = 1 - 4 Σ_{k=1}^∞ 1 / [k · (θk + 2) · (θ(k-1) + 2)].
-    // The series converges like 1/k³ so the truncation below is more than
-    // enough for double precision. At θ = 1 Joe reduces to independence and
-    // τ = 0, which the explicit guard handles without entering the loop
-    // (avoiding a harmless but noisy near-equal-to-zero computation).
+    use statrs::function::gamma::digamma;
+
+    /// First four derivatives of the digamma function at 2:
+    /// `π²/6 − 1`, `2 − 2ζ(3)`, `π⁴/15 − 6`, `24 − 24ζ(5)`.
+    const POLYGAMMA_AT_2: [f64; 4] = [
+        0.644_934_066_848_226_4,
+        -0.404_113_806_319_188_6,
+        0.493_939_402_266_829_1,
+        -0.886_266_123_440_878_3,
+    ];
+
+    /// Kendall's tau of the Joe copula in closed form,
+    ///
+    /// ```text
+    /// τ(θ) = 1 + 2 [ψ(2) − ψ(2/θ + 1)] / (2 − θ),
+    /// ```
+    ///
+    /// the sum of the series `1 − 4 Σ_k 1 / [k (θk + 2)(θ(k−1) + 2)]`. Near
+    /// the removable singularity at `θ = 2` the difference quotient is
+    /// replaced by its Taylor expansion in `x = 2/θ − 1`. At `θ = 1` Joe
+    /// reduces to independence and `τ = 0`.
+    ///
+    /// Accuracy is about `1e-9` (limited by the digamma implementation close
+    /// to `θ = 2`), ample for its use as the starting point of a likelihood
+    /// search.
     pub(crate) fn tau(theta: f64) -> f64 {
         if theta <= 1.0 {
             return 0.0;
         }
+        let gap = 2.0 - theta;
+        if gap.abs() < 1e-2 {
+            let x = gap / theta;
+            let [d1, d2, d3, d4] = POLYGAMMA_AT_2;
+            return 1.0 - 2.0 / theta * (d1 + x * (d2 / 2.0 + x * (d3 / 6.0 + x * d4 / 24.0)));
+        }
+        1.0 + 2.0 * (digamma(2.0) - digamma(2.0 / theta + 1.0)) / gap
+    }
+
+    /// The series the closed form sums, kept as an independent check.
+    #[cfg(test)]
+    fn tau_series(theta: f64) -> f64 {
         let mut sum = 0.0;
-        for k in 1..100_000 {
+        for k in 1..2_000_000 {
             let kf = k as f64;
-            let term = 1.0 / (kf * (theta * kf + 2.0) * (theta * (kf - 1.0) + 2.0));
-            sum += term;
-            if term < 1e-18 * sum.abs().max(1.0) {
-                break;
-            }
+            sum += 1.0 / (kf * (theta * kf + 2.0) * (theta * (kf - 1.0) + 2.0));
         }
         1.0 - 4.0 * sum
     }
@@ -182,6 +263,25 @@ pub(crate) mod joe {
         }
 
         Ok(0.5 * (low + high))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn closed_form_tau_matches_the_series() {
+            for theta in [
+                1.0001, 1.2, 1.7, 1.985, 1.9905, 1.9995, 2.0, 2.0005, 2.0095, 2.015, 2.4, 3.0, 8.0,
+                30.0, 400.0,
+            ] {
+                let closed = super::tau(theta);
+                let series = super::tau_series(theta);
+                assert!(
+                    (closed - series).abs() < 2e-9,
+                    "theta {theta}: {closed} vs {series}"
+                );
+            }
+            assert_eq!(super::tau(1.0), 0.0);
+        }
     }
 }
 

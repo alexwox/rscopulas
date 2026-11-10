@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     archimedean_math::{frank, gumbel},
-    backend::{Operation, parallel_try_map_range_collect, resolve_strategy},
+    backend::{Operation, resolve_strategy, try_fill_rows},
     data::PseudoObs,
     errors::{CopulaError, FitError},
     fit::FitResult,
@@ -61,8 +61,7 @@ impl CopulaModel for ClaytonCopula {
         let log_coeff = (0..self.dim)
             .map(|idx| (1.0 + idx as f64 * theta).ln())
             .sum::<f64>();
-        evaluate_density_rows(data, options, move |row| {
-            let clipped = clipped_row(row, options.clip_eps);
+        evaluate_density_rows(data, options, move |clipped| {
             let sum_power = clipped.iter().map(|value| value.powf(-theta)).sum::<f64>() - dim + 1.0;
             let sum_logs = clipped.iter().map(|value| value.ln()).sum::<f64>();
             Ok(log_coeff - (1.0 + theta) * sum_logs - (dim + 1.0 / theta) * sum_power.ln())
@@ -138,17 +137,19 @@ impl CopulaModel for FrankCopula {
         let dim = self.dim;
         let theta = self.theta;
         let log_a = crate::math::log1mexp(-theta);
-        evaluate_density_rows(data, options, move |row| {
+        // The derivative polynomial depends on the dimension only.
+        let polynomial = frank::derivative_coefficients(dim);
+        evaluate_density_rows(data, options, move |clipped| {
             if theta < 1e-10 {
                 return Ok(0.0);
             }
-            let clipped = clipped_row(row, options.clip_eps);
             let log_q = log_a
                 + clipped
                     .iter()
                     .map(|value| crate::math::log1mexp(-theta * value) - log_a)
                     .sum::<f64>();
-            let log_abs_derivative = frank::log_abs_generator_derivative(dim, log_q, theta);
+            let log_abs_derivative =
+                frank::log_abs_generator_derivative(dim, &polynomial, log_q, theta);
             let log_phi = clipped
                 .iter()
                 .map(|value| theta.ln() - theta * value - crate::math::log1mexp(-theta * value))
@@ -224,8 +225,7 @@ impl CopulaModel for GumbelHougaardCopula {
         let alpha = 1.0 / self.theta;
         let theta = self.theta;
         let dim = self.dim;
-        evaluate_density_rows(data, options, move |row| {
-            let clipped = clipped_row(row, options.clip_eps);
+        evaluate_density_rows(data, options, move |clipped| {
             let t = clipped
                 .iter()
                 .map(|value| (-value.ln()).powf(theta))
@@ -351,12 +351,9 @@ fn validate_input_dim(expected_dim: usize, data: &PseudoObs) -> Result<(), Copul
     Ok(())
 }
 
-fn clipped_row(row: &[f64], clip_eps: f64) -> Vec<f64> {
-    row.iter()
-        .map(|value| value.clamp(clip_eps, 1.0 - clip_eps))
-        .collect()
-}
-
+/// Evaluates `evaluator` on every row after clipping it to
+/// `[clip_eps, 1 − clip_eps]`. The clipped row lives in a per-task buffer, so
+/// row kernels allocate nothing.
 fn evaluate_density_rows<F>(
     data: &PseudoObs,
     options: &EvalOptions,
@@ -367,11 +364,20 @@ where
 {
     let strategy = resolve_strategy(options.exec, Operation::DensityEval, data.n_obs())?;
     let view = data.as_view();
-    parallel_try_map_range_collect(data.n_obs(), strategy, |row_idx| {
-        let row = view.row(row_idx);
-        let values = row.iter().copied().collect::<Vec<_>>();
-        evaluator(&values)
-    })
+    let (low, high) = (options.clip_eps, 1.0 - options.clip_eps);
+    let mut out = vec![0.0; data.n_obs()];
+    try_fill_rows(
+        &mut out,
+        strategy,
+        || vec![0.0_f64; data.dim()],
+        |row_idx, clipped| {
+            for (slot, value) in clipped.iter_mut().zip(view.row(row_idx)) {
+                *slot = value.clamp(low, high);
+            }
+            evaluator(clipped)
+        },
+    )?;
+    Ok(out)
 }
 
 fn sample_positive_stable<R: Rng + ?Sized>(rng: &mut R, alpha: f64) -> f64 {

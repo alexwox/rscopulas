@@ -60,17 +60,11 @@ pub fn inv_first_given_second(
     theta: f64,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_first_given_second(mid, u2, theta, clip_eps)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_first_given_second(mid, u2, theta, clip_eps),
+        p,
+        clip_eps,
+    )
 }
 
 pub fn inv_second_given_first(
@@ -79,19 +73,14 @@ pub fn inv_second_given_first(
     theta: f64,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_second_given_first(u1, mid, theta, clip_eps)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_second_given_first(u1, mid, theta, clip_eps),
+        p,
+        clip_eps,
+    )
 }
 
+#[inline]
 pub(super) fn log_pdf_from_logs(u: f64, v: f64, theta: f64) -> f64 {
     if theta == 1.0 {
         return 0.0;
@@ -103,4 +92,41 @@ pub(super) fn log_pdf_from_logs(u: f64, v: f64, theta: f64) -> f64 {
         + (theta - 1.0) * (x + y)
         + (2.0 / theta - 2.0) * s
         + logaddexp(0.0, (theta - 1.0).ln() - s / theta)
+}
+
+/// `(log c, h_{1|2}, h_{2|1})` sharing the Gumbel terms. Each component is
+/// bit-identical to its stand-alone function.
+#[inline]
+pub(super) fn eval3(u1: f64, u2: f64, theta: f64) -> (f64, f64, f64) {
+    let (lu, lv) = (u1.ln(), u2.ln());
+    let (x, y) = ((-lu).ln(), (-lv).ln());
+    let s = logaddexp(theta * x, theta * y);
+    let t = (s / theta).exp();
+    let density = if theta == 1.0 {
+        0.0
+    } else {
+        -t - lu - lv
+            + (theta - 1.0) * (x + y)
+            + (2.0 / theta - 2.0) * s
+            + logaddexp(0.0, (theta - 1.0).ln() - s / theta)
+    };
+    let shared = -t + (1.0 / theta - 1.0) * s;
+    (
+        density,
+        (shared + (theta - 1.0) * y - lv).exp(),
+        (shared + (theta - 1.0) * x - lu).exp(),
+    )
+}
+
+/// `(h_{1|2}, h_{2|1})`, bit-identical to the stand-alone functions.
+#[inline]
+pub(super) fn cond_both(u1: f64, u2: f64, theta: f64) -> (f64, f64) {
+    let (lu, lv) = (u1.ln(), u2.ln());
+    let (x, y) = ((-lu).ln(), (-lv).ln());
+    let s = logaddexp(theta * x, theta * y);
+    let shared = -(s / theta).exp() + (1.0 / theta - 1.0) * s;
+    (
+        (shared + (theta - 1.0) * y - lv).exp(),
+        (shared + (theta - 1.0) * x - lu).exp(),
+    )
 }

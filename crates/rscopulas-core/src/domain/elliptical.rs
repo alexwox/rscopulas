@@ -2,20 +2,18 @@ use ndarray::Array2;
 use rand::Rng;
 use rand_distr::{ChiSquared, StandardNormal};
 use serde::{Deserialize, Deserializer, Serialize};
-use statrs::{
-    distribution::{Continuous, ContinuousCDF, Normal, StudentsT},
-    function::gamma::ln_gamma,
-};
+use statrs::function::gamma::ln_gamma;
 
 use crate::{
-    backend::{Operation, parallel_try_map_range_collect, resolve_strategy},
+    backend::{ExecutionStrategy, Operation, resolve_strategy, try_fill_rows},
     data::PseudoObs,
+    errors::NumericalError,
     errors::{CopulaError, FitError},
     fit::FitResult,
     math::{
-        cholesky, log_determinant_from_cholesky, make_spd_correlation,
-        quadratic_form_from_cholesky, validate_correlation_matrix,
+        cholesky, log_determinant_from_cholesky, make_spd_correlation, validate_correlation_matrix,
     },
+    special::{StudentT, norm_cdf, norm_ppf},
     stats::try_kendall_tau_matrix,
 };
 
@@ -81,10 +79,6 @@ impl GaussianCopula {
     pub fn correlation(&self) -> &Array2<f64> {
         &self.correlation
     }
-
-    fn standard_normal() -> Normal {
-        Normal::new(0.0, 1.0).expect("standard normal parameters should be valid")
-    }
 }
 
 #[derive(Deserialize)]
@@ -130,22 +124,27 @@ impl CopulaModel for GaussianCopula {
         options.validate()?;
         crate::data::validate_dim(self.dim, data.dim())?;
 
-        let standard_normal = Self::standard_normal();
         let strategy = resolve_strategy(options.exec, Operation::DensityEval, data.n_obs())?;
         let view = data.as_view();
-        parallel_try_map_range_collect(data.n_obs(), strategy, |row_idx| {
-            let row = view.row(row_idx);
-            let z = row
-                .iter()
-                .map(|value| {
-                    let clipped = value.clamp(options.clip_eps, 1.0 - options.clip_eps);
-                    standard_normal.inverse_cdf(clipped)
-                })
-                .collect::<Vec<_>>();
-            let quadratic = quadratic_form_from_cholesky(&self.cholesky, &z)?;
-            let euclidean = z.iter().map(|value| value * value).sum::<f64>();
-            Ok(-0.5 * self.log_det - 0.5 * (quadratic - euclidean))
-        })
+        let whitening = Whitening::new(&self.cholesky);
+        let (low, high) = (options.clip_eps, 1.0 - options.clip_eps);
+        let mut out = vec![0.0; data.n_obs()];
+        try_fill_rows(
+            &mut out,
+            strategy,
+            || RowScratch::new(self.dim),
+            |row_idx, scratch| {
+                let mut euclidean = 0.0;
+                for (slot, value) in scratch.z.iter_mut().zip(view.row(row_idx)) {
+                    let z = norm_ppf(value.clamp(low, high));
+                    *slot = z;
+                    euclidean += z * z;
+                }
+                let quadratic = whitening.quadratic(&scratch.z, &mut scratch.work)?;
+                Ok(-0.5 * self.log_det - 0.5 * (quadratic - euclidean))
+            },
+        )?;
+        Ok(out)
     }
 
     fn sample<R: Rng + ?Sized>(
@@ -155,28 +154,109 @@ impl CopulaModel for GaussianCopula {
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
         resolve_strategy(options.exec, Operation::Sample, n)?;
-        let standard_normal = Self::standard_normal();
-        let mut samples = Array2::zeros((n, self.dim));
-
-        for row_idx in 0..n {
-            let epsilon = (0..self.dim)
-                .map(|_| rng.sample::<f64, _>(StandardNormal))
-                .collect::<Vec<_>>();
-            let mut correlated = vec![0.0; self.dim];
-            for (i, correlated_value) in correlated.iter_mut().enumerate() {
-                let mut value = 0.0;
-                for (j, epsilon_value) in epsilon.iter().enumerate().take(i + 1) {
-                    value += self.cholesky[(i, j)] * epsilon_value;
-                }
-                *correlated_value = value;
+        let whitening = Whitening::new(&self.cholesky);
+        let dim = self.dim;
+        // The RNG stream is consumed row by row exactly as before; only the
+        // deterministic transform to uniforms runs in parallel.
+        let mut values = vec![0.0; n * dim];
+        let mut epsilon = vec![0.0; dim];
+        for row in values.chunks_exact_mut(dim) {
+            for slot in epsilon.iter_mut() {
+                *slot = rng.sample::<f64, _>(StandardNormal);
             }
+            whitening.correlate(&epsilon, row);
+        }
+        map_in_place(&mut values, n, norm_cdf);
+        Ok(Array2::from_shape_vec((n, dim), values)
+            .expect("sample buffer should match the requested shape"))
+    }
+}
 
-            for col_idx in 0..self.dim {
-                samples[(row_idx, col_idx)] = standard_normal.cdf(correlated[col_idx]);
+/// Row-major copy of a lower Cholesky factor: the triangular solve and
+/// product in the row kernels read it sequentially instead of through 2-D
+/// indexing.
+struct Whitening {
+    dim: usize,
+    lower: Vec<f64>,
+}
+
+impl Whitening {
+    fn new(cholesky: &Array2<f64>) -> Self {
+        let dim = cholesky.nrows();
+        let mut lower = vec![0.0; dim * dim];
+        for i in 0..dim {
+            for j in 0..=i {
+                lower[i * dim + j] = cholesky[(i, j)];
             }
         }
+        Self { dim, lower }
+    }
 
-        Ok(samples)
+    /// `zᵀ Σ⁻¹ z = ‖L⁻¹ z‖²` by forward substitution into `work`.
+    #[inline]
+    fn quadratic(&self, z: &[f64], work: &mut [f64]) -> Result<f64, CopulaError> {
+        let dim = self.dim;
+        let mut total = 0.0;
+        for i in 0..dim {
+            let row = &self.lower[i * dim..i * dim + i + 1];
+            let mut value = z[i];
+            for (l, w) in row[..i].iter().zip(&work[..i]) {
+                value -= l * w;
+            }
+            let pivot = row[i];
+            if pivot == 0.0 {
+                return Err(NumericalError::DecompositionFailed.into());
+            }
+            let solved = value / pivot;
+            work[i] = solved;
+            total += solved * solved;
+        }
+        Ok(total)
+    }
+
+    /// `out = L ε`.
+    #[inline]
+    fn correlate(&self, epsilon: &[f64], out: &mut [f64]) {
+        let dim = self.dim;
+        for (i, slot) in out.iter_mut().enumerate() {
+            let mut value = 0.0;
+            for (l, e) in self.lower[i * dim..i * dim + i + 1].iter().zip(epsilon) {
+                value += l * e;
+            }
+            *slot = value;
+        }
+    }
+}
+
+/// Per-task buffers of the row kernels.
+struct RowScratch {
+    z: Vec<f64>,
+    work: Vec<f64>,
+}
+
+impl RowScratch {
+    fn new(dim: usize) -> Self {
+        Self {
+            z: vec![0.0; dim],
+            work: vec![0.0; dim],
+        }
+    }
+}
+
+/// Applies `f` to every element, in parallel once there are enough rows for
+/// it to pay off (same threshold as the other sampling paths).
+fn map_in_place(values: &mut [f64], n_rows: usize, f: impl Fn(f64) -> f64 + Sync + Send) {
+    if n_rows >= 128 {
+        use rayon::prelude::*;
+        values.par_chunks_mut(1024).for_each(|chunk| {
+            for value in chunk {
+                *value = f(*value);
+            }
+        });
+    } else {
+        for value in values {
+            *value = f(*value);
+        }
     }
 }
 
@@ -221,32 +301,40 @@ impl StudentTCopula {
         let correlation =
             make_spd_correlation(&tau.mapv(|value| (std::f64::consts::FRAC_PI_2 * value).sin()))?;
 
-        let mut best_model = None;
-        let mut best_loglik = f64::NEG_INFINITY;
-        let mut iterations = 0usize;
-        for degrees_of_freedom in candidate_degrees_of_freedom() {
-            iterations += 1;
-            let candidate = Self::new(correlation.clone(), degrees_of_freedom)?;
-            let loglik = candidate
-                .log_pdf(
-                    data,
-                    &EvalOptions {
-                        exec: options.exec,
-                        clip_eps: options.clip_eps,
-                    },
-                )?
-                .into_iter()
-                .sum::<f64>();
+        // Every candidate ν shares the correlation matrix, so it also shares
+        // the Cholesky factor and the set of probabilities to invert.
+        let template = Self::new(correlation, 4.0)?;
+        let strategy = resolve_strategy(options.exec, Operation::DensityEval, data.n_obs())?;
+        let plan = QuantilePlan::new(data, options.clip_eps);
+        let candidates = candidate_degrees_of_freedom();
+        let evaluate = |nu: f64| template.loglik_at(nu, &plan);
+        let logliks: Vec<f64> = match strategy {
+            ExecutionStrategy::CpuParallel => {
+                use rayon::prelude::*;
+                candidates
+                    .par_iter()
+                    .map(|&nu| evaluate(nu))
+                    .collect::<Result<_, _>>()?
+            }
+            _ => candidates
+                .iter()
+                .map(|&nu| evaluate(nu))
+                .collect::<Result<_, _>>()?,
+        };
 
-            if loglik > best_loglik {
-                best_loglik = loglik;
-                best_model = Some(candidate);
+        let mut best: Option<(f64, f64)> = None;
+        for (&nu, &loglik) in candidates.iter().zip(&logliks) {
+            if loglik > best.map_or(f64::NEG_INFINITY, |(_, value)| value) {
+                best = Some((nu, loglik));
             }
         }
-
-        let model = best_model.ok_or(FitError::Failed {
+        let (nu, best_loglik) = best.ok_or(FitError::Failed {
             reason: "failed to select degrees of freedom",
         })?;
+        let model = Self {
+            degrees_of_freedom: nu,
+            ..template
+        };
         let parameter_count = (model.dim * (model.dim - 1) / 2 + 1) as f64;
         let n_obs = data.n_obs() as f64;
         let diagnostics = super::FitDiagnostics {
@@ -255,10 +343,44 @@ impl StudentTCopula {
             aic: 2.0 * parameter_count - 2.0 * best_loglik,
             bic: parameter_count * n_obs.ln() - 2.0 * best_loglik,
             converged: true,
-            n_iter: iterations,
+            n_iter: candidates.len(),
         };
 
         Ok(FitResult { model, diagnostics })
+    }
+
+    /// `ln Γ((ν+d)/2) − ln Γ(ν/2) − ½ ln|Σ| − (d/2) ln(νπ)` for `nu`.
+    fn log_constant(&self, nu: f64) -> f64 {
+        let dim = self.dim as f64;
+        ln_gamma((nu + dim) / 2.0)
+            - ln_gamma(nu / 2.0)
+            - 0.5 * self.log_det
+            - 0.5 * dim * (nu * std::f64::consts::PI).ln()
+    }
+
+    /// Log-likelihood of `plan`'s data under this correlation matrix with
+    /// `nu` degrees of freedom. Equal to summing `log_pdf` over the rows, but
+    /// each distinct probability is inverted once.
+    fn loglik_at(&self, nu: f64, plan: &QuantilePlan) -> Result<f64, CopulaError> {
+        let dist = StudentT::new(nu);
+        let quantiles: Vec<f64> = plan.unique.iter().map(|&u| dist.ppf(u)).collect();
+        let log_marginals: Vec<f64> = quantiles.iter().map(|&x| dist.ln_pdf(x)).collect();
+        let whitening = Whitening::new(&self.cholesky);
+        let dim = self.dim;
+        let constant = self.log_constant(nu);
+        let half_power = 0.5 * (nu + dim as f64);
+        let mut scratch = RowScratch::new(dim);
+        let mut total = 0.0;
+        for row in plan.index.chunks_exact(dim) {
+            let mut marginal = 0.0;
+            for (slot, &idx) in scratch.z.iter_mut().zip(row) {
+                *slot = quantiles[idx as usize];
+                marginal += log_marginals[idx as usize];
+            }
+            let quadratic = whitening.quadratic(&scratch.z, &mut scratch.work)?;
+            total += constant - half_power * (1.0 + quadratic / nu).ln() - marginal;
+        }
+        Ok(total)
     }
 
     /// Returns the fitted correlation matrix.
@@ -271,9 +393,8 @@ impl StudentTCopula {
         self.degrees_of_freedom
     }
 
-    fn univariate_t(&self) -> StudentsT {
-        StudentsT::new(0.0, 1.0, self.degrees_of_freedom)
-            .expect("validated degrees of freedom should construct a t distribution")
+    fn univariate_t(&self) -> StudentT {
+        StudentT::new(self.degrees_of_freedom)
     }
 }
 
@@ -322,33 +443,32 @@ impl CopulaModel for StudentTCopula {
         options.validate()?;
         crate::data::validate_dim(self.dim, data.dim())?;
 
-        let t_distribution = self.univariate_t();
-        let dim = self.dim as f64;
+        let dist = self.univariate_t();
         let nu = self.degrees_of_freedom;
-        let constant = ln_gamma((nu + dim) / 2.0)
-            - ln_gamma(nu / 2.0)
-            - 0.5 * self.log_det
-            - 0.5 * dim * (nu * std::f64::consts::PI).ln();
+        let constant = self.log_constant(nu);
+        let half_power = 0.5 * (nu + self.dim as f64);
+        let whitening = Whitening::new(&self.cholesky);
+        let (low, high) = (options.clip_eps, 1.0 - options.clip_eps);
 
         let strategy = resolve_strategy(options.exec, Operation::DensityEval, data.n_obs())?;
         let view = data.as_view();
-        parallel_try_map_range_collect(data.n_obs(), strategy, |row_idx| {
-            let row = view.row(row_idx);
-            let z = row
-                .iter()
-                .map(|value| {
-                    let clipped = value.clamp(options.clip_eps, 1.0 - options.clip_eps);
-                    t_distribution.inverse_cdf(clipped)
-                })
-                .collect::<Vec<_>>();
-            let quadratic = quadratic_form_from_cholesky(&self.cholesky, &z)?;
-            let mv_log_pdf = constant - 0.5 * (nu + dim) * (1.0 + quadratic / nu).ln();
-            let marginal_log_pdf = z
-                .iter()
-                .map(|value| t_distribution.ln_pdf(*value))
-                .sum::<f64>();
-            Ok(mv_log_pdf - marginal_log_pdf)
-        })
+        let mut out = vec![0.0; data.n_obs()];
+        try_fill_rows(
+            &mut out,
+            strategy,
+            || RowScratch::new(self.dim),
+            |row_idx, scratch| {
+                let mut marginal = 0.0;
+                for (slot, value) in scratch.z.iter_mut().zip(view.row(row_idx)) {
+                    let x = dist.ppf(value.clamp(low, high));
+                    *slot = x;
+                    marginal += dist.ln_pdf(x);
+                }
+                let quadratic = whitening.quadratic(&scratch.z, &mut scratch.work)?;
+                Ok(constant - half_power * (1.0 + quadratic / nu).ln() - marginal)
+            },
+        )?;
+        Ok(out)
     }
 
     fn sample<R: Rng + ?Sized>(
@@ -358,33 +478,68 @@ impl CopulaModel for StudentTCopula {
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
         resolve_strategy(options.exec, Operation::Sample, n)?;
-        let t_distribution = self.univariate_t();
+        let dist = self.univariate_t();
         let chi_squared =
             ChiSquared::new(self.degrees_of_freedom).map_err(|_| FitError::Failed {
                 reason: "degrees of freedom must be positive",
             })?;
-        let mut samples = Array2::zeros((n, self.dim));
-
-        for row_idx in 0..n {
-            let epsilon = (0..self.dim)
-                .map(|_| rng.sample::<f64, _>(StandardNormal))
-                .collect::<Vec<_>>();
-            let scale = (self.degrees_of_freedom / rng.sample::<f64, _>(chi_squared)).sqrt();
-            let mut correlated = vec![0.0; self.dim];
-            for (i, correlated_value) in correlated.iter_mut().enumerate() {
-                let mut value = 0.0;
-                for (j, epsilon_value) in epsilon.iter().enumerate().take(i + 1) {
-                    value += self.cholesky[(i, j)] * epsilon_value;
-                }
-                *correlated_value = value * scale;
+        let whitening = Whitening::new(&self.cholesky);
+        let dim = self.dim;
+        // RNG consumption per row is unchanged: `dim` normals, then the
+        // chi-square mixing draw.
+        let mut values = vec![0.0; n * dim];
+        let mut epsilon = vec![0.0; dim];
+        for row in values.chunks_exact_mut(dim) {
+            for slot in epsilon.iter_mut() {
+                *slot = rng.sample::<f64, _>(StandardNormal);
             }
-
-            for col_idx in 0..self.dim {
-                samples[(row_idx, col_idx)] = t_distribution.cdf(correlated[col_idx]);
+            let scale = (self.degrees_of_freedom / rng.sample::<f64, _>(chi_squared)).sqrt();
+            whitening.correlate(&epsilon, row);
+            for value in row.iter_mut() {
+                *value *= scale;
             }
         }
+        map_in_place(&mut values, n, |x| dist.cdf(x));
+        Ok(Array2::from_shape_vec((n, dim), values)
+            .expect("sample buffer should match the requested shape"))
+    }
+}
 
-        Ok(samples)
+/// The distinct clipped probabilities of a data matrix and, for every cell
+/// (row-major), which of them it holds.
+///
+/// Rank-based pseudo-observations take the same `n` values in every column,
+/// so a quantile transform that is evaluated per distinct value does `1/d` of
+/// the work of one evaluated per cell.
+struct QuantilePlan {
+    unique: Vec<f64>,
+    index: Vec<u32>,
+}
+
+impl QuantilePlan {
+    fn new(data: &PseudoObs, clip_eps: f64) -> Self {
+        let view = data.as_view();
+        let (low, high) = (clip_eps, 1.0 - clip_eps);
+        let cells: Vec<f64> = view
+            .rows()
+            .into_iter()
+            .flat_map(|row| row.into_iter().map(move |value| value.clamp(low, high)))
+            .collect();
+        let mut order: Vec<u32> = (0..cells.len() as u32).collect();
+        order.sort_unstable_by(|&a, &b| cells[a as usize].total_cmp(&cells[b as usize]));
+        let mut unique = Vec::new();
+        let mut index = vec![0u32; cells.len()];
+        for &cell in &order {
+            let value = cells[cell as usize];
+            if unique
+                .last()
+                .is_none_or(|last: &f64| last.to_bits() != value.to_bits())
+            {
+                unique.push(value);
+            }
+            index[cell as usize] = (unique.len() - 1) as u32;
+        }
+        Self { unique, index }
     }
 }
 

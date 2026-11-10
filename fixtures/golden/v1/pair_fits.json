@@ -1,0 +1,1286 @@
+{
+  "gaussian/neg/Bb1/loglik": [
+    54.61344022217596
+  ],
+  "gaussian/neg/Bb1/params": [
+    0.11851965415533393,
+    1.482663323721829
+  ],
+  "gaussian/neg/Bb1/spec": "Bb1/R270",
+  "gaussian/neg/Bb6/loglik": [
+    53.99375584446746
+  ],
+  "gaussian/neg/Bb6/params": [
+    1.0000453999297625,
+    1.5561279295721406
+  ],
+  "gaussian/neg/Bb6/spec": "Bb6/R270",
+  "gaussian/neg/Bb7/loglik": [
+    54.11769570162184
+  ],
+  "gaussian/neg/Bb7/params": [
+    1.259729902441402,
+    0.8022538467732442
+  ],
+  "gaussian/neg/Bb7/spec": "Bb7/R90",
+  "gaussian/neg/Bb8/loglik": [
+    51.38785101622009
+  ],
+  "gaussian/neg/Bb8/params": [
+    2.4199846745692657,
+    0.9135440680627895
+  ],
+  "gaussian/neg/Bb8/spec": "Bb8/R270",
+  "gaussian/neg/Clayton/loglik": [
+    49.75935355695269
+  ],
+  "gaussian/neg/Clayton/params": [
+    0.9259731935802863
+  ],
+  "gaussian/neg/Clayton/spec": "Clayton/R90",
+  "gaussian/neg/Frank/loglik": [
+    47.135486436173615
+  ],
+  "gaussian/neg/Frank/params": [
+    -3.698556418792841
+  ],
+  "gaussian/neg/Frank/spec": "Frank/R0",
+  "gaussian/neg/Gaussian/loglik": [
+    53.44621967629196
+  ],
+  "gaussian/neg/Gaussian/params": [
+    -0.5571534285199968
+  ],
+  "gaussian/neg/Gaussian/spec": "Gaussian/R0",
+  "gaussian/neg/Gumbel/loglik": [
+    53.99396474376352
+  ],
+  "gaussian/neg/Gumbel/params": [
+    1.5561731124558107
+  ],
+  "gaussian/neg/Gumbel/spec": "Gumbel/R270",
+  "gaussian/neg/Independence/loglik": [
+    0.0
+  ],
+  "gaussian/neg/Independence/params": [],
+  "gaussian/neg/Independence/spec": "Independence/R0",
+  "gaussian/neg/Joe/loglik": [
+    47.148600043152584
+  ],
+  "gaussian/neg/Joe/params": [
+    1.776708336517955
+  ],
+  "gaussian/neg/Joe/spec": "Joe/R270",
+  "gaussian/neg/StudentT/loglik": [
+    53.46124234538775
+  ],
+  "gaussian/neg/StudentT/params": [
+    -0.5570015423057688,
+    85.69452309687193
+  ],
+  "gaussian/neg/StudentT/spec": "StudentT/R0",
+  "gaussian/neg/Tawn1/loglik": [
+    53.993955185962925
+  ],
+  "gaussian/neg/Tawn1/params": [
+    1.5561551944015337,
+    0.999999
+  ],
+  "gaussian/neg/Tawn1/spec": "Tawn1/R270",
+  "gaussian/neg/Tawn2/loglik": [
+    54.030205238425644
+  ],
+  "gaussian/neg/Tawn2/params": [
+    1.574721159778836,
+    0.9642383060468774
+  ],
+  "gaussian/neg/Tawn2/spec": "Tawn2/R270",
+  "gaussian/neg/Tll/loglik": [
+    67.06361213703744
+  ],
+  "gaussian/neg/Tll/spec": "Tll/R0",
+  "gaussian/neg/default_aic/h_2given1_head": [
+    0.04985653332700744,
+    0.3701308756310417,
+    0.0012350711528204242,
+    0.027845000066092623,
+    0.789658417931984,
+    0.7214237004513124,
+    0.3385078715046833,
+    0.7884756716729935
+  ],
+  "gaussian/neg/default_aic/loglik": [
+    53.99396474376352
+  ],
+  "gaussian/neg/default_aic/spec": "Gumbel/R270",
+  "gaussian/neg/default_bic/h_2given1_head": [
+    0.04985653332700744,
+    0.3701308756310417,
+    0.0012350711528204242,
+    0.027845000066092623,
+    0.789658417931984,
+    0.7214237004513124,
+    0.3385078715046833,
+    0.7884756716729935
+  ],
+  "gaussian/neg/default_bic/loglik": [
+    53.99396474376352
+  ],
+  "gaussian/neg/default_bic/spec": "Gumbel/R270",
+  "gaussian/pos/Bb1/loglik": [
+    54.61344022217596
+  ],
+  "gaussian/pos/Bb1/params": [
+    0.11851965415533393,
+    1.482663323721829
+  ],
+  "gaussian/pos/Bb1/spec": "Bb1/R180",
+  "gaussian/pos/Bb6/loglik": [
+    53.99375584446746
+  ],
+  "gaussian/pos/Bb6/params": [
+    1.0000453999297625,
+    1.5561279295721406
+  ],
+  "gaussian/pos/Bb6/spec": "Bb6/R180",
+  "gaussian/pos/Bb7/loglik": [
+    54.11769570162177
+  ],
+  "gaussian/pos/Bb7/params": [
+    1.2597299024414088,
+    0.8022538467732442
+  ],
+  "gaussian/pos/Bb7/spec": "Bb7/R0",
+  "gaussian/pos/Bb8/loglik": [
+    51.38785101622009
+  ],
+  "gaussian/pos/Bb8/params": [
+    2.4199846745692657,
+    0.9135440680627895
+  ],
+  "gaussian/pos/Bb8/spec": "Bb8/R180",
+  "gaussian/pos/Clayton/loglik": [
+    49.75935355695257
+  ],
+  "gaussian/pos/Clayton/params": [
+    0.9259732039173962
+  ],
+  "gaussian/pos/Clayton/spec": "Clayton/R0",
+  "gaussian/pos/Frank/loglik": [
+    47.13548643617367
+  ],
+  "gaussian/pos/Frank/params": [
+    3.698556419014041
+  ],
+  "gaussian/pos/Frank/spec": "Frank/R0",
+  "gaussian/pos/Gaussian/loglik": [
+    53.44621967629193
+  ],
+  "gaussian/pos/Gaussian/params": [
+    0.5571534304055329
+  ],
+  "gaussian/pos/Gaussian/spec": "Gaussian/R0",
+  "gaussian/pos/Gumbel/loglik": [
+    53.99396474376352
+  ],
+  "gaussian/pos/Gumbel/params": [
+    1.5561731124558107
+  ],
+  "gaussian/pos/Gumbel/spec": "Gumbel/R180",
+  "gaussian/pos/Independence/loglik": [
+    0.0
+  ],
+  "gaussian/pos/Independence/params": [],
+  "gaussian/pos/Independence/spec": "Independence/R0",
+  "gaussian/pos/Joe/loglik": [
+    47.148600043152584
+  ],
+  "gaussian/pos/Joe/params": [
+    1.776708336517955
+  ],
+  "gaussian/pos/Joe/spec": "Joe/R180",
+  "gaussian/pos/StudentT/loglik": [
+    53.46124234531104
+  ],
+  "gaussian/pos/StudentT/params": [
+    0.5570014628472039,
+    85.6898297940077
+  ],
+  "gaussian/pos/StudentT/spec": "StudentT/R0",
+  "gaussian/pos/Tawn1/loglik": [
+    53.993955185962925
+  ],
+  "gaussian/pos/Tawn1/params": [
+    1.5561551944015337,
+    0.999999
+  ],
+  "gaussian/pos/Tawn1/spec": "Tawn1/R180",
+  "gaussian/pos/Tawn2/loglik": [
+    54.030205238425644
+  ],
+  "gaussian/pos/Tawn2/params": [
+    1.574721159778836,
+    0.9642383060468774
+  ],
+  "gaussian/pos/Tawn2/spec": "Tawn2/R180",
+  "gaussian/pos/Tll/loglik": [
+    67.06361213703786
+  ],
+  "gaussian/pos/Tll/spec": "Tll/R0",
+  "gaussian/pos/default_aic/h_2given1_head": [
+    0.9501434666729925,
+    0.6298691243689583,
+    0.9987649288471796,
+    0.9721549999339074,
+    0.210341582068016,
+    0.27857629954868757,
+    0.6614921284953167,
+    0.21152432832700652
+  ],
+  "gaussian/pos/default_aic/loglik": [
+    53.99396474376352
+  ],
+  "gaussian/pos/default_aic/spec": "Gumbel/R180",
+  "gaussian/pos/default_bic/h_2given1_head": [
+    0.9501434666729925,
+    0.6298691243689583,
+    0.9987649288471796,
+    0.9721549999339074,
+    0.210341582068016,
+    0.27857629954868757,
+    0.6614921284953167,
+    0.21152432832700652
+  ],
+  "gaussian/pos/default_bic/loglik": [
+    53.99396474376352
+  ],
+  "gaussian/pos/default_bic/spec": "Gumbel/R180",
+  "heavy_tail/neg/Bb1/loglik": [
+    74.11623872472799
+  ],
+  "heavy_tail/neg/Bb1/params": [
+    0.542199327858643,
+    1.3613049675779727
+  ],
+  "heavy_tail/neg/Bb1/spec": "Bb1/R90",
+  "heavy_tail/neg/Bb6/loglik": [
+    70.0793991317891
+  ],
+  "heavy_tail/neg/Bb6/params": [
+    1.0000453999297625,
+    1.6932926329353932
+  ],
+  "heavy_tail/neg/Bb6/spec": "Bb6/R270",
+  "heavy_tail/neg/Bb7/loglik": [
+    75.13481191835695
+  ],
+  "heavy_tail/neg/Bb7/params": [
+    1.5093772418127567,
+    0.8941730110073446
+  ],
+  "heavy_tail/neg/Bb7/spec": "Bb7/R90",
+  "heavy_tail/neg/Bb8/loglik": [
+    61.0590657135663
+  ],
+  "heavy_tail/neg/Bb8/params": [
+    2.444471619766028,
+    0.9424288383336994
+  ],
+  "heavy_tail/neg/Bb8/spec": "Bb8/R270",
+  "heavy_tail/neg/Clayton/loglik": [
+    60.83559310981751
+  ],
+  "heavy_tail/neg/Clayton/params": [
+    1.1101768128461251
+  ],
+  "heavy_tail/neg/Clayton/spec": "Clayton/R90",
+  "heavy_tail/neg/Frank/loglik": [
+    57.19866420249866
+  ],
+  "heavy_tail/neg/Frank/params": [
+    -4.264415410128469
+  ],
+  "heavy_tail/neg/Frank/spec": "Frank/R0",
+  "heavy_tail/neg/Gaussian/loglik": [
+    63.5604705919881
+  ],
+  "heavy_tail/neg/Gaussian/params": [
+    -0.5970480409981604
+  ],
+  "heavy_tail/neg/Gaussian/spec": "Gaussian/R0",
+  "heavy_tail/neg/Gumbel/loglik": [
+    70.07968574607342
+  ],
+  "heavy_tail/neg/Gumbel/params": [
+    1.6933424117804157
+  ],
+  "heavy_tail/neg/Gumbel/spec": "Gumbel/R270",
+  "heavy_tail/neg/Independence/loglik": [
+    0.0
+  ],
+  "heavy_tail/neg/Independence/params": [],
+  "heavy_tail/neg/Independence/spec": "Independence/R0",
+  "heavy_tail/neg/Joe/loglik": [
+    60.058738176938796
+  ],
+  "heavy_tail/neg/Joe/params": [
+    1.9470242732236476
+  ],
+  "heavy_tail/neg/Joe/spec": "Joe/R270",
+  "heavy_tail/neg/StudentT/loglik": [
+    75.9536694451861
+  ],
+  "heavy_tail/neg/StudentT/params": [
+    -0.5875266145457082,
+    2.769935019437895
+  ],
+  "heavy_tail/neg/StudentT/spec": "StudentT/R0",
+  "heavy_tail/neg/Tawn1/loglik": [
+    70.09647431093649
+  ],
+  "heavy_tail/neg/Tawn1/params": [
+    1.7072130892018416,
+    0.9813102228049247
+  ],
+  "heavy_tail/neg/Tawn1/spec": "Tawn1/R270",
+  "heavy_tail/neg/Tawn2/loglik": [
+    70.72683195646606
+  ],
+  "heavy_tail/neg/Tawn2/params": [
+    1.7803269005206026,
+    0.9032838014881794
+  ],
+  "heavy_tail/neg/Tawn2/spec": "Tawn2/R270",
+  "heavy_tail/neg/Tll/loglik": [
+    81.48611410848727
+  ],
+  "heavy_tail/neg/Tll/spec": "Tll/R0",
+  "heavy_tail/neg/default_aic/h_2given1_head": [
+    0.11087512541347591,
+    0.5238052646654408,
+    0.5790533496196566,
+    0.5115556818569225,
+    0.7618349391489129,
+    0.4800191430636373,
+    0.6459213648906377,
+    0.8833845680862347
+  ],
+  "heavy_tail/neg/default_aic/loglik": [
+    75.9536694451861
+  ],
+  "heavy_tail/neg/default_aic/spec": "StudentT/R0",
+  "heavy_tail/neg/default_bic/h_2given1_head": [
+    0.11087512541347591,
+    0.5238052646654408,
+    0.5790533496196566,
+    0.5115556818569225,
+    0.7618349391489129,
+    0.4800191430636373,
+    0.6459213648906377,
+    0.8833845680862347
+  ],
+  "heavy_tail/neg/default_bic/loglik": [
+    75.9536694451861
+  ],
+  "heavy_tail/neg/default_bic/spec": "StudentT/R0",
+  "heavy_tail/pos/Bb1/loglik": [
+    74.116238724728
+  ],
+  "heavy_tail/pos/Bb1/params": [
+    0.5421993278589775,
+    1.3613049675779727
+  ],
+  "heavy_tail/pos/Bb1/spec": "Bb1/R0",
+  "heavy_tail/pos/Bb6/loglik": [
+    70.0793991317891
+  ],
+  "heavy_tail/pos/Bb6/params": [
+    1.0000453999297625,
+    1.6932926329353932
+  ],
+  "heavy_tail/pos/Bb6/spec": "Bb6/R180",
+  "heavy_tail/pos/Bb7/loglik": [
+    75.13481191835876
+  ],
+  "heavy_tail/pos/Bb7/params": [
+    1.5093771847901802,
+    0.8941733187133488
+  ],
+  "heavy_tail/pos/Bb7/spec": "Bb7/R0",
+  "heavy_tail/pos/Bb8/loglik": [
+    61.0590657135663
+  ],
+  "heavy_tail/pos/Bb8/params": [
+    2.444471619766028,
+    0.9424288383336994
+  ],
+  "heavy_tail/pos/Bb8/spec": "Bb8/R180",
+  "heavy_tail/pos/Clayton/loglik": [
+    60.83559310981748
+  ],
+  "heavy_tail/pos/Clayton/params": [
+    1.1101768225206117
+  ],
+  "heavy_tail/pos/Clayton/spec": "Clayton/R0",
+  "heavy_tail/pos/Frank/loglik": [
+    57.198664202498755
+  ],
+  "heavy_tail/pos/Frank/params": [
+    4.264415528152398
+  ],
+  "heavy_tail/pos/Frank/spec": "Frank/R0",
+  "heavy_tail/pos/Gaussian/loglik": [
+    63.56047059198814
+  ],
+  "heavy_tail/pos/Gaussian/params": [
+    0.5970480401622541
+  ],
+  "heavy_tail/pos/Gaussian/spec": "Gaussian/R0",
+  "heavy_tail/pos/Gumbel/loglik": [
+    70.07968574607342
+  ],
+  "heavy_tail/pos/Gumbel/params": [
+    1.6933424117804157
+  ],
+  "heavy_tail/pos/Gumbel/spec": "Gumbel/R180",
+  "heavy_tail/pos/Independence/loglik": [
+    0.0
+  ],
+  "heavy_tail/pos/Independence/params": [],
+  "heavy_tail/pos/Independence/spec": "Independence/R0",
+  "heavy_tail/pos/Joe/loglik": [
+    60.058738176938796
+  ],
+  "heavy_tail/pos/Joe/params": [
+    1.9470242732236476
+  ],
+  "heavy_tail/pos/Joe/spec": "Joe/R180",
+  "heavy_tail/pos/StudentT/loglik": [
+    75.95366944518382
+  ],
+  "heavy_tail/pos/StudentT/params": [
+    0.587526584632998,
+    2.7699340632144955
+  ],
+  "heavy_tail/pos/StudentT/spec": "StudentT/R0",
+  "heavy_tail/pos/Tawn1/loglik": [
+    70.09647431093649
+  ],
+  "heavy_tail/pos/Tawn1/params": [
+    1.7072130892018416,
+    0.9813102228049247
+  ],
+  "heavy_tail/pos/Tawn1/spec": "Tawn1/R180",
+  "heavy_tail/pos/Tawn2/loglik": [
+    70.72683195646606
+  ],
+  "heavy_tail/pos/Tawn2/params": [
+    1.7803269005206026,
+    0.9032838014881794
+  ],
+  "heavy_tail/pos/Tawn2/spec": "Tawn2/R180",
+  "heavy_tail/pos/Tll/loglik": [
+    81.48611410848672
+  ],
+  "heavy_tail/pos/Tll/spec": "Tll/R0",
+  "heavy_tail/pos/default_aic/h_2given1_head": [
+    0.8891248726478677,
+    0.4761947339122184,
+    0.4209466439640412,
+    0.48844431076476996,
+    0.2381650781072845,
+    0.5199808526422149,
+    0.3540786242000432,
+    0.11661546951505623
+  ],
+  "heavy_tail/pos/default_aic/loglik": [
+    75.95366944518382
+  ],
+  "heavy_tail/pos/default_aic/spec": "StudentT/R0",
+  "heavy_tail/pos/default_bic/h_2given1_head": [
+    0.8891248726478677,
+    0.4761947339122184,
+    0.4209466439640412,
+    0.48844431076476996,
+    0.2381650781072845,
+    0.5199808526422149,
+    0.3540786242000432,
+    0.11661546951505623
+  ],
+  "heavy_tail/pos/default_bic/loglik": [
+    75.95366944518382
+  ],
+  "heavy_tail/pos/default_bic/spec": "StudentT/R0",
+  "independent/neg/Bb1/loglik": [
+    0.17925726766367095
+  ],
+  "independent/neg/Bb1/params": [
+    0.012670773162056543,
+    1.0154390343803281
+  ],
+  "independent/neg/Bb1/spec": "Bb1/R180",
+  "independent/neg/Bb6/loglik": [
+    0.16635292031175342
+  ],
+  "independent/neg/Bb6/params": [
+    1.0000453999297625,
+    1.0194812893757752
+  ],
+  "independent/neg/Bb6/spec": "Bb6/R180",
+  "independent/neg/Bb7/loglik": [
+    0.1746305754906678
+  ],
+  "independent/neg/Bb7/params": [
+    1.0181667429152117,
+    0.02100097901894844
+  ],
+  "independent/neg/Bb7/spec": "Bb7/R180",
+  "independent/neg/Bb8/loglik": [
+    0.16608521174753088
+  ],
+  "independent/neg/Bb8/params": [
+    1.9704852913835023,
+    0.18029809708276712
+  ],
+  "independent/neg/Bb8/spec": "Bb8/R180",
+  "independent/neg/Clayton/loglik": [
+    0.10919591304465315
+  ],
+  "independent/neg/Clayton/params": [
+    0.030234624804758595
+  ],
+  "independent/neg/Clayton/spec": "Clayton/R180",
+  "independent/neg/Frank/loglik": [
+    0.16525421019864428
+  ],
+  "independent/neg/Frank/params": [
+    0.20123416295999272
+  ],
+  "independent/neg/Frank/spec": "Frank/R0",
+  "independent/neg/Gaussian/loglik": [
+    0.12369355238687058
+  ],
+  "independent/neg/Gaussian/params": [
+    0.029687518451341807
+  ],
+  "independent/neg/Gaussian/spec": "Gaussian/R0",
+  "independent/neg/Gumbel/loglik": [
+    0.1663999543196032
+  ],
+  "independent/neg/Gumbel/params": [
+    1.019512865455519
+  ],
+  "independent/neg/Gumbel/spec": "Gumbel/R180",
+  "independent/neg/Independence/loglik": [
+    0.0
+  ],
+  "independent/neg/Independence/params": [],
+  "independent/neg/Independence/spec": "Independence/R0",
+  "independent/neg/Joe/loglik": [
+    0.128503136088061
+  ],
+  "independent/neg/Joe/params": [
+    1.0238854178804622
+  ],
+  "independent/neg/Joe/spec": "Joe/R180",
+  "independent/neg/StudentT/loglik": [
+    0.11123750272932864
+  ],
+  "independent/neg/StudentT/params": [
+    0.02969284388632717,
+    199.99999999999991
+  ],
+  "independent/neg/StudentT/spec": "StudentT/R0",
+  "independent/neg/Tawn1/loglik": [
+    0.41999523591061316
+  ],
+  "independent/neg/Tawn1/params": [
+    1.0793006734827664,
+    0.1837336918017491
+  ],
+  "independent/neg/Tawn1/spec": "Tawn1/R180",
+  "independent/neg/Tawn2/loglik": [
+    0.1663997372608914
+  ],
+  "independent/neg/Tawn2/params": [
+    1.019511123936654,
+    0.999999
+  ],
+  "independent/neg/Tawn2/spec": "Tawn2/R180",
+  "independent/neg/Tll/loglik": [
+    13.918624059029566
+  ],
+  "independent/neg/Tll/spec": "Tll/R0",
+  "independent/neg/default_aic/h_2given1_head": [
+    0.5083056478405316,
+    0.29568106312292364,
+    0.8305647840531561,
+    0.7209302325581395,
+    0.32558139534883723,
+    0.9269102990033222,
+    0.8405315614617941,
+    0.21594684385382057
+  ],
+  "independent/neg/default_aic/loglik": [
+    0.0
+  ],
+  "independent/neg/default_aic/spec": "Independence/R0",
+  "independent/neg/default_bic/h_2given1_head": [
+    0.5083056478405316,
+    0.29568106312292364,
+    0.8305647840531561,
+    0.7209302325581395,
+    0.32558139534883723,
+    0.9269102990033222,
+    0.8405315614617941,
+    0.21594684385382057
+  ],
+  "independent/neg/default_bic/loglik": [
+    0.0
+  ],
+  "independent/neg/default_bic/spec": "Independence/R0",
+  "independent/pos/Bb1/loglik": [
+    0.17925726766367694
+  ],
+  "independent/pos/Bb1/params": [
+    0.012670773162056543,
+    1.0154390343803281
+  ],
+  "independent/pos/Bb1/spec": "Bb1/R270",
+  "independent/pos/Bb6/loglik": [
+    0.16635292031174875
+  ],
+  "independent/pos/Bb6/params": [
+    1.0000453999297625,
+    1.0194812893757752
+  ],
+  "independent/pos/Bb6/spec": "Bb6/R270",
+  "independent/pos/Bb7/loglik": [
+    0.17463057549063996
+  ],
+  "independent/pos/Bb7/params": [
+    1.0181667415385227,
+    0.02100098213037017
+  ],
+  "independent/pos/Bb7/spec": "Bb7/R270",
+  "independent/pos/Bb8/loglik": [
+    0.16608521174755486
+  ],
+  "independent/pos/Bb8/params": [
+    1.970489283860602,
+    0.18029748057390038
+  ],
+  "independent/pos/Bb8/spec": "Bb8/R270",
+  "independent/pos/Clayton/loglik": [
+    0.10919591304463167
+  ],
+  "independent/pos/Clayton/params": [
+    0.030234614779651038
+  ],
+  "independent/pos/Clayton/spec": "Clayton/R270",
+  "independent/pos/Frank/loglik": [
+    0.16525421019864428
+  ],
+  "independent/pos/Frank/params": [
+    -0.20123416295999272
+  ],
+  "independent/pos/Frank/spec": "Frank/R0",
+  "independent/pos/Gaussian/loglik": [
+    0.12369355238687248
+  ],
+  "independent/pos/Gaussian/params": [
+    -0.029687521537935264
+  ],
+  "independent/pos/Gaussian/spec": "Gaussian/R0",
+  "independent/pos/Gumbel/loglik": [
+    0.1663999543196012
+  ],
+  "independent/pos/Gumbel/params": [
+    1.0195128654566257
+  ],
+  "independent/pos/Gumbel/spec": "Gumbel/R270",
+  "independent/pos/Independence/loglik": [
+    0.0
+  ],
+  "independent/pos/Independence/params": [],
+  "independent/pos/Independence/spec": "Independence/R0",
+  "independent/pos/Joe/loglik": [
+    0.1285031360880703
+  ],
+  "independent/pos/Joe/params": [
+    1.0238854178320898
+  ],
+  "independent/pos/Joe/spec": "Joe/R270",
+  "independent/pos/StudentT/loglik": [
+    0.11123750272927602
+  ],
+  "independent/pos/StudentT/params": [
+    -0.029692854217163497,
+    199.99999999999991
+  ],
+  "independent/pos/StudentT/spec": "StudentT/R0",
+  "independent/pos/Tawn1/loglik": [
+    0.4199952359106217
+  ],
+  "independent/pos/Tawn1/params": [
+    1.079300698285105,
+    0.1837335802250204
+  ],
+  "independent/pos/Tawn1/spec": "Tawn1/R270",
+  "independent/pos/Tawn2/loglik": [
+    0.1663997372608974
+  ],
+  "independent/pos/Tawn2/params": [
+    1.019511123936648,
+    0.999999
+  ],
+  "independent/pos/Tawn2/spec": "Tawn2/R270",
+  "independent/pos/Tll/loglik": [
+    13.918624059030549
+  ],
+  "independent/pos/Tll/spec": "Tll/R0",
+  "independent/pos/default_aic/h_2given1_head": [
+    0.49169435215946844,
+    0.7043189368770764,
+    0.16943521594684385,
+    0.27906976744186046,
+    0.6744186046511628,
+    0.07308970099667775,
+    0.15946843853820597,
+    0.7840531561461794
+  ],
+  "independent/pos/default_aic/loglik": [
+    0.0
+  ],
+  "independent/pos/default_aic/spec": "Independence/R0",
+  "independent/pos/default_bic/h_2given1_head": [
+    0.49169435215946844,
+    0.7043189368770764,
+    0.16943521594684385,
+    0.27906976744186046,
+    0.6744186046511628,
+    0.07308970099667775,
+    0.15946843853820597,
+    0.7840531561461794
+  ],
+  "independent/pos/default_bic/loglik": [
+    0.0
+  ],
+  "independent/pos/default_bic/spec": "Independence/R0",
+  "khoudraji/loglik": [
+    26.725992971754533
+  ],
+  "khoudraji/spec": "Khoudraji/R0[Clayton/R0, Clayton/R0]",
+  "lower_tail/neg/Bb1/loglik": [
+    45.988280872715116
+  ],
+  "lower_tail/neg/Bb1/params": [
+    0.8710677095923844,
+    1.0000453999297625
+  ],
+  "lower_tail/neg/Bb1/spec": "Bb1/R90",
+  "lower_tail/neg/Bb6/loglik": [
+    45.65810706513915
+  ],
+  "lower_tail/neg/Bb6/params": [
+    1.5715645383273564,
+    1.076012962057948
+  ],
+  "lower_tail/neg/Bb6/spec": "Bb6/R270",
+  "lower_tail/neg/Bb7/loglik": [
+    45.988274986752316
+  ],
+  "lower_tail/neg/Bb7/params": [
+    1.0000453999297625,
+    0.8711327973929515
+  ],
+  "lower_tail/neg/Bb7/spec": "Bb7/R90",
+  "lower_tail/neg/Bb8/loglik": [
+    45.55465743731587
+  ],
+  "lower_tail/neg/Bb8/params": [
+    1.727166063793051,
+    0.999999
+  ],
+  "lower_tail/neg/Bb8/spec": "Bb8/R270",
+  "lower_tail/neg/Clayton/loglik": [
+    45.98838566151757
+  ],
+  "lower_tail/neg/Clayton/params": [
+    0.8711521524739883
+  ],
+  "lower_tail/neg/Clayton/spec": "Clayton/R90",
+  "lower_tail/neg/Frank/loglik": [
+    31.60524362824368
+  ],
+  "lower_tail/neg/Frank/params": [
+    -2.9814566744536473
+  ],
+  "lower_tail/neg/Frank/spec": "Frank/R0",
+  "lower_tail/neg/Gaussian/loglik": [
+    33.06350751905265
+  ],
+  "lower_tail/neg/Gaussian/params": [
+    -0.4546242846199528
+  ],
+  "lower_tail/neg/Gaussian/spec": "Gaussian/R0",
+  "lower_tail/neg/Gumbel/loglik": [
+    43.73326014924419
+  ],
+  "lower_tail/neg/Gumbel/params": [
+    1.4612325793242569
+  ],
+  "lower_tail/neg/Gumbel/spec": "Gumbel/R270",
+  "lower_tail/neg/Independence/loglik": [
+    0.0
+  ],
+  "lower_tail/neg/Independence/params": [],
+  "lower_tail/neg/Independence/spec": "Independence/R0",
+  "lower_tail/neg/Joe/loglik": [
+    45.55486896554124
+  ],
+  "lower_tail/neg/Joe/params": [
+    1.7271985484331518
+  ],
+  "lower_tail/neg/Joe/spec": "Joe/R270",
+  "lower_tail/neg/StudentT/loglik": [
+    35.853042380698774
+  ],
+  "lower_tail/neg/StudentT/params": [
+    -0.46035799008809203,
+    5.953441212333394
+  ],
+  "lower_tail/neg/StudentT/spec": "StudentT/R0",
+  "lower_tail/neg/Tawn1/loglik": [
+    43.73883533812537
+  ],
+  "lower_tail/neg/Tawn1/params": [
+    1.4700816921499218,
+    0.9765901483755665
+  ],
+  "lower_tail/neg/Tawn1/spec": "Tawn1/R270",
+  "lower_tail/neg/Tawn2/loglik": [
+    43.73325798750141
+  ],
+  "lower_tail/neg/Tawn2/params": [
+    1.4612647182380853,
+    0.999999
+  ],
+  "lower_tail/neg/Tawn2/spec": "Tawn2/R270",
+  "lower_tail/neg/Tll/loglik": [
+    54.93832533574701
+  ],
+  "lower_tail/neg/Tll/spec": "Tll/R0",
+  "lower_tail/neg/default_aic/h_2given1_head": [
+    0.2219602393967357,
+    0.5705429541818006,
+    0.959454583420286,
+    0.30641743216932427,
+    0.7400967771216662,
+    0.15845577496444418,
+    0.987498279455177,
+    0.39494445070674145
+  ],
+  "lower_tail/neg/default_aic/loglik": [
+    45.98838566151757
+  ],
+  "lower_tail/neg/default_aic/spec": "Clayton/R90",
+  "lower_tail/neg/default_bic/h_2given1_head": [
+    0.2219602393967357,
+    0.5705429541818006,
+    0.959454583420286,
+    0.30641743216932427,
+    0.7400967771216662,
+    0.15845577496444418,
+    0.987498279455177,
+    0.39494445070674145
+  ],
+  "lower_tail/neg/default_bic/loglik": [
+    45.98838566151757
+  ],
+  "lower_tail/neg/default_bic/spec": "Clayton/R90",
+  "lower_tail/pos/Bb1/loglik": [
+    45.98828087271502
+  ],
+  "lower_tail/pos/Bb1/params": [
+    0.8710677095934596,
+    1.0000453999297625
+  ],
+  "lower_tail/pos/Bb1/spec": "Bb1/R0",
+  "lower_tail/pos/Bb6/loglik": [
+    45.65810706513915
+  ],
+  "lower_tail/pos/Bb6/params": [
+    1.5715645383273564,
+    1.076012962057948
+  ],
+  "lower_tail/pos/Bb6/spec": "Bb6/R180",
+  "lower_tail/pos/Bb7/loglik": [
+    45.98827498675232
+  ],
+  "lower_tail/pos/Bb7/params": [
+    1.0000453999297625,
+    0.8711327973929515
+  ],
+  "lower_tail/pos/Bb7/spec": "Bb7/R0",
+  "lower_tail/pos/Bb8/loglik": [
+    45.55465743731587
+  ],
+  "lower_tail/pos/Bb8/params": [
+    1.727166063793051,
+    0.999999
+  ],
+  "lower_tail/pos/Bb8/spec": "Bb8/R180",
+  "lower_tail/pos/Clayton/loglik": [
+    45.988385661517476
+  ],
+  "lower_tail/pos/Clayton/params": [
+    0.8711521326812738
+  ],
+  "lower_tail/pos/Clayton/spec": "Clayton/R0",
+  "lower_tail/pos/Frank/loglik": [
+    31.60524362824367
+  ],
+  "lower_tail/pos/Frank/params": [
+    2.9814565323770235
+  ],
+  "lower_tail/pos/Frank/spec": "Frank/R0",
+  "lower_tail/pos/Gaussian/loglik": [
+    33.06350751905265
+  ],
+  "lower_tail/pos/Gaussian/params": [
+    0.45462428551456846
+  ],
+  "lower_tail/pos/Gaussian/spec": "Gaussian/R0",
+  "lower_tail/pos/Gumbel/loglik": [
+    43.73326014924419
+  ],
+  "lower_tail/pos/Gumbel/params": [
+    1.4612325793242569
+  ],
+  "lower_tail/pos/Gumbel/spec": "Gumbel/R180",
+  "lower_tail/pos/Independence/loglik": [
+    0.0
+  ],
+  "lower_tail/pos/Independence/params": [],
+  "lower_tail/pos/Independence/spec": "Independence/R0",
+  "lower_tail/pos/Joe/loglik": [
+    45.55486896554124
+  ],
+  "lower_tail/pos/Joe/params": [
+    1.7271985484331518
+  ],
+  "lower_tail/pos/Joe/spec": "Joe/R180",
+  "lower_tail/pos/StudentT/loglik": [
+    35.85304238069552
+  ],
+  "lower_tail/pos/StudentT/params": [
+    0.4603579371762338,
+    5.953441602190596
+  ],
+  "lower_tail/pos/StudentT/spec": "StudentT/R0",
+  "lower_tail/pos/Tawn1/loglik": [
+    43.73883533812537
+  ],
+  "lower_tail/pos/Tawn1/params": [
+    1.4700816921499218,
+    0.9765901483755665
+  ],
+  "lower_tail/pos/Tawn1/spec": "Tawn1/R180",
+  "lower_tail/pos/Tawn2/loglik": [
+    43.73325798750141
+  ],
+  "lower_tail/pos/Tawn2/params": [
+    1.4612647182380853,
+    0.999999
+  ],
+  "lower_tail/pos/Tawn2/spec": "Tawn2/R180",
+  "lower_tail/pos/Tll/loglik": [
+    54.93832533574742
+  ],
+  "lower_tail/pos/Tll/spec": "Tll/R0",
+  "lower_tail/pos/default_aic/h_2given1_head": [
+    0.7780397621933044,
+    0.4294570421797665,
+    0.04054541776628247,
+    0.693582564459095,
+    0.25990321949291373,
+    0.8415442238450976,
+    0.012501721113302952,
+    0.605055546661558
+  ],
+  "lower_tail/pos/default_aic/loglik": [
+    45.988385661517476
+  ],
+  "lower_tail/pos/default_aic/spec": "Clayton/R0",
+  "lower_tail/pos/default_bic/h_2given1_head": [
+    0.7780397621933044,
+    0.4294570421797665,
+    0.04054541776628247,
+    0.693582564459095,
+    0.25990321949291373,
+    0.8415442238450976,
+    0.012501721113302952,
+    0.605055546661558
+  ],
+  "lower_tail/pos/default_bic/loglik": [
+    45.988385661517476
+  ],
+  "lower_tail/pos/default_bic/spec": "Clayton/R0",
+  "upper_tail/neg/Bb1/loglik": [
+    65.10933721451579
+  ],
+  "upper_tail/neg/Bb1/params": [
+    1.1211842552485007,
+    1.0000453999297625
+  ],
+  "upper_tail/neg/Bb1/spec": "Bb1/R270",
+  "upper_tail/neg/Bb6/loglik": [
+    65.08247652687285
+  ],
+  "upper_tail/neg/Bb6/params": [
+    1.9608510693036934,
+    1.0000453999297625
+  ],
+  "upper_tail/neg/Bb6/spec": "Bb6/R90",
+  "upper_tail/neg/Bb7/loglik": [
+    65.1095351428367
+  ],
+  "upper_tail/neg/Bb7/params": [
+    1.0000453999297625,
+    1.1212631376301756
+  ],
+  "upper_tail/neg/Bb7/spec": "Bb7/R270",
+  "upper_tail/neg/Bb8/loglik": [
+    66.11245462048285
+  ],
+  "upper_tail/neg/Bb8/params": [
+    2.1121347421873544,
+    0.9872285766638719
+  ],
+  "upper_tail/neg/Bb8/spec": "Bb8/R90",
+  "upper_tail/neg/Clayton/loglik": [
+    65.10964276833026
+  ],
+  "upper_tail/neg/Clayton/params": [
+    1.1212797938942838
+  ],
+  "upper_tail/neg/Clayton/spec": "Clayton/R270",
+  "upper_tail/neg/Frank/loglik": [
+    42.3975361033223
+  ],
+  "upper_tail/neg/Frank/params": [
+    -3.493822158285051
+  ],
+  "upper_tail/neg/Frank/spec": "Frank/R0",
+  "upper_tail/neg/Gaussian/loglik": [
+    46.23234209949861
+  ],
+  "upper_tail/neg/Gaussian/params": [
+    -0.5248463895933025
+  ],
+  "upper_tail/neg/Gaussian/spec": "Gaussian/R0",
+  "upper_tail/neg/Gumbel/loglik": [
+    59.989782001903286
+  ],
+  "upper_tail/neg/Gumbel/params": [
+    1.583827701595783
+  ],
+  "upper_tail/neg/Gumbel/spec": "Gumbel/R90",
+  "upper_tail/neg/Independence/loglik": [
+    0.0
+  ],
+  "upper_tail/neg/Independence/params": [],
+  "upper_tail/neg/Independence/spec": "Independence/R0",
+  "upper_tail/neg/Joe/loglik": [
+    65.08258079054026
+  ],
+  "upper_tail/neg/Joe/params": [
+    1.9609623149503432
+  ],
+  "upper_tail/neg/Joe/spec": "Joe/R90",
+  "upper_tail/neg/StudentT/loglik": [
+    47.02356080648226
+  ],
+  "upper_tail/neg/StudentT/params": [
+    -0.5249418973703567,
+    9.67445745491747
+  ],
+  "upper_tail/neg/StudentT/spec": "StudentT/R0",
+  "upper_tail/neg/Tawn1/loglik": [
+    60.10244074222878
+  ],
+  "upper_tail/neg/Tawn1/params": [
+    1.6207695375948445,
+    0.9334427082005403
+  ],
+  "upper_tail/neg/Tawn1/spec": "Tawn1/R90",
+  "upper_tail/neg/Tawn2/loglik": [
+    59.98977403560693
+  ],
+  "upper_tail/neg/Tawn2/params": [
+    1.583817565368316,
+    0.999999
+  ],
+  "upper_tail/neg/Tawn2/spec": "Tawn2/R90",
+  "upper_tail/neg/Tll/loglik": [
+    74.38387802474527
+  ],
+  "upper_tail/neg/Tll/spec": "Tll/R0",
+  "upper_tail/neg/default_aic/h_2given1_head": [
+    0.44577339727865245,
+    0.8618963176546888,
+    0.19615756402282608,
+    0.06184847655244245,
+    0.2517105173869181,
+    0.11261997455142961,
+    0.9011145939997308,
+    0.38701084157161625
+  ],
+  "upper_tail/neg/default_aic/loglik": [
+    65.10964276833026
+  ],
+  "upper_tail/neg/default_aic/spec": "Clayton/R270",
+  "upper_tail/neg/default_bic/h_2given1_head": [
+    0.44577339727865245,
+    0.8618963176546888,
+    0.19615756402282608,
+    0.06184847655244245,
+    0.2517105173869181,
+    0.11261997455142961,
+    0.9011145939997308,
+    0.38701084157161625
+  ],
+  "upper_tail/neg/default_bic/loglik": [
+    65.10964276833026
+  ],
+  "upper_tail/neg/default_bic/spec": "Clayton/R270",
+  "upper_tail/pos/Bb1/loglik": [
+    65.10933721451579
+  ],
+  "upper_tail/pos/Bb1/params": [
+    1.1211842552485007,
+    1.0000453999297625
+  ],
+  "upper_tail/pos/Bb1/spec": "Bb1/R180",
+  "upper_tail/pos/Bb6/loglik": [
+    65.08247652687274
+  ],
+  "upper_tail/pos/Bb6/params": [
+    1.9608510693039183,
+    1.0000453999297625
+  ],
+  "upper_tail/pos/Bb6/spec": "Bb6/R0",
+  "upper_tail/pos/Bb7/loglik": [
+    65.1095351428367
+  ],
+  "upper_tail/pos/Bb7/params": [
+    1.0000453999297625,
+    1.1212631376301756
+  ],
+  "upper_tail/pos/Bb7/spec": "Bb7/R180",
+  "upper_tail/pos/Bb8/loglik": [
+    66.11245462048295
+  ],
+  "upper_tail/pos/Bb8/params": [
+    2.112134742187237,
+    0.9872285766638719
+  ],
+  "upper_tail/pos/Bb8/spec": "Bb8/R0",
+  "upper_tail/pos/Clayton/loglik": [
+    65.10964276833026
+  ],
+  "upper_tail/pos/Clayton/params": [
+    1.1212797938942838
+  ],
+  "upper_tail/pos/Clayton/spec": "Clayton/R180",
+  "upper_tail/pos/Frank/loglik": [
+    42.397536103322395
+  ],
+  "upper_tail/pos/Frank/params": [
+    3.4938221923141666
+  ],
+  "upper_tail/pos/Frank/spec": "Frank/R0",
+  "upper_tail/pos/Gaussian/loglik": [
+    46.23234209949864
+  ],
+  "upper_tail/pos/Gaussian/params": [
+    0.5248463893894348
+  ],
+  "upper_tail/pos/Gaussian/spec": "Gaussian/R0",
+  "upper_tail/pos/Gumbel/loglik": [
+    59.98978200190328
+  ],
+  "upper_tail/pos/Gumbel/params": [
+    1.5838277117815371
+  ],
+  "upper_tail/pos/Gumbel/spec": "Gumbel/R0",
+  "upper_tail/pos/Independence/loglik": [
+    0.0
+  ],
+  "upper_tail/pos/Independence/params": [],
+  "upper_tail/pos/Independence/spec": "Independence/R0",
+  "upper_tail/pos/Joe/loglik": [
+    65.08258079054025
+  ],
+  "upper_tail/pos/Joe/params": [
+    1.960962309944373
+  ],
+  "upper_tail/pos/Joe/spec": "Joe/R0",
+  "upper_tail/pos/StudentT/loglik": [
+    47.02356080649291
+  ],
+  "upper_tail/pos/StudentT/params": [
+    0.5249417718890614,
+    9.674461857333673
+  ],
+  "upper_tail/pos/StudentT/spec": "StudentT/R0",
+  "upper_tail/pos/Tawn1/loglik": [
+    60.10244074222876
+  ],
+  "upper_tail/pos/Tawn1/params": [
+    1.6207695302683829,
+    0.9334427092695105
+  ],
+  "upper_tail/pos/Tawn1/spec": "Tawn1/R0",
+  "upper_tail/pos/Tawn2/loglik": [
+    59.98977403560693
+  ],
+  "upper_tail/pos/Tawn2/params": [
+    1.583817565368267,
+    0.999999
+  ],
+  "upper_tail/pos/Tawn2/spec": "Tawn2/R0",
+  "upper_tail/pos/Tll/loglik": [
+    74.38387802474632
+  ],
+  "upper_tail/pos/Tll/spec": "Tll/R0",
+  "upper_tail/pos/default_aic/h_2given1_head": [
+    0.5542266027213476,
+    0.13810368234531123,
+    0.8038424359771739,
+    0.9381515234475576,
+    0.7482894826130819,
+    0.8873800254485704,
+    0.09888540600026918,
+    0.6129891584283838
+  ],
+  "upper_tail/pos/default_aic/loglik": [
+    65.10964276833026
+  ],
+  "upper_tail/pos/default_aic/spec": "Clayton/R180",
+  "upper_tail/pos/default_bic/h_2given1_head": [
+    0.5542266027213476,
+    0.13810368234531123,
+    0.8038424359771739,
+    0.9381515234475576,
+    0.7482894826130819,
+    0.8873800254485704,
+    0.09888540600026918,
+    0.6129891584283838
+  ],
+  "upper_tail/pos/default_bic/loglik": [
+    65.10964276833026
+  ],
+  "upper_tail/pos/default_bic/spec": "Clayton/R180"
+}
