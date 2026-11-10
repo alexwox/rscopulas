@@ -36,6 +36,28 @@ accurate one. Each such case is listed here with the evidence.
   code reproduces the 0.4.0 values of all three entries exactly (checked while
   making the change); nothing else in these code paths moved.
 
+### `hac.json`: `clayton/sample`, `frank/sample`
+
+- **Change:** every value in the nested (non-leaf) columns; these are new
+  random draws, not a small numerical shift.
+- **Cause:** the frailty of a Clayton node nested in a Clayton node, or a
+  Frank node in a Frank node, was drawn by inverting a 12-term Stehfest
+  approximation of its Laplace transform. It is now drawn exactly: a tilted
+  stable variate by rejection for Clayton, a sum of tilted Sibuya variates
+  for Frank (Hofert 2011), with the stable limit above a parent frailty of
+  1e4.
+- **Evidence that the old values were wrong:** the distribution function of
+  a nested Archimedean copula is closed-form and involves no frailty. With
+  2e6 draws the old sampler missed it by up to 0.21 in absolute terms
+  (Frank 0.2 > 0.3 > 30) and 0.09 (Clayton 0.05 > 0.1 > 12); its marginals
+  failed a Kolmogorov–Smirnov test with `√n·D` between 59 and 580 (the 1 %
+  point is 1.63). The new sampler stays within binomial noise on the same
+  points (root-mean-square z-score 1.00 over 9600 comparisons, largest 3.8)
+  with `√n·D` at most 1.7. `reference_hac::
+  nested_samplers_follow_the_nested_distribution_function` pins this at
+  n = 2e5. Nested Gumbel and exchangeable trees were already exact by the
+  same test and are bit-for-bit unchanged.
+
 ## Comparison rules added after recording
 
 - **Conditioning slack** (`conditioning_slack` in `golden_snapshots.rs`): a

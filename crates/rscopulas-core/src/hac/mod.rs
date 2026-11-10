@@ -4,8 +4,9 @@
 //! caveats): see `docs/hac.md` in the repository root.
 
 use ndarray::Array2;
-use rand::Rng;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, Exp1, Gamma};
+use statrs::function::gamma::ln_gamma;
 
 use crate::{
     archimedean_math::frank,
@@ -261,7 +262,7 @@ pub fn sample<R: Rng + ?Sized>(
         let mut cursor = 1;
         apply_subtree(
             model.tree(),
-            row_draws[0],
+            Frailty::root(root.family, row_draws[0]),
             row_draws,
             &mut cursor,
             &weights,
@@ -733,8 +734,47 @@ enum ChildFrailty {
     /// Gumbel within Gumbel: multiply by a positive stable variate with this
     /// index (drawn directly).
     GumbelStable(f64),
-    /// General case: invert the conditional frailty CDF at a uniform draw.
+    /// Clayton within Clayton: an exponentially tilted positive stable
+    /// variate with this index, drawn exactly by rejection.
+    ClaytonTilted(f64),
+    /// Frank within Frank: a sum of tilted Sibuya variates.
+    FrankSum { parent_theta: f64, child_theta: f64 },
+    /// Mixed families (experimental): invert a numerically inverted
+    /// conditional frailty CDF at a uniform draw.
     InverseCdf,
+}
+
+/// A frailty carried both as a value and as its logarithm. Frank frailties
+/// reach `e^θ/θ` and nested Clayton ones `V^{θ₁/θ₀}`, either of which leaves
+/// the range of `f64`, so the Clayton and Frank paths work on the logarithm.
+#[derive(Clone, Copy)]
+struct Frailty {
+    value: f64,
+    log: f64,
+}
+
+impl Frailty {
+    fn from_value(value: f64) -> Self {
+        Self {
+            value,
+            log: value.ln(),
+        }
+    }
+
+    fn from_log(log: f64) -> Self {
+        Self {
+            value: log.exp(),
+            log,
+        }
+    }
+
+    /// The root frailty from the draw recorded by [`sample_root_frailty`].
+    fn root(family: HacFamily, draw: f64) -> Self {
+        match family {
+            HacFamily::Frank => Self::from_log(draw),
+            HacFamily::Clayton | HacFamily::Gumbel => Self::from_value(draw),
+        }
+    }
 }
 
 fn child_frailty_kind(parent: &HacNode, child: &HacNode) -> ChildFrailty {
@@ -742,6 +782,19 @@ fn child_frailty_kind(parent: &HacNode, child: &HacNode) -> ChildFrailty {
         ChildFrailty::Shared
     } else if parent.family == HacFamily::Gumbel && child.family == HacFamily::Gumbel {
         ChildFrailty::GumbelStable(parent.theta / child.theta)
+    } else if parent.family == HacFamily::Clayton
+        && child.family == HacFamily::Clayton
+        && parent.theta < child.theta
+    {
+        ChildFrailty::ClaytonTilted(parent.theta / child.theta)
+    } else if parent.family == HacFamily::Frank
+        && child.family == HacFamily::Frank
+        && parent.theta < child.theta
+    {
+        ChildFrailty::FrankSum {
+            parent_theta: parent.theta,
+            child_theta: child.theta,
+        }
     } else {
         ChildFrailty::InverseCdf
     }
@@ -759,7 +812,10 @@ fn count_subtree_draws(tree: &HacTree) -> usize {
                 HacTree::Node(child_node) => {
                     let own = match child_frailty_kind(node, child_node) {
                         ChildFrailty::Shared => 0,
-                        ChildFrailty::GumbelStable(_) | ChildFrailty::InverseCdf => 1,
+                        ChildFrailty::GumbelStable(_)
+                        | ChildFrailty::ClaytonTilted(_)
+                        | ChildFrailty::FrankSum { .. }
+                        | ChildFrailty::InverseCdf => 1,
                     };
                     own + count_subtree_draws(child)
                 }
@@ -769,7 +825,9 @@ fn count_subtree_draws(tree: &HacTree) -> usize {
 }
 
 /// Records the random draws of one row in traversal order: an exponential
-/// per leaf, and per nested node whatever its frailty needs.
+/// per leaf, and per nested node whatever its frailty needs. A frailty drawn
+/// by rejection needs a variable number of variates, so it records a seed
+/// (an integer below 2⁵³, exact in an `f64`) for a generator of its own.
 fn draw_subtree<R: Rng + ?Sized>(tree: &HacTree, rng: &mut R, draws: &mut Vec<f64>) {
     let HacTree::Node(node) = tree else {
         return;
@@ -783,6 +841,9 @@ fn draw_subtree<R: Rng + ?Sized>(tree: &HacTree, rng: &mut R, draws: &mut Vec<f6
                     ChildFrailty::GumbelStable(alpha) => {
                         draws.push(sample_positive_stable(rng, alpha));
                     }
+                    ChildFrailty::ClaytonTilted(_) | ChildFrailty::FrankSum { .. } => {
+                        draws.push((rng.random::<u64>() >> 11) as f64);
+                    }
                     ChildFrailty::InverseCdf => draws.push(rng.random::<f64>()),
                 }
                 draw_subtree(child, rng, draws);
@@ -794,7 +855,7 @@ fn draw_subtree<R: Rng + ?Sized>(tree: &HacTree, rng: &mut R, draws: &mut Vec<f6
 /// Turns the recorded draws of one row into observations.
 fn apply_subtree(
     tree: &HacTree,
-    frailty: f64,
+    frailty: Frailty,
     draws: &[f64],
     cursor: &mut usize,
     weights: &[f64],
@@ -819,20 +880,44 @@ fn apply_subtree(
                     ChildFrailty::GumbelStable(alpha) => {
                         let stable = draws[*cursor];
                         *cursor += 1;
-                        frailty.powf(1.0 / alpha) * stable
+                        Frailty::from_value(frailty.value.powf(1.0 / alpha) * stable)
+                    }
+                    ChildFrailty::ClaytonTilted(alpha) => {
+                        let mut rng = StdRng::seed_from_u64(draws[*cursor] as u64);
+                        *cursor += 1;
+                        Frailty::from_log(ln_tilted_stable(&mut rng, alpha, frailty.log, 0.0))
+                    }
+                    ChildFrailty::FrankSum {
+                        parent_theta,
+                        child_theta,
+                    } => {
+                        let mut rng = StdRng::seed_from_u64(draws[*cursor] as u64);
+                        *cursor += 1;
+                        Frailty::from_log(ln_nested_frank_frailty(
+                            &mut rng,
+                            parent_theta,
+                            child_theta,
+                            frailty.log,
+                        ))
                     }
                     ChildFrailty::InverseCdf => {
                         let u = draws[*cursor];
                         *cursor += 1;
-                        invert_child_frailty_cdf(
+                        if !frailty.value.is_finite() {
+                            return Err(crate::errors::NumericalError::Failed {
+                                reason: "mixed-family HAC frailty exceeds f64 range",
+                            }
+                            .into());
+                        }
+                        Frailty::from_value(invert_child_frailty_cdf(
                             node.family,
                             node.theta,
                             child_node.family,
                             child_node.theta,
-                            frailty,
+                            frailty.value,
                             u,
                             weights,
-                        )
+                        ))
                     }
                 };
                 apply_subtree(child, child_frailty, draws, cursor, weights, row)?;
@@ -842,6 +927,8 @@ fn apply_subtree(
     Ok(())
 }
 
+/// Draws the root frailty: its value for Clayton and Gumbel, its logarithm
+/// for Frank (see [`Frailty::root`]).
 fn sample_root_frailty<R: Rng + ?Sized>(
     family: HacFamily,
     theta: f64,
@@ -854,16 +941,8 @@ fn sample_root_frailty<R: Rng + ?Sized>(
             })?;
             Ok(dist.sample(rng))
         }
-        HacFamily::Frank => {
-            let frailty = frank::sample_log_frailty(rng, theta).exp();
-            if !frailty.is_finite() {
-                return Err(crate::errors::NumericalError::Failed {
-                    reason: "nested Frank frailty exceeds f64 range",
-                }
-                .into());
-            }
-            Ok(frailty)
-        }
+        // The logarithm: a Frank frailty is of order `e^θ/θ`.
+        HacFamily::Frank => Ok(frank::sample_log_frailty(rng, theta)),
         HacFamily::Gumbel => Ok(sample_positive_stable(rng, 1.0 / theta)),
     }
 }
@@ -978,11 +1057,167 @@ fn factorial(n: usize) -> f64 {
     (1..=n.max(1)).fold(1.0, |acc, value| acc * value as f64)
 }
 
-fn leaf_from_exponential(family: HacFamily, theta: f64, frailty: f64, e: f64) -> f64 {
+fn leaf_from_exponential(family: HacFamily, theta: f64, frailty: Frailty, e: f64) -> f64 {
     match family {
-        HacFamily::Clayton => (1.0 + e / frailty).powf(-1.0 / theta),
-        HacFamily::Frank => frank::generator(e / frailty, theta),
-        HacFamily::Gumbel => (-(e / frailty).powf(1.0 / theta)).exp(),
+        HacFamily::Clayton => (-(e.ln() - frailty.log).exp().ln_1p() / theta).exp(),
+        HacFamily::Frank => frank::generator_from_log_argument(e.ln() - frailty.log, theta),
+        HacFamily::Gumbel => (-(e / frailty.value).powf(1.0 / theta)).exp(),
+    }
+}
+
+/// Logarithm of a positive stable variate with Laplace transform
+/// `exp(−t^α)`, `0 < α < 1` (Kanter's representation, evaluated in logs so
+/// that a small `α` does not overflow).
+fn ln_positive_stable<R: Rng + ?Sized>(rng: &mut R, alpha: f64) -> f64 {
+    // Open interval: the endpoints make a sine vanish.
+    let uniform = loop {
+        let u = rng.random::<f64>() * std::f64::consts::PI;
+        if u > 0.0 {
+            break u;
+        }
+    };
+    let exponential: f64 = Exp1.sample(rng);
+    (alpha * uniform).sin().ln() - uniform.sin().ln() / alpha
+        + ((1.0 - alpha) / alpha) * (((1.0 - alpha) * uniform).sin().ln() - exponential.ln())
+}
+
+/// Logarithm of a variate with Laplace transform
+/// `exp(−V₀ [(h + t)^α − h^α])`, an exponentially tilted positive stable
+/// law, given `ln V₀` and `ln h`.
+///
+/// Hofert's fast rejection (2011, Algorithm 3.5): the variate is a sum of
+/// `m ≈ V₀ h^α` independent pieces, each a stable variate of scale
+/// `(V₀/m)^{1/α}` accepted with probability `exp(−h S)`; every piece is
+/// accepted with probability about `1/e` or better.
+fn ln_tilted_stable<R: Rng + ?Sized>(rng: &mut R, alpha: f64, ln_v0: f64, ln_tilt: f64) -> f64 {
+    let pieces = (ln_v0 + alpha * ln_tilt).exp().round().clamp(1.0, 1e9);
+    let ln_scale = (ln_v0 - pieces.ln()) / alpha;
+    let mut ln_total = f64::NEG_INFINITY;
+    for _ in 0..pieces as u64 {
+        let ln_piece = loop {
+            let ln_s = ln_scale + ln_positive_stable(rng, alpha);
+            let exponential: f64 = Exp1.sample(rng);
+            if exponential >= (ln_tilt + ln_s).exp() {
+                break ln_s;
+            }
+        };
+        ln_total = crate::math::logaddexp(ln_total, ln_piece);
+    }
+    ln_total
+}
+
+/// Parent frailties above this are handled by the stable limit in
+/// [`ln_nested_frank_frailty`]; the same threshold as R's `copula` package.
+const FRANK_SUM_LIMIT: f64 = 1e4;
+
+/// Logarithm of the frailty of a Frank node with parameter `θ₁` nested in a
+/// Frank node with parameter `θ₀ < θ₁`, given the logarithm of the parent's
+/// frailty `N`.
+///
+/// The child frailty is a sum of `N` independent variates with mass function
+/// `p_k = a_k q₁^k / q₀`, where `a_k` is the Sibuya(`α = θ₀/θ₁`) mass
+/// function and `q_i = 1 − e^{−θ_i}` (Hofert 2011, §4.2). For `N` up to
+/// [`FRANK_SUM_LIMIT`] the sum is drawn term by term, which is exact. Beyond
+/// it the sum is replaced by its limit, the stable law tilted by
+/// `h = −ln q₁`, whose Laplace transform differs from the exact one by a
+/// relative `O(1/N)`.
+fn ln_nested_frank_frailty<R: Rng + ?Sized>(
+    rng: &mut R,
+    parent_theta: f64,
+    child_theta: f64,
+    ln_parent: f64,
+) -> f64 {
+    let alpha = parent_theta / child_theta;
+    // ln q₁ = ln(1 − e^{−θ₁}), so the tilt is h = −ln q₁.
+    let ln_q1 = crate::math::log1mexp(-child_theta);
+    if ln_parent > FRANK_SUM_LIMIT.ln() {
+        return ln_tilted_stable(rng, alpha, ln_parent, (-ln_q1).ln());
+    }
+    let terms = ln_parent.exp().round().max(1.0) as u64;
+    let sampler = TiltedSibuya::new(parent_theta, child_theta);
+    let mut total = 0.0;
+    for _ in 0..terms {
+        total += sampler.sample(rng);
+    }
+    total.ln()
+}
+
+/// Sampler for the mass function `p_k = a_k q₁^k / q₀` on `k = 1, 2, …`,
+/// with `a_k` the Sibuya(`α`) mass function.
+///
+/// Rejection from whichever proposal is accepted more often: a
+/// logarithmic-series variate with parameter `q₁` (accepted with probability
+/// `q₀/θ₀`), or a Sibuya variate (accepted with probability `q₀/q₁`). The
+/// better of the two is accepted at least 63 % of the time.
+struct TiltedSibuya {
+    alpha: f64,
+    child_theta: f64,
+    ln_q1: f64,
+    ln_gamma_1m_alpha: f64,
+    gamma_1m_alpha: f64,
+    log_series_proposal: bool,
+}
+
+impl TiltedSibuya {
+    fn new(parent_theta: f64, child_theta: f64) -> Self {
+        let alpha = parent_theta / child_theta;
+        let ln_q1 = crate::math::log1mexp(-child_theta);
+        let ln_gamma_1m_alpha = ln_gamma(1.0 - alpha);
+        Self {
+            alpha,
+            child_theta,
+            ln_q1,
+            ln_gamma_1m_alpha,
+            gamma_1m_alpha: ln_gamma_1m_alpha.exp(),
+            log_series_proposal: parent_theta < ln_q1.exp(),
+        }
+    }
+
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {
+        if self.log_series_proposal {
+            loop {
+                let ln_k = frank::sample_log_frailty(rng, self.child_theta);
+                if ln_k == 0.0 {
+                    return 1.0;
+                }
+                // The logarithm of an integer; beyond 2⁵³ rounding is moot.
+                let k = ln_k.exp().round();
+                // p_k / (envelope) = Γ(k − α) / (Γ(1 − α) Γ(k)).
+                let ln_accept = ln_gamma(k - self.alpha) - self.ln_gamma_1m_alpha - ln_gamma(k);
+                if rng.random::<f64>().ln() <= ln_accept {
+                    return k;
+                }
+            }
+        }
+        loop {
+            let k = self.sibuya(rng);
+            // Accept with probability q₁^{k − 1}.
+            if k == 1.0 || rng.random::<f64>().ln() <= (k - 1.0) * self.ln_q1 {
+                return k;
+            }
+        }
+    }
+
+    /// Sibuya(`α`) by inversion: the survival function is
+    /// `P(X > k) = 1 / (k B(k, 1 − α))`, and the quantile is the floor or
+    /// the ceiling of `((1 − U) Γ(1 − α))^{−1/α}` (Hofert 2011, Prop. 3.2).
+    fn sibuya<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {
+        let u: f64 = rng.random();
+        if u <= self.alpha {
+            return 1.0;
+        }
+        let guess = ((1.0 - u) * self.gamma_1m_alpha).powf(-1.0 / self.alpha);
+        let floor = guess.floor();
+        if guess > 1.0 / f64::EPSILON {
+            return floor;
+        }
+        let ln_survival = -(floor.ln() + ln_gamma(floor) + self.ln_gamma_1m_alpha
+            - ln_gamma(floor + 1.0 - self.alpha));
+        if (1.0 - u).ln() < ln_survival {
+            guess.ceil()
+        } else {
+            floor
+        }
     }
 }
 
@@ -1118,6 +1353,81 @@ fn internal_node_count(tree: &HacTree) -> usize {
     match tree {
         HacTree::Leaf(_) => 0,
         HacTree::Node(node) => 1 + node.children.iter().map(internal_node_count).sum::<usize>(),
+    }
+}
+
+#[cfg(test)]
+mod frailty_tests {
+    use rand::{SeedableRng, rngs::StdRng};
+    use statrs::function::gamma::ln_gamma;
+
+    /// `ln a_k` of the Sibuya(α) mass function `α Γ(k − α) / (Γ(1 − α) k!)`.
+    fn ln_sibuya_pmf(alpha: f64, k: f64) -> f64 {
+        alpha.ln() + ln_gamma(k - alpha) - ln_gamma(1.0 - alpha) - ln_gamma(k + 1.0)
+    }
+
+    #[test]
+    fn tilted_sibuya_matches_its_mass_function() {
+        // One case per proposal: θ₀ < q₁ uses the logarithmic series,
+        // θ₀ ≥ q₁ the Sibuya proposal.
+        for (parent, child) in [(0.4_f64, 3.0_f64), (2.5, 4.0), (0.9, 0.95), (6.0, 20.0)] {
+            let sampler = super::TiltedSibuya::new(parent, child);
+            let alpha = parent / child;
+            let (q0, q1) = (-(-parent).exp_m1(), -(-child).exp_m1());
+            let mut rng = StdRng::seed_from_u64(99);
+            let n = 400_000;
+            let mut counts = [0usize; 6];
+            for _ in 0..n {
+                let k = sampler.sample(&mut rng);
+                assert!(k >= 1.0 && k.fract() == 0.0, "{k}");
+                counts[(k as usize - 1).min(5)] += 1;
+            }
+            let mut tail = 1.0;
+            for (idx, count) in counts.iter().enumerate() {
+                let k = (idx + 1) as f64;
+                let expected = if idx < 5 {
+                    let p = (ln_sibuya_pmf(alpha, k) + k * q1.ln() - q0.ln()).exp();
+                    tail -= p;
+                    p
+                } else {
+                    tail
+                };
+                let observed = *count as f64 / n as f64;
+                let standard_error = (expected * (1.0 - expected) / n as f64).sqrt();
+                assert!(
+                    (observed - expected).abs() < 4.5 * standard_error + 1e-12,
+                    "θ₀ = {parent}, θ₁ = {child}, k = {k}: {observed} vs {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tilted_stable_matches_its_laplace_transform() {
+        // E[exp(−t V)] = exp(−V₀ [(h + t)^α − h^α]).
+        for (alpha, v0, tilt) in [
+            (0.5_f64, 0.7_f64, 1.0_f64),
+            (0.2, 6.3, 1.0),
+            (0.9, 40.0, 0.01),
+        ] {
+            let mut rng = StdRng::seed_from_u64(5);
+            let n = 200_000;
+            let draws: Vec<f64> = (0..n)
+                .map(|_| super::ln_tilted_stable(&mut rng, alpha, v0.ln(), tilt.ln()).exp())
+                .collect();
+            for t in [0.05, 0.5, 3.0] {
+                let exact = (-v0 * ((tilt + t).powf(alpha) - tilt.powf(alpha))).exp();
+                let values: Vec<f64> = draws.iter().map(|v| (-t * v).exp()).collect();
+                let mean = values.iter().sum::<f64>() / n as f64;
+                let variance =
+                    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+                let standard_error = (variance / n as f64).sqrt();
+                assert!(
+                    (mean - exact).abs() < 4.5 * standard_error,
+                    "α = {alpha}, V₀ = {v0}, h = {tilt}, t = {t}: {mean} vs {exact}"
+                );
+            }
+        }
     }
 }
 
