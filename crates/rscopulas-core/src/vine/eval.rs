@@ -2,14 +2,15 @@ use crate::{
     accel,
     backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
     data::PseudoObs,
-    domain::{Device, ExecPolicy},
+    domain::ExecPolicy,
     errors::{BackendError, CopulaError, FitError},
-    paircopula::{
-        PairBatchBuffers, PairCopulaFamily, PairCopulaParams, Rotation, evaluate_pair_batch_into,
-    },
+    paircopula::{PairCopulaFamily, PairCopulaParams, Rotation},
 };
 
-use super::{CompiledVineRuntime, VineCopula};
+use super::{
+    CompiledVineRuntime, VineCopula,
+    gaussian_chain::{GaussianChain, score_bounds},
+};
 
 struct VineEvalContext<'a> {
     runtime: &'a CompiledVineRuntime,
@@ -38,6 +39,20 @@ impl VineCopula {
 
         match strategy {
             ExecutionStrategy::CpuSerial | ExecutionStrategy::CpuParallel => {
+                if let Some(chain) = GaussianChain::new(&runtime) {
+                    // All-Gaussian vine: stay on the normal-score scale.
+                    let bounds = score_bounds(clip_eps);
+                    let mut out = vec![0.0; data.n_obs()];
+                    crate::backend::try_fill_rows(
+                        &mut out,
+                        strategy,
+                        || chain.workspace(),
+                        |row, workspace| {
+                            Ok(chain.log_pdf(workspace, |var| view[(row, var)], clip_eps, bounds))
+                        },
+                    )?;
+                    return Ok(out);
+                }
                 evaluate_vine_cpu(&ctx, strategy)
             }
             ExecutionStrategy::Cuda(ordinal) => {
@@ -187,18 +202,15 @@ fn evaluate_vine_block(
             };
             targets[local_obs] = vdirect[workspace_index(local_obs, step.row, step.col, d)];
         }
-        let mut outputs = PairBatchBuffers {
-            log_pdf: &mut log_pdf,
-            cond_on_first: &mut cond_on_first,
-            cond_on_second: &mut cond_on_second,
-        };
-        evaluate_pair_batch_into(
-            &step.spec,
+        // The block is already one unit of parallel work: evaluate the edge
+        // serially over its rows rather than dispatching nested tasks.
+        step.spec.eval3_rows(
             &sources,
             &targets,
             clip_eps,
-            ExecPolicy::Force(Device::Cpu),
-            &mut outputs,
+            &mut log_pdf,
+            &mut cond_on_first,
+            &mut cond_on_second,
         )?;
         for local_obs in 0..n_rows {
             totals[local_obs] += log_pdf[local_obs];
@@ -226,7 +238,9 @@ fn workspace_index(obs: usize, row: usize, col: usize, dim: usize) -> usize {
     (obs * dim * dim) + (row * dim) + col
 }
 
+/// Rows per parallel block. A block's workspace is `2 · rows · dim²` doubles;
+/// keeping it within the L2 cache matters more than amortising dispatch.
 fn eval_chunk_size(dim: usize, n_rows: usize) -> usize {
-    let target_rows = (8192 / dim.max(1)).max(128);
+    let target_rows = (16_384 / (dim * dim).max(1)).clamp(64, 512);
     target_rows.min(n_rows.max(1))
 }

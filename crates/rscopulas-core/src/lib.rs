@@ -149,6 +149,7 @@ mod backend;
 mod cuda_backend;
 mod hac;
 mod metal_backend;
+mod special;
 
 #[doc(hidden)]
 pub mod accel;

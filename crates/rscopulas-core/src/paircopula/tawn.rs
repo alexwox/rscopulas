@@ -128,17 +128,11 @@ pub fn inv_first_given_second(
     // h_{1|2}(u|v) is strictly increasing in u (EV copulas are positively
     // ordered), so bisection converges cleanly. 90 iterations = ~double
     // precision over the [clip_eps, 1 - clip_eps] bracket.
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_first_given_second(mid, u2, theta, alpha, beta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_first_given_second(mid, u2, theta, alpha, beta),
+        p,
+        clip_eps,
+    )
 }
 
 pub fn inv_second_given_first(
@@ -149,17 +143,11 @@ pub fn inv_second_given_first(
     beta: f64,
     clip_eps: f64,
 ) -> Result<f64, CopulaError> {
-    let mut low = clip_eps;
-    let mut high = 1.0 - clip_eps;
-    for _ in 0..90 {
-        let mid = 0.5 * (low + high);
-        if cond_second_given_first(u1, mid, theta, alpha, beta)? < p {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    Ok(0.5 * (low + high))
+    super::invert::invert_increasing(
+        |mid| cond_second_given_first(u1, mid, theta, alpha, beta),
+        p,
+        clip_eps,
+    )
 }
 
 pub fn cdf(u1: f64, u2: f64, theta: f64, alpha: f64, beta: f64) -> Result<f64, CopulaError> {

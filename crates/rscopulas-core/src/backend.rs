@@ -66,6 +66,69 @@ where
     }
 }
 
+/// Rows per task when a row-wise evaluation is split across threads. Large
+/// enough to amortise task overhead and per-task scratch allocation, small
+/// enough to balance well for a few thousand rows.
+pub(crate) const ROW_CHUNK: usize = 256;
+
+/// Fills `out[row] = f(row, scratch)` for every row, serially or in parallel
+/// chunks. `init` builds the scratch state once per task rather than once per
+/// row, which is what keeps row kernels allocation-free.
+pub(crate) fn try_fill_rows<S, I, F>(
+    out: &mut [f64],
+    strategy: ExecutionStrategy,
+    init: I,
+    f: F,
+) -> Result<(), CopulaError>
+where
+    I: Fn() -> S + Sync + Send,
+    F: Fn(usize, &mut S) -> Result<f64, CopulaError> + Sync + Send,
+{
+    try_fill_rows_chunked(out, strategy, ROW_CHUNK, init, f)
+}
+
+/// [`try_fill_rows`] with an explicit task size, for kernels whose rows are
+/// expensive enough (a quadrature per row, say) that a few of them already
+/// make a worthwhile task.
+pub(crate) fn try_fill_rows_chunked<S, I, F>(
+    out: &mut [f64],
+    strategy: ExecutionStrategy,
+    chunk_rows: usize,
+    init: I,
+    f: F,
+) -> Result<(), CopulaError>
+where
+    I: Fn() -> S + Sync + Send,
+    F: Fn(usize, &mut S) -> Result<f64, CopulaError> + Sync + Send,
+{
+    match strategy {
+        ExecutionStrategy::CpuSerial => {
+            let mut scratch = init();
+            for (row, slot) in out.iter_mut().enumerate() {
+                *slot = f(row, &mut scratch)?;
+            }
+            Ok(())
+        }
+        ExecutionStrategy::CpuParallel => {
+            use rayon::prelude::*;
+            let chunk_rows = chunk_rows.max(1);
+            out.par_chunks_mut(chunk_rows)
+                .enumerate()
+                .try_for_each(|(chunk, slots)| {
+                    let mut scratch = init();
+                    let start = chunk * chunk_rows;
+                    for (offset, slot) in slots.iter_mut().enumerate() {
+                        *slot = f(start + offset, &mut scratch)?;
+                    }
+                    Ok(())
+                })
+        }
+        ExecutionStrategy::Cuda(_) | ExecutionStrategy::Metal => {
+            unreachable!("GPU strategies must be handled before CPU row filling")
+        }
+    }
+}
+
 fn resolve_accelerated_device(
     device: Device,
     operation: Operation,

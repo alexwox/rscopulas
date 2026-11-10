@@ -7,6 +7,7 @@ mod common;
 mod frank;
 mod gaussian;
 mod gumbel;
+mod invert;
 mod joe;
 mod khoudraji;
 mod polish;
@@ -31,8 +32,4 @@ pub fn tll_fit(
     tll::fit(u1, u2, method)
 }
 
-pub(crate) use common::{
-    PairBatchBuffers, cond_first_given_second_batch_into, cond_second_given_first_batch_into,
-    evaluate_pair_batch_into, inverse_second_given_first_batch_into,
-};
 pub(crate) use polish::{decode_params, encode_brackets, encode_jacobian, encode_params};

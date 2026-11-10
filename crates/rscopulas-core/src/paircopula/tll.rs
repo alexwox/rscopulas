@@ -1,6 +1,6 @@
+use crate::special::StdNormal as Normal;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
-use statrs::distribution::{ContinuousCDF, Normal};
 use std::sync::{Arc, OnceLock};
 
 use crate::errors::{CopulaError, FitError};
@@ -131,7 +131,7 @@ impl TllParams {
 }
 
 fn standard_normal() -> Normal {
-    Normal::new(0.0, 1.0).expect("standard normal parameters should be valid")
+    Normal
 }
 
 fn normal_pdf(x: f64) -> f64 {
@@ -159,6 +159,18 @@ fn grid_step(params: &TllParams) -> f64 {
 }
 
 pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, CopulaError> {
+    fit_with_table_limit(u1, u2, method, AXIS_TABLE_MAX_OBS)
+}
+
+/// [`fit`] with an explicit cap on the sample size for which the kernel
+/// tables are materialised; both paths produce identical results.
+#[allow(clippy::needless_range_loop)]
+fn fit_with_table_limit(
+    u1: &[f64],
+    u2: &[f64],
+    method: TllOrder,
+    table_max_obs: usize,
+) -> Result<TllParams, CopulaError> {
     if u1.len() != u2.len() || u1.is_empty() {
         return Err(FitError::Failed {
             reason: "tll pair fit requires equally sized non-empty inputs",
@@ -221,11 +233,22 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
     let det_irb = inv_h * inv_h;
     let b_mat = [[bandwidth * bandwidth, 0.0], [0.0, bandwidth * bandwidth]];
 
-    let mut log_density = Array2::<f64>::zeros((GRID_SIZE, GRID_SIZE));
-    for i in 0..GRID_SIZE {
-        let gx = GRID_MIN + i as f64 * step;
+    // The Gaussian product kernel is separable, so its two factors are
+    // tabulated per axis — `GRID_SIZE · n` exponentials each — instead of
+    // being recomputed for all `GRID_SIZE² · n` (grid point, observation)
+    // pairs. Grid rows are independent and are filled concurrently. Every
+    // accumulation below still runs over the observations in their original
+    // order, so the result is bit-for-bit what the direct double loop gives.
+    let n_obs = z1.len();
+    let x_axis = AxisKernel::new(&z1, step, inv_h, table_max_obs);
+    let y_axis = AxisKernel::new(&z2, step, inv_h, table_max_obs);
+
+    let density_row = |i: usize, row: &mut [f64]| {
+        let mut x_buffer = AxisBuffer::default();
+        let mut y_buffer = AxisBuffer::default();
+        let (zx, kx) = x_axis.row(i, &mut x_buffer);
         for j in 0..GRID_SIZE {
-            let gy = GRID_MIN + j as f64 * step;
+            let (zy, ky) = y_axis.row(j, &mut y_buffer);
 
             // `zz` is already once-decorrelated: `(z_data - z_grid) / h`.
             // Kernel weights evaluated here include the `det_irB` factor
@@ -237,11 +260,10 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
             // .transpose()` step inside vinecopulib's `if != "constant"`.
             let mut zt_k_sum = [0.0_f64; 2];
             let mut zt_outer_k_sum = [[0.0_f64; 2]; 2];
-            for k in 0..z1.len() {
-                let zz = [(z1[k] - gx) * inv_h, (z2[k] - gy) * inv_h];
-                let weight = normal_pdf(zz[0]) * normal_pdf(zz[1]) * det_irb;
+            for k in 0..n_obs {
+                let weight = kx[k] * ky[k] * det_irb;
                 k_sum += weight;
-                let zt = [zz[0] * inv_h, zz[1] * inv_h];
+                let zt = [zx[k] * inv_h, zy[k] * inv_h];
                 zt_k_sum[0] += zt[0] * weight;
                 zt_k_sum[1] += zt[1] * weight;
                 zt_outer_k_sum[0][0] += zt[0] * zt[0] * weight;
@@ -253,7 +275,7 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
             // `log f0` — no separate `+ log det_irB` additive is needed.
             let f0 = k_sum / n;
             if f0 <= 0.0 || !f0.is_finite() {
-                log_density[[i, j]] = (1e-300_f64).ln();
+                row[j] = (1e-300_f64).ln();
                 continue;
             }
 
@@ -297,11 +319,11 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
                         res_log - 0.5 * quad
                     };
                     let Some((s_mat, det_s_inv)) = invert_2x2(&s_inv) else {
-                        log_density[[i, j]] = fallback_to_linear(res_log).max(1e-300_f64.ln());
+                        row[j] = fallback_to_linear(res_log).max(1e-300_f64.ln());
                         continue;
                     };
                     if det_s_inv <= 0.0 || !det_s_inv.is_finite() {
-                        log_density[[i, j]] = fallback_to_linear(res_log).max(1e-300_f64.ln());
+                        row[j] = fallback_to_linear(res_log).max(1e-300_f64.ln());
                         continue;
                     }
                     // `res(k) *= sqrt(det S) / det_irB` (vinecopulib). Since
@@ -318,9 +340,13 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
                     res_log -= 0.5 * quad;
                 }
             }
-            log_density[[i, j]] = res_log.max(1e-300_f64.ln());
+            row[j] = res_log.max(1e-300_f64.ln());
         }
-    }
+    };
+    let mut density_values = vec![0.0_f64; GRID_SIZE * GRID_SIZE];
+    fill_grid_rows(&mut density_values, n_obs, density_row);
+    let log_density = Array2::from_shape_vec((GRID_SIZE, GRID_SIZE), density_values)
+        .expect("grid buffer should match the grid shape");
 
     // Effective degrees of freedom. We use vinecopulib's trace-of-hat-matrix
     // definition: per-grid-point influence `infl(z_k) = K(0) · det_irB ·
@@ -330,17 +356,22 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
     // `effective_df` is the sum of influence values interpolated at each
     // data point, clipped to `[−0.2, 1.3]` (vinecopulib's safety band) and
     // floored at 1.0.
-    let mut infl_grid = Array2::<f64>::zeros((GRID_SIZE, GRID_SIZE));
     let kernel_zero = normal_pdf(0.0) * normal_pdf(0.0);
-    for i in 0..GRID_SIZE {
-        let gx = GRID_MIN + i as f64 * step;
-        for j in 0..GRID_SIZE {
-            let gy = GRID_MIN + j as f64 * step;
-            let m_inv_00 = local_gram_m_inv_00(gx, gy, &z1, &z2, bandwidth, method);
+    let influence_row = |i: usize, row: &mut [f64]| {
+        let mut x_buffer = AxisBuffer::default();
+        let mut y_buffer = AxisBuffer::default();
+        let (zx, kx) = x_axis.row(i, &mut x_buffer);
+        for (j, slot) in row.iter_mut().enumerate() {
+            let (zy, ky) = y_axis.row(j, &mut y_buffer);
+            let m_inv_00 = local_gram_m_inv_00(zx, zy, kx, ky, bandwidth, method);
             let infl = kernel_zero * det_irb * m_inv_00 / n;
-            infl_grid[[i, j]] = infl.clamp(-0.2, 1.3);
+            *slot = infl.clamp(-0.2, 1.3);
         }
-    }
+    };
+    let mut influence_values = vec![0.0_f64; GRID_SIZE * GRID_SIZE];
+    fill_grid_rows(&mut influence_values, n_obs, influence_row);
+    let infl_grid = Array2::from_shape_vec((GRID_SIZE, GRID_SIZE), influence_values)
+        .expect("grid buffer should match the grid shape");
     let mut infl_sum = 0.0_f64;
     let infl_params = TllParams {
         method: TllOrder::Constant,
@@ -376,14 +407,14 @@ pub fn fit(u1: &[f64], u2: &[f64], method: TllOrder) -> Result<TllParams, Copula
 /// `(gx, gy)`. The basis size matches the TLL order: 1 for `Constant` (→
 /// `M⁻¹[0,0] = 1/f0`), 3 for `Linear`, 6 for `Quadratic`.
 fn local_gram_m_inv_00(
-    gx: f64,
-    gy: f64,
-    z1: &[f64],
-    z2: &[f64],
+    shift_x: &[f64],
+    shift_y: &[f64],
+    kernel_x: &[f64],
+    kernel_y: &[f64],
     bandwidth: f64,
     method: TllOrder,
 ) -> f64 {
-    let n = z1.len() as f64;
+    let n = shift_x.len() as f64;
     let basis_size = match method {
         TllOrder::Constant => 1,
         TllOrder::Linear => 3,
@@ -393,15 +424,15 @@ fn local_gram_m_inv_00(
     let inv_h = 1.0 / bandwidth;
     let det_irb = inv_h * inv_h;
 
-    for k in 0..z1.len() {
-        let u = (z1[k] - gx) * inv_h;
-        let v = (z2[k] - gy) * inv_h;
+    for k in 0..shift_x.len() {
+        let u = shift_x[k];
+        let v = shift_y[k];
         // Match vinecopulib: the kernel vector that builds `M` already
         // carries the `det_irB` factor (same premultiplication as `kernels`
         // in the density loop). Omitting it here leaves `[M⁻¹]_{0,0}` too
         // large and drives the influence formula past the `1.3` clamp for
         // every TLL1 grid point.
-        let w = normal_pdf(u) * normal_pdf(v) * det_irb;
+        let w = kernel_x[k] * kernel_y[k] * det_irb;
         let phi: [f64; 6] = [1.0, u, v, u * u, v * v, u * v];
         for a in 0..basis_size {
             for b in 0..basis_size {
@@ -428,6 +459,96 @@ fn local_gram_m_inv_00(
                     1e-300
                 }
             }
+        }
+    }
+}
+
+/// Largest sample for which the per-axis kernel tables are materialised
+/// (`2 · GRID_SIZE · n` doubles per axis, ~190 MB in total at this size).
+/// Larger samples compute each grid row's kernel values on demand instead.
+const AXIS_TABLE_MAX_OBS: usize = 200_000;
+
+/// Scratch space for one on-demand axis row.
+#[derive(Default)]
+struct AxisBuffer {
+    shifts: Vec<f64>,
+    kernels: Vec<f64>,
+}
+
+/// For one data axis: the standardised shifts `(z − grid) / h` of every
+/// observation from every grid coordinate, and the Gaussian kernel at them.
+enum AxisKernel<'a> {
+    /// Both tables precomputed, `n` entries per grid coordinate.
+    Table {
+        n_obs: usize,
+        shifts: Vec<f64>,
+        kernels: Vec<f64>,
+    },
+    /// Rows computed when asked for.
+    OnDemand { z: &'a [f64], step: f64, inv_h: f64 },
+}
+
+impl<'a> AxisKernel<'a> {
+    fn new(z: &'a [f64], step: f64, inv_h: f64, table_max_obs: usize) -> Self {
+        if z.len() > table_max_obs {
+            return Self::OnDemand { z, step, inv_h };
+        }
+        let mut shifts = Vec::with_capacity(GRID_SIZE * z.len());
+        let mut kernels = Vec::with_capacity(GRID_SIZE * z.len());
+        for g in 0..GRID_SIZE {
+            let centre = GRID_MIN + g as f64 * step;
+            for &value in z {
+                let shift = (value - centre) * inv_h;
+                shifts.push(shift);
+                kernels.push(normal_pdf(shift));
+            }
+        }
+        Self::Table {
+            n_obs: z.len(),
+            shifts,
+            kernels,
+        }
+    }
+
+    /// `(shifts, kernels)` of grid coordinate `g`, one entry per observation.
+    fn row<'b>(&'b self, g: usize, buffer: &'b mut AxisBuffer) -> (&'b [f64], &'b [f64]) {
+        match self {
+            Self::Table {
+                n_obs,
+                shifts,
+                kernels,
+            } => (
+                &shifts[g * n_obs..(g + 1) * n_obs],
+                &kernels[g * n_obs..(g + 1) * n_obs],
+            ),
+            Self::OnDemand { z, step, inv_h } => {
+                let centre = GRID_MIN + g as f64 * step;
+                buffer.shifts.clear();
+                buffer.kernels.clear();
+                for &value in z.iter() {
+                    let shift = (value - centre) * inv_h;
+                    buffer.shifts.push(shift);
+                    buffer.kernels.push(normal_pdf(shift));
+                }
+                (&buffer.shifts, &buffer.kernels)
+            }
+        }
+    }
+}
+
+/// Fills a row-major `GRID_SIZE × GRID_SIZE` buffer one grid row at a time,
+/// in parallel once the per-row work (proportional to the sample size) is
+/// large enough to pay for the dispatch.
+fn fill_grid_rows(values: &mut [f64], n_obs: usize, row: impl Fn(usize, &mut [f64]) + Sync) {
+    if n_obs >= 64 {
+        use rayon::prelude::*;
+        values
+            .par_chunks_mut(GRID_SIZE)
+            .enumerate()
+            .for_each(|(i, slots)| row(i, slots));
+    } else {
+        for (i, slots) in values.chunks_mut(GRID_SIZE).enumerate() {
+            row(i, slots);
         }
     }
 }
@@ -797,6 +918,18 @@ mod tests {
             u2.push(cnorm.cdf(y));
         }
         (u1, u2)
+    }
+
+    #[test]
+    fn tabulated_and_on_demand_kernels_give_identical_fits() {
+        let (u1, u2) = gaussian_sample(700, 0.55, 99);
+        for method in [TllOrder::Constant, TllOrder::Linear, TllOrder::Quadratic] {
+            let tabulated = fit(&u1, &u2, method).unwrap();
+            let on_demand = fit_with_table_limit(&u1, &u2, method, 0).unwrap();
+            assert_eq!(tabulated.log_density, on_demand.log_density);
+            assert_eq!(tabulated.effective_df, on_demand.effective_df);
+            assert_eq!(tabulated.bandwidth, on_demand.bandwidth);
+        }
     }
 
     #[test]

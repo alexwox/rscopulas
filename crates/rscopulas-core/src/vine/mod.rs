@@ -1,5 +1,6 @@
 mod eval;
 mod fit;
+mod gaussian_chain;
 mod rosenblatt;
 mod sample;
 mod structure;

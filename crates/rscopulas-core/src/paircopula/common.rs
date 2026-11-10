@@ -1,12 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use statrs::distribution::{ContinuousCDF, Normal};
-
 use crate::{
     backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
     domain::ExecPolicy,
     errors::{BackendError, CopulaError, FitError},
-    math::{NelderMeadOptions, maximize_scalar_brent, nelder_mead_maximize},
+    math::{maximize_scalar_brent, polish_maximize},
     vine::{SelectionCriterion, VineFitOptions},
 };
 
@@ -365,8 +363,24 @@ impl PairCopulaSpec {
     /// validation. The pair-fit optimisers validate the sample once and the
     /// candidate spec per objective evaluation, so they skip the per-row
     /// checks here.
+    #[inline]
     fn log_pdf_validated(&self, u1: f64, u2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
+        if matches!(
+            (self.family, &self.params),
+            (PairCopulaFamily::Independence, PairCopulaParams::None)
+        ) {
+            return Ok(0.0);
+        }
         let ((x1, x2), rotation) = rotated::to_base_inputs(self.rotation, u1, u2, clip_eps);
+        let base = self.base_log_pdf(x1, x2, clip_eps)?;
+        Ok(rotated::from_base_log_pdf(rotation, base))
+    }
+
+    /// Log-density of the unrotated kernel at base-orientation inputs that
+    /// are already clipped. Errors on NaN or `+inf`; a zero density (`-inf`)
+    /// is a valid result.
+    #[inline]
+    fn base_log_pdf(&self, x1: f64, x2: f64, clip_eps: f64) -> Result<f64, CopulaError> {
         let base = match (self.family, &self.params) {
             (PairCopulaFamily::Independence, PairCopulaParams::None) => 0.0,
             (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => {
@@ -422,7 +436,7 @@ impl PairCopulaSpec {
             }
             .into());
         }
-        Ok(rotated::from_base_log_pdf(rotation, base))
+        Ok(base)
     }
 
     /// Evaluates `h_{1|2}(u1 | u2)`.
@@ -433,6 +447,18 @@ impl PairCopulaSpec {
         clip_eps: f64,
     ) -> Result<f64, CopulaError> {
         self.validate_evaluation(u1, u2, clip_eps)?;
+        self.cond_first_given_second_unchecked(u1, u2, clip_eps)
+    }
+
+    /// [`cond_first_given_second`](Self::cond_first_given_second) for inputs
+    /// and a spec that the caller has already validated.
+    #[inline(always)]
+    fn cond_first_given_second_unchecked(
+        &self,
+        u1: f64,
+        u2: f64,
+        clip_eps: f64,
+    ) -> Result<f64, CopulaError> {
         match self.rotation {
             Rotation::R0 => self.base_cond_first_given_second(u1, u2, clip_eps),
             Rotation::R180 => {
@@ -516,6 +542,18 @@ impl PairCopulaSpec {
         clip_eps: f64,
     ) -> Result<f64, CopulaError> {
         self.validate_evaluation(u1, p, clip_eps)?;
+        self.inv_second_given_first_unchecked(u1, p, clip_eps)
+    }
+
+    /// [`inv_second_given_first`](Self::inv_second_given_first) for inputs
+    /// and a spec that the caller has already validated.
+    #[inline(always)]
+    fn inv_second_given_first_unchecked(
+        &self,
+        u1: f64,
+        p: f64,
+        clip_eps: f64,
+    ) -> Result<f64, CopulaError> {
         let p = p.clamp(clip_eps, 1.0 - clip_eps);
         let u1 = u1.clamp(clip_eps, 1.0 - clip_eps);
         match self.rotation {
@@ -814,6 +852,261 @@ impl PairCopulaSpec {
     }
 }
 
+/// Family-specific state hoisted out of a batch loop, so parameter checks
+/// and parameter-only constants are paid once per batch instead of once per
+/// row, and families with expensive shared sub-expressions (the quantile
+/// transforms of the elliptical kernels) compute them once per row instead of
+/// once per output.
+enum BaseKernel<'a> {
+    Independence,
+    Gaussian(f64),
+    StudentT(student_t::Kernel),
+    Clayton(f64),
+    Gumbel(f64),
+    Joe(f64),
+    Bb1(bb1::Density),
+    Bb7(bb7::Density),
+    Other(&'a PairCopulaSpec),
+}
+
+impl PairCopulaSpec {
+    fn base_kernel(&self) -> Result<BaseKernel<'_>, CopulaError> {
+        Ok(match (self.family, &self.params) {
+            (PairCopulaFamily::Independence, PairCopulaParams::None) => BaseKernel::Independence,
+            (PairCopulaFamily::Gaussian, PairCopulaParams::One(rho)) => BaseKernel::Gaussian(*rho),
+            (PairCopulaFamily::StudentT, PairCopulaParams::Two(rho, nu)) => {
+                BaseKernel::StudentT(student_t::Kernel::new(*rho, *nu)?)
+            }
+            (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
+                BaseKernel::Clayton(*theta)
+            }
+            (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => BaseKernel::Gumbel(*theta),
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => BaseKernel::Joe(*theta),
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                BaseKernel::Bb1(bb1::Density::new(*theta, *delta))
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                BaseKernel::Bb7(bb7::Density::new(*theta, *delta))
+            }
+            _ => BaseKernel::Other(self),
+        })
+    }
+
+    /// Evaluates the log-density and both h-functions for every row:
+    /// `log_pdf[i] = log c(u1[i], u2[i])`, `h_first[i] = h_{1|2}`,
+    /// `h_second[i] = h_{2|1}`.
+    ///
+    /// Row for row this returns exactly what [`log_pdf`](Self::log_pdf),
+    /// [`cond_first_given_second`](Self::cond_first_given_second) and
+    /// [`cond_second_given_first`](Self::cond_second_given_first) return —
+    /// including the same errors — but validates the spec once and shares
+    /// work between the three outputs.
+    pub(crate) fn eval3_rows(
+        &self,
+        u1: &[f64],
+        u2: &[f64],
+        clip_eps: f64,
+        log_pdf: &mut [f64],
+        h_first: &mut [f64],
+        h_second: &mut [f64],
+    ) -> Result<(), CopulaError> {
+        crate::data::validate_clip_eps(clip_eps)?;
+        self.validate()?;
+        let kernel = self.base_kernel()?;
+        let flip_first = matches!(self.rotation, Rotation::R90 | Rotation::R180);
+        let flip_second = matches!(self.rotation, Rotation::R180 | Rotation::R270);
+        let (low, high) = (clip_eps, 1.0 - clip_eps);
+        for idx in 0..u1.len() {
+            let (a, b) = (u1[idx], u2[idx]);
+            crate::data::validate_probability(a)?;
+            crate::data::validate_probability(b)?;
+            let ((x1, x2), _) = rotated::to_base_inputs(self.rotation, a, b, clip_eps);
+            let (density, base_first, base_second) = match &kernel {
+                BaseKernel::Independence => (0.0, x1, x2),
+                BaseKernel::Gaussian(rho) => gaussian::eval3(x1, x2, *rho)?,
+                BaseKernel::StudentT(kernel) => kernel.eval3(x1, x2),
+                BaseKernel::Clayton(theta) => clayton::eval3(x1, x2, *theta),
+                BaseKernel::Gumbel(theta) => gumbel::eval3(x1, x2, *theta),
+                BaseKernel::Joe(theta) => joe::eval3(x1, x2, *theta),
+                BaseKernel::Bb1(density) => density.eval3(x1, x2),
+                BaseKernel::Bb7(density) => density.eval3(x1, x2),
+                BaseKernel::Other(spec) => (
+                    spec.base_log_pdf(x1, x2, clip_eps)?,
+                    spec.base_cond_first_given_second(x1, x2, clip_eps)?,
+                    spec.base_cond_second_given_first(x1, x2, clip_eps)?,
+                ),
+            };
+            if density.is_nan() || density == f64::INFINITY {
+                return Err(crate::errors::NumericalError::Failed {
+                    reason: "pair density is not finite",
+                }
+                .into());
+            }
+            let first = if flip_first {
+                1.0 - base_first
+            } else {
+                base_first
+            };
+            let second = if flip_second {
+                1.0 - base_second
+            } else {
+                base_second
+            };
+            if !first.is_finite() || !second.is_finite() {
+                return Err(crate::errors::NumericalError::Failed {
+                    reason: "pair conditional is not finite",
+                }
+                .into());
+            }
+            log_pdf[idx] = density;
+            h_first[idx] = first.clamp(low, high);
+            h_second[idx] = second.clamp(low, high);
+        }
+        Ok(())
+    }
+}
+
+impl PairCopulaSpec {
+    /// Both h-functions for every row, as the forward Rosenblatt recursion
+    /// needs them: `h_second[i] = h_{2|1}(u2[i] | u1[i])` and, when
+    /// requested, `h_first[i] = h_{1|2}(u1[i] | u2[i])`.
+    ///
+    /// Row for row this equals [`cond_second_given_first`] and
+    /// [`cond_first_given_second`], with the spec validated once and, for the
+    /// elliptical kernels, the quantile transforms shared between the two.
+    ///
+    /// [`cond_second_given_first`]: Self::cond_second_given_first
+    /// [`cond_first_given_second`]: Self::cond_first_given_second
+    pub(crate) fn cond_rows(
+        &self,
+        u1: &[f64],
+        u2: &[f64],
+        clip_eps: f64,
+        mut h_first: Option<&mut [f64]>,
+        h_second: &mut [f64],
+    ) -> Result<(), CopulaError> {
+        validate_batch_buffers(u1, u2, &[h_second.len()])?;
+        crate::data::validate_clip_eps(clip_eps)?;
+        self.validate()?;
+        let kernel = self.base_kernel()?;
+        let flip_first = matches!(self.rotation, Rotation::R90 | Rotation::R180);
+        let flip_second = matches!(self.rotation, Rotation::R180 | Rotation::R270);
+        let (low, high) = (clip_eps, 1.0 - clip_eps);
+        let want_first = h_first.is_some();
+        for idx in 0..u1.len() {
+            let (a, b) = (u1[idx], u2[idx]);
+            crate::data::validate_probability(a)?;
+            crate::data::validate_probability(b)?;
+            let ((x1, x2), _) = rotated::to_base_inputs(self.rotation, a, b, clip_eps);
+            let (base_first, base_second) = match &kernel {
+                BaseKernel::Independence => (x1, x2),
+                BaseKernel::Gaussian(rho) => gaussian::cond_both(x1, x2, *rho),
+                BaseKernel::StudentT(kernel) => kernel.cond_both(x1, x2),
+                BaseKernel::Clayton(theta) => clayton::cond_both(x1, x2, *theta),
+                BaseKernel::Gumbel(theta) => gumbel::cond_both(x1, x2, *theta),
+                BaseKernel::Joe(theta) => joe::cond_both(x1, x2, *theta),
+                BaseKernel::Bb1(density) => density.cond_both(x1, x2),
+                BaseKernel::Bb7(density) => density.cond_both(x1, x2),
+                BaseKernel::Other(spec) => (
+                    if want_first {
+                        spec.base_cond_first_given_second(x1, x2, clip_eps)?
+                    } else {
+                        0.5
+                    },
+                    spec.base_cond_second_given_first(x1, x2, clip_eps)?,
+                ),
+            };
+            let first = if flip_first {
+                1.0 - base_first
+            } else {
+                base_first
+            };
+            let second = if flip_second {
+                1.0 - base_second
+            } else {
+                base_second
+            };
+            if !second.is_finite() || (want_first && !first.is_finite()) {
+                return Err(crate::errors::NumericalError::Failed {
+                    reason: "pair conditional is not finite",
+                }
+                .into());
+            }
+            h_second[idx] = second.clamp(low, high);
+            if let Some(out) = h_first.as_deref_mut() {
+                out[idx] = first.clamp(low, high);
+            }
+        }
+        Ok(())
+    }
+
+    /// One step of the inverse Rosenblatt recursion for every row:
+    /// `solved[i] = h_{2|1}⁻¹(p[i] | u1[i])` and, when requested,
+    /// `h_first[i] = h_{1|2}(u1[i] | solved[i])`.
+    ///
+    /// Row for row this equals [`inv_second_given_first`] followed by
+    /// [`cond_first_given_second`]. For unrotated elliptical kernels the two
+    /// share their quantile transforms: the h-function reads the score of
+    /// `solved` directly instead of re-deriving it from the probability.
+    ///
+    /// [`inv_second_given_first`]: Self::inv_second_given_first
+    /// [`cond_first_given_second`]: Self::cond_first_given_second
+    pub(crate) fn inverse_rows(
+        &self,
+        u1: &[f64],
+        p: &[f64],
+        clip_eps: f64,
+        solved: &mut [f64],
+        mut h_first: Option<&mut [f64]>,
+    ) -> Result<(), CopulaError> {
+        validate_batch_buffers(u1, p, &[solved.len()])?;
+        crate::data::validate_clip_eps(clip_eps)?;
+        self.validate()?;
+        let (low, high) = (clip_eps, 1.0 - clip_eps);
+        let kernel = if self.rotation == Rotation::R0 {
+            self.base_kernel()?
+        } else {
+            BaseKernel::Other(self)
+        };
+        for idx in 0..u1.len() {
+            let (a, level) = (u1[idx], p[idx]);
+            crate::data::validate_probability(a)?;
+            crate::data::validate_probability(level)?;
+            let (value, conditional) = match &kernel {
+                BaseKernel::Gaussian(rho) => gaussian::inverse_then_cond(
+                    a.clamp(low, high),
+                    level.clamp(low, high),
+                    *rho,
+                    low,
+                ),
+                BaseKernel::StudentT(kernel) => {
+                    kernel.inverse_then_cond(a.clamp(low, high), level.clamp(low, high), low)
+                }
+                _ => {
+                    let value = self.inv_second_given_first_unchecked(a, level, clip_eps)?;
+                    let conditional = if h_first.is_some() {
+                        self.cond_first_given_second_unchecked(a, value, clip_eps)?
+                    } else {
+                        0.5
+                    };
+                    (value, conditional)
+                }
+            };
+            if !value.is_finite() || !conditional.is_finite() {
+                return Err(crate::errors::NumericalError::Failed {
+                    reason: "pair conditional is not finite",
+                }
+                .into());
+            }
+            solved[idx] = value.clamp(low, high);
+            if let Some(out) = h_first.as_deref_mut() {
+                out[idx] = conditional.clamp(low, high);
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn integrate_1d<F: Fn(f64) -> Result<f64, CopulaError>>(
     f: &F,
     lower: f64,
@@ -896,33 +1189,33 @@ pub fn fit_pair_copula(
         }
     }
 
-    let mut candidates = Vec::new();
+    // Every (family, rotation) candidate is an independent optimisation, so
+    // they are fitted and scored concurrently. Results come back in candidate
+    // order, which keeps tie-breaking in the selection below deterministic.
+    let mut jobs = Vec::new();
     for family in &options.family_set {
         for rotation in candidate_rotations(*family, options.include_rotations, tau) {
-            let spec = match fit_family_with_rotation(
-                *family,
-                *rotation,
-                u1,
-                u2,
-                tau,
-                options.base.clip_eps,
-                options.base.max_iter,
-                options.criterion,
-            ) {
-                Ok(spec) => spec,
-                Err(_) => continue,
-            };
-            candidates.push(spec);
+            jobs.push((*family, *rotation));
         }
     }
-
-    let strategy = resolve_strategy(
-        options.base.exec,
-        Operation::PairFitScoring,
-        candidates.len(),
-    )?;
-    let fits = parallel_try_map_range_collect(candidates.len(), strategy, |idx| {
-        match finalize_pair_fit(candidates[idx].clone(), u1, u2, options) {
+    let strategy = resolve_strategy(options.base.exec, Operation::PairFitScoring, jobs.len())?;
+    let fits = parallel_try_map_range_collect(jobs.len(), strategy, |idx| {
+        let (family, rotation) = jobs[idx];
+        let Ok(spec) = fit_family_with_rotation(
+            family,
+            rotation,
+            u1,
+            u2,
+            tau,
+            options.base.clip_eps,
+            options.base.max_iter,
+            options.criterion,
+        ) else {
+            // A family that cannot be fitted to this sample is not a
+            // candidate; it must not prevent another one from winning.
+            return Ok(None);
+        };
+        match finalize_pair_fit(spec, u1, u2, options) {
             Ok(fit) if fit.loglik.is_finite() => Ok(Some(fit)),
             // A numerically unusable family must not prevent another valid
             // candidate from winning. Input and backend failures still surface.
@@ -949,13 +1242,7 @@ fn finalize_pair_fit(
     u2: &[f64],
     options: &VineFitOptions,
 ) -> Result<PairFitResult, CopulaError> {
-    let batch = evaluate_pair_batch(
-        spec.clone(),
-        u1,
-        u2,
-        options.base.clip_eps,
-        options.base.exec,
-    )?;
+    let batch = evaluate_pair_batch(&spec, u1, u2, options.base.clip_eps, options.base.exec)?;
 
     // If any per-observation log-density evaluates to a non-finite value
     // (e.g. a floating-point overflow in a pair kernel at extreme
@@ -1056,10 +1343,17 @@ fn candidate_rotations(
 /// Absolute tolerance (in natural parameter units) for the scalar searches
 /// that finish a one-parameter fit.
 const SCALAR_TOL: f64 = 1e-8;
-/// Looser tolerance for the inner searches of a two-parameter grid warm
-/// start. The joint polish that follows refines the result, so the warm
-/// start only needs to land in the right basin.
+/// Tolerance for the inner searches of a two-parameter grid warm start. The
+/// joint polish that follows refines the result, so the warm start only needs
+/// to rank the grid points correctly.
 const WARM_START_TOL: f64 = 1e-4;
+/// Coarser warm-start tolerance for BB1, BB6 and BB7, whose likelihoods have a
+/// single basin across the grid: any grid point's neighbourhood polishes to
+/// the same optimum, so a rough ranking is enough and saves about half of the
+/// warm-start evaluations. (BB8 and Tawn can have separate basins at
+/// different values of the second parameter and keep the fine tolerance —
+/// misranking two of them would polish the wrong one.)
+const WARM_START_TOL_SINGLE_BASIN: f64 = 2e-2;
 /// Largest |ρ| the Gaussian MLE may return. Keeps `1 − ρ²` away from zero
 /// while still representing near-comonotone data.
 const GAUSSIAN_RHO_MAX: f64 = 1.0 - 1e-9;
@@ -1122,9 +1416,47 @@ struct PairObjective<'a> {
     x1: &'a [f64],
     x2: &'a [f64],
     clip_eps: f64,
+    /// `(ln x₁, ln x₂)`, computed on first use by the families whose density
+    /// is a function of the logs. An optimiser evaluates the likelihood
+    /// dozens of times at different parameters but the same sample, so these
+    /// are worth keeping.
+    logs: std::sync::OnceLock<(Vec<f64>, Vec<f64>)>,
+    /// `(ln(1 − x₁), ln(1 − x₂))`, likewise.
+    log_survivals: std::sync::OnceLock<(Vec<f64>, Vec<f64>)>,
 }
 
-impl PairObjective<'_> {
+impl<'a> PairObjective<'a> {
+    fn new(family: PairCopulaFamily, x1: &'a [f64], x2: &'a [f64], clip_eps: f64) -> Self {
+        Self {
+            family,
+            x1,
+            x2,
+            clip_eps,
+            logs: std::sync::OnceLock::new(),
+            log_survivals: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn logs(&self) -> (&[f64], &[f64]) {
+        let (first, second) = self.logs.get_or_init(|| {
+            (
+                self.x1.iter().map(|x| x.ln()).collect(),
+                self.x2.iter().map(|x| x.ln()).collect(),
+            )
+        });
+        (first, second)
+    }
+
+    fn log_survivals(&self) -> (&[f64], &[f64]) {
+        let (first, second) = self.log_survivals.get_or_init(|| {
+            (
+                self.x1.iter().map(|x| (-x).ln_1p()).collect(),
+                self.x2.iter().map(|x| (-x).ln_1p()).collect(),
+            )
+        });
+        (first, second)
+    }
+
     fn loglik(&self, params: PairCopulaParams) -> f64 {
         let spec = PairCopulaSpec {
             family: self.family,
@@ -1133,6 +1465,53 @@ impl PairObjective<'_> {
         };
         if spec.validate().is_err() {
             return f64::NEG_INFINITY;
+        }
+        // Families whose density is a closed form in cached logs: same
+        // arithmetic as the generic path below, minus the per-row logarithms
+        // of the data and of the parameters.
+        let sum = |first: &[f64], second: &[f64], density: &dyn Fn(f64, f64) -> f64| {
+            let mut total = 0.0;
+            for (&a, &b) in first.iter().zip(second) {
+                let value = density(a, b);
+                if !value.is_finite() {
+                    return f64::NEG_INFINITY;
+                }
+                total += value;
+            }
+            total
+        };
+        match (spec.family, &spec.params) {
+            (PairCopulaFamily::Clayton, PairCopulaParams::One(theta)) => {
+                let (first, second) = self.logs();
+                return sum(first, second, &|a, b| {
+                    clayton::log_pdf_from_logs(a, b, *theta)
+                });
+            }
+            (PairCopulaFamily::Gumbel, PairCopulaParams::One(theta)) => {
+                let (first, second) = self.logs();
+                return sum(first, second, &|a, b| {
+                    gumbel::log_pdf_from_logs(a, b, *theta)
+                });
+            }
+            (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
+                let (first, second) = self.log_survivals();
+                return sum(first, second, &|a, b| {
+                    joe::log_pdf_from_log_survival(a, b, *theta)
+                });
+            }
+            (PairCopulaFamily::Bb1, PairCopulaParams::Two(theta, delta)) => {
+                let density = bb1::Density::new(*theta, *delta);
+                let (first, second) = self.logs();
+                return sum(first, second, &|a, b| density.log_pdf_from_logs(a, b));
+            }
+            (PairCopulaFamily::Bb7, PairCopulaParams::Two(theta, delta)) => {
+                let density = bb7::Density::new(*theta, *delta);
+                let (first, second) = self.log_survivals();
+                return sum(first, second, &|a, b| {
+                    density.log_pdf_from_log_survival(a, b)
+                });
+            }
+            _ => {}
         }
         let mut total = 0.0;
         for (&u, &v) in self.x1.iter().zip(self.x2) {
@@ -1153,44 +1532,11 @@ fn fit_simple_family(
     clip_eps: f64,
     max_iter: usize,
 ) -> Result<PairCopulaParams, CopulaError> {
-    let objective = PairObjective {
-        family,
-        x1,
-        x2,
-        clip_eps,
-    };
+    let objective = PairObjective::new(family, x1, x2, clip_eps);
     let params = match family {
         PairCopulaFamily::Independence => PairCopulaParams::None,
         PairCopulaFamily::Gaussian => fit_gaussian_mle(tau, x1, x2, max_iter),
-        PairCopulaFamily::StudentT => {
-            // Grid warm start over ν. The t-quantiles depend on ν only, so
-            // each grid point inverts the CDF once and runs a cheap scalar
-            // search over ρ on the cached quantiles. The joint (ρ, ν) polish
-            // then makes ν continuous.
-            let rho_seed = gaussian::tau_to_rho(tau).clamp(-0.95, 0.95);
-            let mut best: Option<(f64, f64, f64)> = None;
-            for nu in student_t::candidate_nus() {
-                let Ok(terms) = student_t::NuTerms::new(x1, x2, nu) else {
-                    continue;
-                };
-                let search = maximize_scalar_brent(
-                    -STUDENT_T_RHO_MAX,
-                    STUDENT_T_RHO_MAX,
-                    Some(rho_seed),
-                    SCALAR_TOL,
-                    max_iter,
-                    |rho| terms.loglik(rho),
-                );
-                if search.value.is_finite() && best.is_none_or(|(_, _, value)| search.value > value)
-                {
-                    best = Some((search.x, nu, search.value));
-                }
-            }
-            let (rho, nu, _) = best.ok_or(FitError::Failed {
-                reason: "student t pair fit failed",
-            })?;
-            polish_two_parameter(&objective, PairCopulaParams::Two(rho, nu), max_iter)
-        }
+        PairCopulaFamily::StudentT => fit_student_t_profile(tau, x1, x2, max_iter)?,
         PairCopulaFamily::Clayton => {
             let init = clayton::theta_from_tau(tau)?;
             let upper = (init * 4.0 + 2.0).max(20.0);
@@ -1234,6 +1580,7 @@ fn fit_simple_family(
                     let init_theta = bb1::params_from_tau(tau, delta).unwrap_or(1.0);
                     (1e-4, (init_theta * 4.0 + 2.0).max(10.0), Some(init_theta))
                 },
+                WARM_START_TOL_SINGLE_BASIN,
                 max_iter,
                 "bb1 pair fit failed",
             )?;
@@ -1246,6 +1593,7 @@ fn fit_simple_family(
                 &objective,
                 &[1.05_f64, 1.25, 1.5, 2.0, 3.0, 5.0],
                 |_| (1.0 + 1e-6, 20.0, None),
+                WARM_START_TOL_SINGLE_BASIN,
                 max_iter,
                 "bb6 pair fit failed",
             )?;
@@ -1257,6 +1605,7 @@ fn fit_simple_family(
                 &objective,
                 &[0.25_f64, 0.5, 1.0, 2.0, 4.0, 8.0],
                 |_| (1.0 + 1e-6, 20.0, None),
+                WARM_START_TOL_SINGLE_BASIN,
                 max_iter,
                 "bb7 pair fit failed",
             )?;
@@ -1268,6 +1617,7 @@ fn fit_simple_family(
                 &objective,
                 &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6],
                 |_| (1.0 + 1e-6, 20.0, None),
+                WARM_START_TOL,
                 max_iter,
                 "bb8 pair fit failed",
             )?;
@@ -1288,6 +1638,7 @@ fn fit_simple_family(
                 &objective,
                 &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 1.0 - 1e-6],
                 |_| (1.0 + 1e-6, 20.0, None),
+                WARM_START_TOL,
                 max_iter,
                 "tawn pair fit failed",
             )?;
@@ -1309,11 +1660,10 @@ fn fit_simple_family(
 /// method, warm-started at the Kendall-τ inversion `ρ = sin(πτ/2)`. The
 /// result is never worse than that start.
 fn fit_gaussian_mle(tau: f64, x1: &[f64], x2: &[f64], max_iter: usize) -> PairCopulaParams {
-    let normal = Normal::new(0.0, 1.0).expect("standard normal parameters should be valid");
     let (mut s11, mut s22, mut s12) = (0.0_f64, 0.0_f64, 0.0_f64);
     for (&u, &v) in x1.iter().zip(x2) {
-        let z1 = normal.inverse_cdf(u);
-        let z2 = normal.inverse_cdf(v);
+        let z1 = crate::special::norm_ppf(u);
+        let z2 = crate::special::norm_ppf(v);
         s11 += z1 * z1;
         s22 += z2 * z2;
         s12 += z1 * z2;
@@ -1361,38 +1711,149 @@ fn one_parameter_mle(
     Ok(PairCopulaParams::One(search.x))
 }
 
+/// Student t pair MLE by profile likelihood.
+///
+/// For a fixed `ν` the t-quantiles of the sample are fixed too, so the
+/// log-likelihood in `ρ` is a cheap sum over cached quantiles and its
+/// maximiser `ρ̂(ν)` costs one scalar search. The joint MLE is therefore the
+/// maximiser of the one-dimensional profile `ν ↦ L(ρ̂(ν), ν)`: a coarse
+/// log-spaced grid (evaluated concurrently) brackets it, and a scalar search
+/// on `ln ν` between the grid neighbours of the best point finishes the job.
+/// Each profile evaluation inverts the t CDF once per observation, against
+/// once per observation *per objective call* for a joint simplex search.
+fn fit_student_t_profile(
+    tau: f64,
+    x1: &[f64],
+    x2: &[f64],
+    max_iter: usize,
+) -> Result<PairCopulaParams, CopulaError> {
+    let rho_seed = gaussian::tau_to_rho(tau).clamp(-0.95, 0.95);
+    // (ρ̂(ν), profile value) at one ν, seeding the ρ search at `rho_start`.
+    let profile = |nu: f64, rho_start: f64, tol: f64| -> Option<(f64, f64)> {
+        let terms = student_t::NuTerms::new(x1, x2, nu).ok()?;
+        let search = maximize_scalar_brent(
+            -STUDENT_T_RHO_MAX,
+            STUDENT_T_RHO_MAX,
+            Some(rho_start),
+            tol,
+            max_iter,
+            |rho| terms.loglik(rho),
+        );
+        search.value.is_finite().then_some((search.x, search.value))
+    };
+
+    let grid = student_t::candidate_nus();
+    let evaluate = |idx: usize| profile(grid[idx], rho_seed, SCALAR_TOL);
+    let points: Vec<Option<(f64, f64)>> = if x1.len() >= PARALLEL_GRID_MIN_OBS {
+        crate::accel::parallel_map_range_collect(grid.len(), evaluate)
+    } else {
+        (0..grid.len()).map(evaluate).collect()
+    };
+    let mut best: Option<(usize, f64, f64)> = None;
+    for (idx, point) in points.iter().enumerate() {
+        if let Some((rho, value)) = *point
+            && best.is_none_or(|(_, _, incumbent)| value > incumbent)
+        {
+            best = Some((idx, rho, value));
+        }
+    }
+    let (best_idx, grid_rho, grid_value) = best.ok_or(FitError::Failed {
+        reason: "student t pair fit failed",
+    })?;
+
+    // Refine ν between the neighbouring grid points (the admissible range
+    // ends where there is no neighbour).
+    let (nu_min, nu_max) = student_t::NU_RANGE;
+    let lower = if best_idx == 0 {
+        nu_min
+    } else {
+        grid[best_idx - 1]
+    };
+    let upper = if best_idx + 1 == grid.len() {
+        nu_max
+    } else {
+        grid[best_idx + 1]
+    };
+    let rho_at = std::cell::Cell::new(grid_rho);
+    let search = maximize_scalar_brent(
+        lower.ln(),
+        upper.ln(),
+        Some(grid[best_idx].ln()),
+        STUDENT_T_LOG_NU_TOL,
+        max_iter,
+        |log_nu| match profile(log_nu.exp(), rho_at.get(), SCALAR_TOL) {
+            Some((rho, value)) => {
+                rho_at.set(rho);
+                value
+            }
+            None => f64::NEG_INFINITY,
+        },
+    );
+    let nu = search.x.exp().clamp(nu_min, nu_max);
+    // Re-evaluate at the returned ν so (ρ, ν) is a consistent pair, and never
+    // trade the grid optimum for something worse.
+    match profile(nu, grid_rho, SCALAR_TOL) {
+        Some((rho, value)) if value >= grid_value => Ok(PairCopulaParams::Two(rho, nu)),
+        _ => Ok(PairCopulaParams::Two(grid_rho, grid[best_idx])),
+    }
+}
+
+/// Tolerance on `ln ν` for the Student t profile search (about six
+/// significant digits of ν).
+const STUDENT_T_LOG_NU_TOL: f64 = 1e-6;
+/// Below this sample size a grid of scalar searches is too cheap to be worth
+/// dispatching to the thread pool.
+const PARALLEL_GRID_MIN_OBS: usize = 64;
+
 /// Coarse warm start for a two-parameter family: for every value of the
 /// second parameter in `grid`, run a loosely converged scalar search over the
 /// first parameter inside the `(low, high, start)` bracket returned by
-/// `bracket`, and keep the best pair.
+/// `bracket`, and keep the best pair. The grid points are independent and are
+/// searched concurrently.
 fn two_parameter_warm_start<B>(
     objective: &PairObjective<'_>,
     grid: &[f64],
     bracket: B,
+    tol: f64,
     max_iter: usize,
     failure: &'static str,
 ) -> Result<PairCopulaParams, CopulaError>
 where
-    B: Fn(f64) -> (f64, f64, Option<f64>),
+    B: Fn(f64) -> (f64, f64, Option<f64>) + Sync,
 {
-    let mut best: Option<(f64, f64, f64)> = None;
-    for &second in grid {
+    let search_at = |idx: usize| {
+        let second = grid[idx];
         let (low, high, start) = bracket(second);
-        let search = maximize_scalar_brent(low, high, start, WARM_START_TOL, max_iter, |first| {
+        let search = maximize_scalar_brent(low, high, start, tol, max_iter, |first| {
             objective.loglik(PairCopulaParams::Two(first, second))
         });
-        if search.value.is_finite() && best.is_none_or(|(_, _, value)| search.value > value) {
-            best = Some((search.x, second, search.value));
+        (search.x, second, search.value)
+    };
+    let searches: Vec<(f64, f64, f64)> = if objective.x1.len() >= PARALLEL_GRID_MIN_OBS {
+        crate::accel::parallel_map_range_collect(grid.len(), search_at)
+    } else {
+        (0..grid.len()).map(search_at).collect()
+    };
+    let mut best: Option<(f64, f64, f64)> = None;
+    for (first, second, value) in searches {
+        if value.is_finite() && best.is_none_or(|(_, _, incumbent)| value > incumbent) {
+            best = Some((first, second, value));
         }
     }
     let (first, second, _) = best.ok_or(FitError::Failed { reason: failure })?;
     Ok(PairCopulaParams::Two(first, second))
 }
 
-/// Joint maximisation of a two-parameter family from a warm start, run with
-/// Nelder–Mead in the unconstrained space of `polish.rs`. Returns the warm
-/// start unchanged if the polish does not improve on it or produces an
-/// invalid spec, so the fitted log-likelihood never regresses.
+/// Joint maximisation of a two-parameter family from a warm start, in the
+/// unconstrained space of `polish.rs`.
+///
+/// A bounded BFGS search does the work; it needs a few dozen likelihood
+/// evaluations where a simplex search needs a few hundred. If it cannot
+/// certify convergence (the optimum sits on a validity boundary, or the
+/// surface is too flat for finite differences) the Nelder–Mead search this
+/// replaced takes over from the best point found. Returns the warm start
+/// unchanged if the polish does not improve on it or produces an invalid
+/// spec, so the fitted log-likelihood never regresses.
 fn polish_two_parameter(
     objective: &PairObjective<'_>,
     start: PairCopulaParams,
@@ -1412,18 +1873,12 @@ fn polish_two_parameter(
     if !start_value.is_finite() {
         return start;
     }
-    let options = NelderMeadOptions {
-        initial_step: 0.2,
-        ftol: 1e-8 * (1.0 + start_value.abs()),
-        xtol: 1e-6,
-        max_iter,
-        restarts: 1,
-    };
-    let result = nelder_mead_maximize(&x0, &bounds, &options, |x| {
-        objective.loglik(decode_fit_params(&template, x).params)
-    });
-    let polished = decode_fit_params(&template, &result.x);
-    if result.value.is_finite() && result.value >= start_value && polished.validate().is_ok() {
+    let evaluate = |x: &[f64]| objective.loglik(decode_fit_params(&template, x).params);
+    let ftol = 1e-8 * (1.0 + start_value.abs());
+    let parallel = objective.x1.len() >= PARALLEL_GRID_MIN_OBS;
+    let (best_x, best_value) = polish_maximize(&x0, &bounds, ftol, max_iter, parallel, evaluate);
+    let polished = decode_fit_params(&template, &best_x);
+    if best_value.is_finite() && best_value >= start_value && polished.validate().is_ok() {
         polished.params
     } else {
         start
@@ -1523,20 +1978,36 @@ fn fit_khoudraji_with_rotation(
             criterion,
         )
     };
-    let mut candidates = Vec::with_capacity(base_specs.len() * (base_specs.len() + 1) / 2);
-    for (index, first) in base_specs.iter().enumerate() {
-        for second in &base_specs[index..] {
-            candidates.push(warm_start_khoudraji_candidate(
-                first, second, u1, u2, rotation, clip_eps, max_iter,
-            )?);
+    // The base pairs are independent searches: warm-start them concurrently
+    // (results come back in enumeration order, so ranking ties resolve the
+    // same way on every run).
+    let mut pairs = Vec::with_capacity(base_specs.len() * (base_specs.len() + 1) / 2);
+    for index in 0..base_specs.len() {
+        for other in index..base_specs.len() {
+            pairs.push((index, other));
         }
     }
+    let mut candidates =
+        parallel_try_map_range_collect(pairs.len(), ExecutionStrategy::CpuParallel, |idx| {
+            let (first, second) = pairs[idx];
+            warm_start_khoudraji_candidate(
+                &base_specs[first],
+                &base_specs[second],
+                u1,
+                u2,
+                rotation,
+                clip_eps,
+                max_iter,
+            )
+        })?;
     candidates.sort_by(|left, right| score(left).total_cmp(&score(right)));
 
-    for candidate in candidates.iter_mut().take(KHOUDRAJI_POLISH_CANDIDATES) {
-        if let Some(polished) =
-            polish_khoudraji_jointly(candidate, u1, u2, rotation, clip_eps, max_iter)
-        {
+    let leaders = candidates.len().min(KHOUDRAJI_POLISH_CANDIDATES);
+    let polished = crate::accel::parallel_map_range_collect(leaders, |idx| {
+        polish_khoudraji_jointly(&candidates[idx], u1, u2, rotation, clip_eps, max_iter)
+    });
+    for (candidate, polished) in candidates.iter_mut().zip(polished) {
+        if let Some(polished) = polished {
             *candidate = polished;
         }
     }
@@ -1588,16 +2059,9 @@ fn polish_khoudraji_jointly(
     };
     // Khoudraji parameters are only ever reported to a few decimals and the
     // objective is a full pass over the sample per evaluation, so the polish
-    // stops at 1e-4 in unconstrained space (about four significant digits of
-    // each base parameter and shape).
-    let options = NelderMeadOptions {
-        initial_step: 0.2,
-        ftol: 1e-6 * (1.0 + candidate.loglik.abs()),
-        xtol: 1e-4,
-        max_iter,
-        restarts: 1,
-    };
-    let result = nelder_mead_maximize(&x0, &bounds, &options, |x| {
+    // stops once the predicted gain is below 1e-6 relative.
+    let tol = 1e-6 * (1.0 + candidate.loglik.abs());
+    let (best_x, best_value) = polish_maximize(&x0, &bounds, tol, max_iter, true, |x: &[f64]| {
         let (first, second, shape_first, shape_second) = decode(x);
         khoudraji_loglik(
             &first,
@@ -1611,6 +2075,14 @@ fn polish_khoudraji_jointly(
         )
         .unwrap_or(f64::NEG_INFINITY)
     });
+    struct Polished {
+        x: Vec<f64>,
+        value: f64,
+    }
+    let result = Polished {
+        x: best_x,
+        value: best_value,
+    };
     if !result.value.is_finite() || result.value <= candidate.loglik {
         return None;
     }
@@ -1876,7 +2348,7 @@ fn pair_loglik(
 }
 
 fn evaluate_pair_batch(
-    spec: PairCopulaSpec,
+    spec: &PairCopulaSpec,
     u1: &[f64],
     u2: &[f64],
     clip_eps: f64,
@@ -1890,7 +2362,7 @@ fn evaluate_pair_batch(
         cond_on_first: &mut cond_on_first,
         cond_on_second: &mut cond_on_second,
     };
-    evaluate_pair_batch_into(&spec, u1, u2, clip_eps, exec, &mut outputs)?;
+    evaluate_pair_batch_into(spec, u1, u2, clip_eps, exec, &mut outputs)?;
 
     Ok(PairBatchEvaluation {
         log_pdf,
@@ -1965,48 +2437,6 @@ pub(crate) fn evaluate_pair_batch_into(
     }
 }
 
-pub(crate) fn inverse_second_given_first_batch_into(
-    spec: &PairCopulaSpec,
-    u1: &[f64],
-    u2: &[f64],
-    clip_eps: f64,
-    strategy: ExecutionStrategy,
-    out: &mut [f64],
-) -> Result<(), CopulaError> {
-    validate_batch_buffers(u1, u2, &[out.len()])?;
-    fill_unary_pair_batch(spec, u1, u2, strategy, out, |spec, left, right| {
-        spec.inv_second_given_first(left, right, clip_eps)
-    })
-}
-
-pub(crate) fn cond_first_given_second_batch_into(
-    spec: &PairCopulaSpec,
-    u1: &[f64],
-    u2: &[f64],
-    clip_eps: f64,
-    strategy: ExecutionStrategy,
-    out: &mut [f64],
-) -> Result<(), CopulaError> {
-    validate_batch_buffers(u1, u2, &[out.len()])?;
-    fill_unary_pair_batch(spec, u1, u2, strategy, out, |spec, left, right| {
-        spec.cond_first_given_second(left, right, clip_eps)
-    })
-}
-
-pub(crate) fn cond_second_given_first_batch_into(
-    spec: &PairCopulaSpec,
-    u1: &[f64],
-    u2: &[f64],
-    clip_eps: f64,
-    strategy: ExecutionStrategy,
-    out: &mut [f64],
-) -> Result<(), CopulaError> {
-    validate_batch_buffers(u1, u2, &[out.len()])?;
-    fill_unary_pair_batch(spec, u1, u2, strategy, out, |spec, left, right| {
-        spec.cond_second_given_first(left, right, clip_eps)
-    })
-}
-
 fn gaussian_pair_request<'a>(
     spec: &PairCopulaSpec,
     u1: &'a [f64],
@@ -2026,6 +2456,9 @@ fn gaussian_pair_request<'a>(
     }
 }
 
+/// Rows per parallel task when a pair batch is split across threads.
+const PAIR_BATCH_CHUNK: usize = 256;
+
 fn fill_pair_batch_cpu(
     spec: &PairCopulaSpec,
     u1: &[f64],
@@ -2035,64 +2468,37 @@ fn fill_pair_batch_cpu(
     outputs: &mut PairBatchBuffers<'_>,
 ) -> Result<(), CopulaError> {
     match strategy {
-        ExecutionStrategy::CpuSerial => {
-            for idx in 0..u1.len() {
-                outputs.log_pdf[idx] = spec.log_pdf(u1[idx], u2[idx], clip_eps)?;
-                outputs.cond_on_first[idx] =
-                    spec.cond_first_given_second(u1[idx], u2[idx], clip_eps)?;
-                outputs.cond_on_second[idx] =
-                    spec.cond_second_given_first(u1[idx], u2[idx], clip_eps)?;
-            }
-            Ok(())
-        }
+        ExecutionStrategy::CpuSerial => spec.eval3_rows(
+            u1,
+            u2,
+            clip_eps,
+            outputs.log_pdf,
+            outputs.cond_on_first,
+            outputs.cond_on_second,
+        ),
         ExecutionStrategy::CpuParallel => {
-            let rows = parallel_try_map_range_collect(u1.len(), strategy, |idx| {
-                Ok((
-                    spec.log_pdf(u1[idx], u2[idx], clip_eps)?,
-                    spec.cond_first_given_second(u1[idx], u2[idx], clip_eps)?,
-                    spec.cond_second_given_first(u1[idx], u2[idx], clip_eps)?,
-                ))
-            })?;
-            for (idx, (log_value, cond_first, cond_second)) in rows.into_iter().enumerate() {
-                outputs.log_pdf[idx] = log_value;
-                outputs.cond_on_first[idx] = cond_first;
-                outputs.cond_on_second[idx] = cond_second;
-            }
-            Ok(())
+            use rayon::prelude::*;
+            outputs
+                .log_pdf
+                .par_chunks_mut(PAIR_BATCH_CHUNK)
+                .zip(outputs.cond_on_first.par_chunks_mut(PAIR_BATCH_CHUNK))
+                .zip(outputs.cond_on_second.par_chunks_mut(PAIR_BATCH_CHUNK))
+                .enumerate()
+                .try_for_each(|(chunk, ((log_pdf, h_first), h_second))| {
+                    let start = chunk * PAIR_BATCH_CHUNK;
+                    let end = start + log_pdf.len();
+                    spec.eval3_rows(
+                        &u1[start..end],
+                        &u2[start..end],
+                        clip_eps,
+                        log_pdf,
+                        h_first,
+                        h_second,
+                    )
+                })
         }
         ExecutionStrategy::Cuda(_) | ExecutionStrategy::Metal => {
             unreachable!("GPU pair batches must be handled before CPU filling")
-        }
-    }
-}
-
-fn fill_unary_pair_batch<F>(
-    spec: &PairCopulaSpec,
-    u1: &[f64],
-    u2: &[f64],
-    strategy: ExecutionStrategy,
-    out: &mut [f64],
-    f: F,
-) -> Result<(), CopulaError>
-where
-    F: Fn(&PairCopulaSpec, f64, f64) -> Result<f64, CopulaError> + Sync + Send,
-{
-    match strategy {
-        ExecutionStrategy::CpuSerial => {
-            for idx in 0..u1.len() {
-                out[idx] = f(spec, u1[idx], u2[idx])?;
-            }
-            Ok(())
-        }
-        ExecutionStrategy::CpuParallel => {
-            let values = parallel_try_map_range_collect(u1.len(), strategy, |idx| {
-                f(spec, u1[idx], u2[idx])
-            })?;
-            out.copy_from_slice(&values);
-            Ok(())
-        }
-        ExecutionStrategy::Cuda(_) | ExecutionStrategy::Metal => {
-            unreachable!("sampling helpers currently support CPU strategies only")
         }
     }
 }
@@ -2120,6 +2526,142 @@ fn copy_gaussian_batch(
     outputs
         .cond_on_second
         .copy_from_slice(&batch.cond_on_second);
+}
+
+#[cfg(test)]
+mod batch_kernel_tests {
+    use super::*;
+
+    fn spec(
+        family: PairCopulaFamily,
+        rotation: Rotation,
+        params: PairCopulaParams,
+    ) -> PairCopulaSpec {
+        PairCopulaSpec {
+            family,
+            rotation,
+            params,
+        }
+    }
+
+    /// The batch kernels share sub-expressions between outputs; row for row
+    /// they must reproduce the scalar API. Everything except Student t (whose
+    /// conditional scale is factored differently) is required to match to the
+    /// last bit.
+    #[test]
+    fn batch_kernels_reproduce_the_scalar_api() {
+        use PairCopulaFamily as F;
+        use PairCopulaParams as P;
+        let clip = 1e-12;
+        let grid = [
+            1e-9,
+            1e-4,
+            0.03,
+            0.25,
+            0.5,
+            0.8,
+            0.97,
+            1.0 - 1e-5,
+            1.0 - 1e-10,
+        ];
+        let mut u1 = Vec::new();
+        let mut u2 = Vec::new();
+        for &a in &grid {
+            for &b in &grid {
+                u1.push(a);
+                u2.push(b);
+            }
+        }
+        let mut specs = Vec::new();
+        for rotation in [Rotation::R0, Rotation::R90, Rotation::R180, Rotation::R270] {
+            specs.push((spec(F::Independence, rotation, P::None), 0.0));
+            specs.push((spec(F::Gaussian, rotation, P::One(-0.6)), 0.0));
+            specs.push((spec(F::StudentT, rotation, P::Two(0.5, 4.0)), 1e-12));
+            specs.push((spec(F::Clayton, rotation, P::One(2.0)), 0.0));
+            specs.push((spec(F::Frank, rotation, P::One(-4.0)), 0.0));
+            specs.push((spec(F::Gumbel, rotation, P::One(1.0)), 0.0));
+            specs.push((spec(F::Gumbel, rotation, P::One(2.5)), 0.0));
+            specs.push((spec(F::Joe, rotation, P::One(1.0)), 0.0));
+            specs.push((spec(F::Joe, rotation, P::One(3.0)), 0.0));
+            specs.push((spec(F::Bb1, rotation, P::Two(0.5, 1.5)), 0.0));
+            specs.push((spec(F::Bb1, rotation, P::Two(3.0, 1.0)), 0.0));
+            specs.push((spec(F::Bb7, rotation, P::Two(1.5, 0.8)), 0.0));
+            specs.push((spec(F::Bb8, rotation, P::Two(2.0, 0.7)), 0.0));
+            specs.push((spec(F::Tawn1, rotation, P::Two(2.0, 0.6)), 0.0));
+        }
+        let close = |got: f64, want: f64, tol: f64| {
+            if tol == 0.0 {
+                got.to_bits() == want.to_bits()
+            } else {
+                (got - want).abs() <= tol * (1.0 + want.abs())
+            }
+        };
+        let n = u1.len();
+        for (spec, tol) in specs {
+            let (mut lp, mut h1, mut h2) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+            spec.eval3_rows(&u1, &u2, clip, &mut lp, &mut h1, &mut h2)
+                .expect("batch evaluation should succeed on the grid");
+            let (mut c1, mut c2) = (vec![0.0; n], vec![0.0; n]);
+            spec.cond_rows(&u1, &u2, clip, Some(&mut c1), &mut c2)
+                .expect("batch conditionals should succeed on the grid");
+            let (mut solved, mut back) = (vec![0.0; n], vec![0.0; n]);
+            spec.inverse_rows(&u1, &u2, clip, &mut solved, Some(&mut back))
+                .expect("batch inverse should succeed on the grid");
+            for i in 0..n {
+                let (a, b) = (u1[i], u2[i]);
+                let tag = format!("{:?}/{:?} at ({a}, {b})", spec.family, spec.rotation);
+                let want_lp = spec.log_pdf(a, b, clip).unwrap();
+                let want_h1 = spec.cond_first_given_second(a, b, clip).unwrap();
+                let want_h2 = spec.cond_second_given_first(a, b, clip).unwrap();
+                assert!(
+                    close(lp[i], want_lp, tol),
+                    "{tag}: log_pdf {} vs {want_lp}",
+                    lp[i]
+                );
+                assert!(
+                    close(h1[i], want_h1, tol),
+                    "{tag}: h1|2 {} vs {want_h1}",
+                    h1[i]
+                );
+                assert!(
+                    close(h2[i], want_h2, tol),
+                    "{tag}: h2|1 {} vs {want_h2}",
+                    h2[i]
+                );
+                assert!(
+                    close(c1[i], want_h1, tol),
+                    "{tag}: cond h1|2 {} vs {want_h1}",
+                    c1[i]
+                );
+                assert!(
+                    close(c2[i], want_h2, tol),
+                    "{tag}: cond h2|1 {} vs {want_h2}",
+                    c2[i]
+                );
+
+                let want_solved = spec.inv_second_given_first(a, b, clip).unwrap();
+                let want_back = spec.cond_first_given_second(a, want_solved, clip).unwrap();
+                // The elliptical inverse feeds the h-function the score of
+                // the solution rather than its probability: equal up to the
+                // rounding of Φ∘Φ⁻¹, amplified where the result is within
+                // 1e-9 of 0 or 1.
+                let (solve_tol, back_tol) = match spec.family {
+                    F::Gaussian | F::StudentT if spec.rotation == Rotation::R0 => (1e-12, 1e-6),
+                    _ => (tol, tol),
+                };
+                assert!(
+                    close(solved[i], want_solved, solve_tol),
+                    "{tag}: inverse {} vs {want_solved}",
+                    solved[i]
+                );
+                assert!(
+                    close(back[i], want_back, back_tol),
+                    "{tag}: inverse-then-h {} vs {want_back}",
+                    back[i]
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

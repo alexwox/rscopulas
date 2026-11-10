@@ -57,3 +57,28 @@ pub fn inv_second_given_first(u1: f64, p: f64, theta: f64) -> Result<f64, Copula
 pub(super) fn log_pdf_from_logs(u: f64, v: f64, theta: f64) -> f64 {
     (1.0 + theta).ln() - (1.0 + theta) * (u + v) - (2.0 + 1.0 / theta) * log_sum_logs(u, v, theta)
 }
+
+/// `(log c, h_{1|2}, h_{2|1})` sharing the logs and `ln(u^-θ + v^-θ − 1)`.
+/// Each component is bit-identical to its stand-alone function.
+#[inline]
+pub(super) fn eval3(u1: f64, u2: f64, theta: f64) -> (f64, f64, f64) {
+    let (lu, lv) = (u1.ln(), u2.ln());
+    let log_sum = log_sum_logs(lu, lv, theta);
+    let exponent = (-1.0 / theta - 1.0) * log_sum;
+    (
+        (1.0 + theta).ln() - (1.0 + theta) * (lu + lv) - (2.0 + 1.0 / theta) * log_sum,
+        (exponent - (theta + 1.0) * lv).exp(),
+        (exponent - (theta + 1.0) * lu).exp(),
+    )
+}
+
+/// `(h_{1|2}, h_{2|1})`, bit-identical to the stand-alone functions.
+#[inline]
+pub(super) fn cond_both(u1: f64, u2: f64, theta: f64) -> (f64, f64) {
+    let (lu, lv) = (u1.ln(), u2.ln());
+    let exponent = (-1.0 / theta - 1.0) * log_sum_logs(lu, lv, theta);
+    (
+        (exponent - (theta + 1.0) * lv).exp(),
+        (exponent - (theta + 1.0) * lu).exp(),
+    )
+}

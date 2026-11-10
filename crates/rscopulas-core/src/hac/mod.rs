@@ -17,7 +17,6 @@ use crate::{
     },
     errors::{CopulaError, FitError},
     fit::FitResult,
-    math::maximize_scalar_with_diagnostics,
     paircopula::{PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation},
     stats::try_kendall_tau_matrix,
 };
@@ -241,28 +240,49 @@ pub fn sample<R: Rng + ?Sized>(
     if let Some(values) = exact_exchangeable_sample(model, n, rng, options)? {
         return Ok(values);
     }
-    let mut samples = Array2::zeros((n, model.dim()));
-    let weights = stehfest_weights(12);
-    for row in 0..n {
-        let root_frailty = sample_root_frailty(
-            node_of(model.tree())?.family,
-            node_of(model.tree())?.theta,
-            rng,
-        )?;
-        sample_subtree(
-            model.tree(),
-            root_frailty,
-            rng,
-            &weights,
-            samples
-                .row_mut(row)
-                .as_slice_mut()
-                .ok_or(FitError::Failed {
-                    reason: "row storage should be contiguous",
-                })?,
-        )?;
+    // Phase 1 (sequential): consume the RNG exactly as a row-by-row sampler
+    // would, recording the raw draws. Phase 2 (parallel): turn each row's
+    // draws into frailties and observations. Only phase 2 is expensive — a
+    // nested Clayton or Frank frailty is a root search on a numerically
+    // inverted Laplace transform — and it touches no random state.
+    let root = node_of(model.tree())?;
+    let draws_per_row = 1 + count_subtree_draws(model.tree());
+    let mut draws = Vec::with_capacity(n * draws_per_row);
+    for _ in 0..n {
+        draws.push(sample_root_frailty(root.family, root.theta, rng)?);
+        draw_subtree(model.tree(), rng, &mut draws);
     }
-    Ok(samples)
+    debug_assert_eq!(draws.len(), n * draws_per_row);
+
+    let dim = model.dim();
+    let weights = stehfest_weights(12);
+    let mut values = vec![0.0; n * dim];
+    let fill = |(row, row_draws): (&mut [f64], &[f64])| -> Result<(), CopulaError> {
+        let mut cursor = 1;
+        apply_subtree(
+            model.tree(),
+            row_draws[0],
+            row_draws,
+            &mut cursor,
+            &weights,
+            row,
+        )
+    };
+    if n >= 16 {
+        use rayon::prelude::*;
+        values
+            .par_chunks_mut(dim)
+            .zip(draws.par_chunks(draws_per_row))
+            .with_min_len(8)
+            .try_for_each(fill)?;
+    } else {
+        values
+            .chunks_mut(dim)
+            .zip(draws.chunks(draws_per_row))
+            .try_for_each(fill)?;
+    }
+    Ok(Array2::from_shape_vec((n, dim), values)
+        .expect("sample buffer should match the requested shape"))
 }
 
 fn validate_tree_inner(
@@ -386,6 +406,9 @@ fn average_cross_tau(left: &[usize], right: &[usize], tau: &Array2<f64>) -> f64 
     total / count as f64
 }
 
+/// Absolute tolerance on a node parameter in the composite-likelihood search.
+const HAC_THETA_TOL: f64 = 1e-9;
+
 struct HacFitProgress {
     iterations: usize,
     converged: bool,
@@ -431,37 +454,68 @@ fn fit_best_family_for_pairs(
     }
     .clamp(1e-4, 1.0 - 1e-4);
 
-    for family in &options.family_set {
+    // Candidate families are independent one-dimensional searches.
+    let fit_family = |idx: usize| -> Result<(HacFamily, f64, f64, bool, usize), CopulaError> {
+        let family = &options.family_set[idx];
         let init = theta_from_tau(*family, mean_tau)?;
         let (low, upper_seed) = family_parameter_bounds(*family);
         let upper = (init * 4.0 + 2.0).max(upper_seed);
         let (theta, iterations, converged) = if options.fit_method == HacFitMethod::TauInit {
             (init, 0, true)
         } else {
-            maximize_scalar_with_diagnostics(low, upper, options.base.max_iter, |theta| {
-                direct_pairs
-                    .iter()
-                    .map(|&(left, right)| {
-                        let spec = pair_spec(*family, theta);
-                        (0..data.n_obs())
-                            .map(|row| {
-                                spec.log_pdf(
-                                    view[(row, left)],
-                                    view[(row, right)],
-                                    options.base.clip_eps,
-                                )
-                                .unwrap_or(-1e12)
-                            })
-                            .sum::<f64>()
-                    })
-                    .sum::<f64>()
-            })
+            // Composite log-likelihood of the node: one independent sum per
+            // direct pair, added up in pair order so the result does not
+            // depend on thread scheduling.
+            let objective = |theta: f64| {
+                let spec = pair_spec(*family, theta);
+                let pair_sum = |idx: usize| {
+                    let (left, right) = direct_pairs[idx];
+                    (0..data.n_obs())
+                        .map(|row| {
+                            spec.log_pdf(
+                                view[(row, left)],
+                                view[(row, right)],
+                                options.base.clip_eps,
+                            )
+                            .unwrap_or(-1e12)
+                        })
+                        .sum::<f64>()
+                };
+                let sums: Vec<f64> = if direct_pairs.len() * data.n_obs() >= 2048 {
+                    crate::accel::parallel_map_range_collect(direct_pairs.len(), pair_sum)
+                } else {
+                    (0..direct_pairs.len()).map(pair_sum).collect()
+                };
+                sums.iter().sum::<f64>()
+            };
+            let search = crate::math::maximize_scalar_brent(
+                low,
+                upper,
+                Some(init),
+                HAC_THETA_TOL,
+                options.base.max_iter,
+                objective,
+            );
+            (search.x, search.evaluations, search.converged)
         };
-        progress.iterations += iterations;
         let score = pair_loglik_sum(*family, theta, direct_pairs, data, options.base.clip_eps)?;
+        Ok((*family, theta, score, converged, iterations))
+    };
+    let strategy = if options.family_set.len() > 1 && direct_pairs.len() * data.n_obs() >= 512 {
+        crate::backend::ExecutionStrategy::CpuParallel
+    } else {
+        crate::backend::ExecutionStrategy::CpuSerial
+    };
+    let fits = crate::backend::parallel_try_map_range_collect(
+        options.family_set.len(),
+        strategy,
+        fit_family,
+    )?;
+    for (family, theta, score, converged, iterations) in fits {
+        progress.iterations += iterations;
         match best {
             Some((_, _, best_score, _)) if score <= best_score => {}
-            _ => best = Some((*family, theta, score, converged)),
+            _ => best = Some((family, theta, score, converged)),
         }
     }
 
@@ -672,41 +726,120 @@ fn exact_exchangeable_sample<R: Rng + ?Sized>(
     Ok(Some(values))
 }
 
-fn sample_subtree<R: Rng + ?Sized>(
+/// How a child node's frailty is obtained from its parent's.
+enum ChildFrailty {
+    /// Same generator: the frailty is shared, nothing is drawn.
+    Shared,
+    /// Gumbel within Gumbel: multiply by a positive stable variate with this
+    /// index (drawn directly).
+    GumbelStable(f64),
+    /// General case: invert the conditional frailty CDF at a uniform draw.
+    InverseCdf,
+}
+
+fn child_frailty_kind(parent: &HacNode, child: &HacNode) -> ChildFrailty {
+    if parent.family == child.family && parent.theta == child.theta {
+        ChildFrailty::Shared
+    } else if parent.family == HacFamily::Gumbel && child.family == HacFamily::Gumbel {
+        ChildFrailty::GumbelStable(parent.theta / child.theta)
+    } else {
+        ChildFrailty::InverseCdf
+    }
+}
+
+/// Number of values [`draw_subtree`] records for one row.
+fn count_subtree_draws(tree: &HacTree) -> usize {
+    match tree {
+        HacTree::Leaf(_) => 0,
+        HacTree::Node(node) => node
+            .children
+            .iter()
+            .map(|child| match child {
+                HacTree::Leaf(_) => 1,
+                HacTree::Node(child_node) => {
+                    let own = match child_frailty_kind(node, child_node) {
+                        ChildFrailty::Shared => 0,
+                        ChildFrailty::GumbelStable(_) | ChildFrailty::InverseCdf => 1,
+                    };
+                    own + count_subtree_draws(child)
+                }
+            })
+            .sum(),
+    }
+}
+
+/// Records the random draws of one row in traversal order: an exponential
+/// per leaf, and per nested node whatever its frailty needs.
+fn draw_subtree<R: Rng + ?Sized>(tree: &HacTree, rng: &mut R, draws: &mut Vec<f64>) {
+    let HacTree::Node(node) = tree else {
+        return;
+    };
+    for child in &node.children {
+        match child {
+            HacTree::Leaf(_) => draws.push(Exp1.sample(rng)),
+            HacTree::Node(child_node) => {
+                match child_frailty_kind(node, child_node) {
+                    ChildFrailty::Shared => {}
+                    ChildFrailty::GumbelStable(alpha) => {
+                        draws.push(sample_positive_stable(rng, alpha));
+                    }
+                    ChildFrailty::InverseCdf => draws.push(rng.random::<f64>()),
+                }
+                draw_subtree(child, rng, draws);
+            }
+        }
+    }
+}
+
+/// Turns the recorded draws of one row into observations.
+fn apply_subtree(
     tree: &HacTree,
     frailty: f64,
-    rng: &mut R,
+    draws: &[f64],
+    cursor: &mut usize,
     weights: &[f64],
     row: &mut [f64],
 ) -> Result<(), CopulaError> {
-    match tree {
-        HacTree::Leaf(_) => Err(FitError::Failed {
+    let HacTree::Node(node) = tree else {
+        return Err(FitError::Failed {
             reason: "leaf nodes cannot be sampled without a parent generator",
         }
-        .into()),
-        HacTree::Node(node) => {
-            for child in &node.children {
-                match child {
-                    HacTree::Leaf(index) => {
-                        row[*index] = sample_leaf(node.family, node.theta, frailty, rng);
+        .into());
+    };
+    for child in &node.children {
+        match child {
+            HacTree::Leaf(index) => {
+                let exponential = draws[*cursor];
+                *cursor += 1;
+                row[*index] = leaf_from_exponential(node.family, node.theta, frailty, exponential);
+            }
+            HacTree::Node(child_node) => {
+                let child_frailty = match child_frailty_kind(node, child_node) {
+                    ChildFrailty::Shared => frailty,
+                    ChildFrailty::GumbelStable(alpha) => {
+                        let stable = draws[*cursor];
+                        *cursor += 1;
+                        frailty.powf(1.0 / alpha) * stable
                     }
-                    HacTree::Node(child_node) => {
-                        let child_frailty = sample_child_frailty(
+                    ChildFrailty::InverseCdf => {
+                        let u = draws[*cursor];
+                        *cursor += 1;
+                        invert_child_frailty_cdf(
                             node.family,
                             node.theta,
                             child_node.family,
                             child_node.theta,
                             frailty,
-                            rng,
+                            u,
                             weights,
-                        )?;
-                        sample_subtree(child, child_frailty, rng, weights, row)?;
+                        )
                     }
-                }
+                };
+                apply_subtree(child, child_frailty, draws, cursor, weights, row)?;
             }
-            Ok(())
         }
     }
+    Ok(())
 }
 
 fn sample_root_frailty<R: Rng + ?Sized>(
@@ -735,26 +868,18 @@ fn sample_root_frailty<R: Rng + ?Sized>(
     }
 }
 
-fn sample_child_frailty<R: Rng + ?Sized>(
+/// Child frailty at conditional probability `u` given the parent frailty,
+/// by root search on the conditional CDF.
+fn invert_child_frailty_cdf(
     parent_family: HacFamily,
     parent_theta: f64,
     child_family: HacFamily,
     child_theta: f64,
     parent_frailty: f64,
-    rng: &mut R,
+    u: f64,
     weights: &[f64],
-) -> Result<f64, CopulaError> {
-    if parent_family == child_family && parent_theta == child_theta {
-        return Ok(parent_frailty);
-    }
-    if parent_family == HacFamily::Gumbel && child_family == HacFamily::Gumbel {
-        let alpha = parent_theta / child_theta;
-        let stable = sample_positive_stable(rng, alpha);
-        return Ok(parent_frailty.powf(1.0 / alpha) * stable);
-    }
-
-    let u: f64 = rng.random();
-    let mut low = 0.0;
+) -> f64 {
+    let mut low = 0.0_f64;
     let mut high = (parent_frailty + 1.0).max(1.0);
     let cdf = |x: f64| {
         conditional_frailty_cdf(
@@ -767,19 +892,32 @@ fn sample_child_frailty<R: Rng + ?Sized>(
             weights,
         )
     };
-    while cdf(high) < u && high < 1e6 {
+    let mut residual_high = cdf(high) - u;
+    while residual_high < 0.0 && high < 1e6 {
+        low = high;
         high *= 2.0;
+        residual_high = cdf(high) - u;
     }
-    for _ in 0..60 {
-        let mid = 0.5 * (low + high);
-        if cdf(mid) < u {
-            low = mid;
-        } else {
-            high = mid;
-        }
+    if residual_high < 0.0 {
+        // The quantile lies beyond the search cap.
+        return high;
     }
-    Ok(0.5 * (low + high)).map(|value| value.max(1e-9))
+    // The numerically inverted CDF carries ~1e-9 of noise, so the root is
+    // resolved to that level and no further.
+    let residual_low = if low == 0.0 { -u } else { cdf(low) - u };
+    let root = crate::math::find_root_bracketed(
+        (low, high),
+        (residual_low, residual_high),
+        0.0,
+        FRAILTY_ROOT_REL_TOL,
+        80,
+        |x| cdf(x) - u,
+    );
+    root.max(1e-9)
 }
+
+/// Relative tolerance on a sampled child frailty.
+const FRAILTY_ROOT_REL_TOL: f64 = 1e-10;
 
 fn conditional_frailty_cdf(
     parent_family: HacFamily,
@@ -840,8 +978,7 @@ fn factorial(n: usize) -> f64 {
     (1..=n.max(1)).fold(1.0, |acc, value| acc * value as f64)
 }
 
-fn sample_leaf<R: Rng + ?Sized>(family: HacFamily, theta: f64, frailty: f64, rng: &mut R) -> f64 {
-    let e: f64 = Exp1.sample(rng);
+fn leaf_from_exponential(family: HacFamily, theta: f64, frailty: f64, e: f64) -> f64 {
     match family {
         HacFamily::Clayton => (1.0 + e / frailty).powf(-1.0 / theta),
         HacFamily::Frank => frank::generator(e / frailty, theta),

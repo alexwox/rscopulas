@@ -4,13 +4,12 @@ use crate::{
     backend::{ExecutionStrategy, Operation, parallel_try_map_range_collect, resolve_strategy},
     domain::SampleOptions,
     errors::{CopulaError, FitError, InputError},
-    paircopula::{
-        cond_first_given_second_batch_into, cond_second_given_first_batch_into,
-        inverse_second_given_first_batch_into,
-    },
 };
 
-use super::{CompiledVineRuntime, VineCopula};
+use super::{
+    CompiledVineRuntime, VineCopula,
+    gaussian_chain::{GaussianChain, score_bounds},
+};
 
 /// Probability clipping used by both Rosenblatt directions. Matches the
 /// historical value used by `sample_internal` so the refactored sampler
@@ -37,8 +36,25 @@ impl VineCopula {
         let n = u.nrows();
         let d = runtime.dim;
         let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
+        let chain = GaussianChain::new(&runtime);
+        let bounds = score_bounds(DEFAULT_CLIP_EPS);
         let values = run_in_row_chunks(n, d, strategy, |start, end| {
-            inverse_rosenblatt_block(&runtime, u, start, end, DEFAULT_CLIP_EPS)
+            let Some(chain) = &chain else {
+                return inverse_rosenblatt_block(&runtime, u, start, end, DEFAULT_CLIP_EPS);
+            };
+            // All-Gaussian vine: stay on the normal-score scale.
+            let mut workspace = chain.workspace();
+            let mut out = vec![0.0; (end - start) * d];
+            for (row, slots) in (start..end).zip(out.chunks_exact_mut(d)) {
+                chain.inverse_rosenblatt(
+                    &mut workspace,
+                    |var| u[(row, var)],
+                    DEFAULT_CLIP_EPS,
+                    bounds,
+                    slots,
+                );
+            }
+            Ok(out)
         })?;
         Ok(Array2::from_shape_vec((n, d), values)
             .expect("inverse_rosenblatt output should match the requested shape"))
@@ -114,8 +130,25 @@ impl VineCopula {
         let runtime = self.compiled_runtime()?;
         let n = v.nrows();
         let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
+        let chain = GaussianChain::new(&runtime);
+        let bounds = score_bounds(DEFAULT_CLIP_EPS);
         run_in_row_chunks(n, col_limit, strategy, |start, end| {
-            rosenblatt_block(&runtime, v, start, end, col_limit, DEFAULT_CLIP_EPS)
+            let Some(chain) = &chain else {
+                return rosenblatt_block(&runtime, v, start, end, col_limit, DEFAULT_CLIP_EPS);
+            };
+            // All-Gaussian vine: stay on the normal-score scale.
+            let mut workspace = chain.workspace();
+            let mut out = vec![0.0; (end - start) * col_limit];
+            for (row, slots) in (start..end).zip(out.chunks_exact_mut(col_limit)) {
+                chain.rosenblatt(
+                    &mut workspace,
+                    |var| v[(row, var)],
+                    DEFAULT_CLIP_EPS,
+                    bounds,
+                    slots,
+                );
+            }
+            Ok(out)
         })
     }
 }
@@ -182,26 +215,17 @@ pub(crate) fn inverse_rosenblatt_block(
             };
             targets[local_obs] = vdirect[workspace_index(local_obs, step.row + 1, step.col, d)];
         }
-        inverse_second_given_first_batch_into(
-            &step.spec,
+        step.spec.inverse_rows(
             &sources,
             &targets,
             clip_eps,
-            ExecutionStrategy::CpuSerial,
             &mut direct_out,
+            step.write_indirect.then_some(&mut indirect_out[..]),
         )?;
         for local_obs in 0..n_rows {
             vdirect[workspace_index(local_obs, step.row, step.col, d)] = direct_out[local_obs];
         }
         if step.write_indirect {
-            cond_first_given_second_batch_into(
-                &step.spec,
-                &sources,
-                &direct_out,
-                clip_eps,
-                ExecutionStrategy::CpuSerial,
-                &mut indirect_out,
-            )?;
             for local_obs in 0..n_rows {
                 vindirect[workspace_index(local_obs, step.row + 1, step.col, d)] =
                     indirect_out[local_obs];
@@ -262,26 +286,17 @@ pub(crate) fn rosenblatt_block(
             };
             targets[local_obs] = vdirect[workspace_index(local_obs, step.row, step.col, d)];
         }
-        cond_second_given_first_batch_into(
-            &step.spec,
+        step.spec.cond_rows(
             &sources,
             &targets,
             clip_eps,
-            ExecutionStrategy::CpuSerial,
+            step.write_indirect.then_some(&mut indirect_out[..]),
             &mut direct_out,
         )?;
         for local_obs in 0..n_rows {
             vdirect[workspace_index(local_obs, step.row + 1, step.col, d)] = direct_out[local_obs];
         }
         if step.write_indirect {
-            cond_first_given_second_batch_into(
-                &step.spec,
-                &sources,
-                &targets,
-                clip_eps,
-                ExecutionStrategy::CpuSerial,
-                &mut indirect_out,
-            )?;
             for local_obs in 0..n_rows {
                 vindirect[workspace_index(local_obs, step.row + 1, step.col, d)] =
                     indirect_out[local_obs];
@@ -363,7 +378,8 @@ fn workspace_index(obs: usize, row: usize, col: usize, dim: usize) -> usize {
     (obs * dim * dim) + (row * dim) + col
 }
 
+/// Rows per parallel block; see `eval::eval_chunk_size` for the sizing rule.
 fn chunk_size_for(dim: usize, n: usize) -> usize {
-    let target_rows = (4096 / dim.max(1)).max(128);
+    let target_rows = (16_384 / (dim * dim).max(1)).clamp(64, 512);
     target_rows.min(n.max(1))
 }

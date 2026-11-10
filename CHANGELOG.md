@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.5.0 — 2026-11-10
+
+Performance work on the numerical core. Measured on an Apple M3 Pro against
+0.4.0 with `examples/perf_suite.rs`, both builds run back to back (medians;
+all 110 cases in `benchmarks/perf/`; figures move by ~10 % between runs):
+default R-vine fit about 10×, C/D-vine fit about 30×, default pair fit
+20–30×, factor-copula fit 16–26×, nested Archimedean sampling 22–35×,
+inverse h-functions 7–14×, mixed-vine sampling 7–8×, mixed-vine density 4×,
+Gaussian-vine density 46×. Scalar densities and h-functions of the
+Archimedean pair families are unchanged; no case is slower.
+
+- Add a golden-snapshot regression suite
+  (`tests/golden_snapshots.rs`, fixtures under `fixtures/golden/v1/`): every
+  pair kernel, fitter, sampler, transform and statistic on fixed inputs,
+  recorded from 0.4.0 and compared at 1e-9 relative (closed forms), by
+  residual (inverse problems) or one-sidedly (fitted log-likelihoods may only
+  improve). `tests/pair_fit_sweep.rs` holds 2250 pair fits to the
+  log-likelihoods 0.4.0 reached, and `tests/numerical_invariants.rs` checks
+  Gaussian vines against closed forms. Re-recordings and their justification
+  are logged in `fixtures/golden/v1/CHANGES.md`.
+- Inverse h-functions without a closed form (Gumbel, Joe, BB1/6/7/8, Tawn,
+  Khoudraji) use a bracketed root search on the logit scale of both axes
+  instead of a 90-step bisection: 5–8 evaluations of the h-function per
+  inverse, and full relative accuracy for roots near 0 or 1.
+- Pair fitting: candidates (family × rotation) and the grid points of
+  two-parameter warm starts are fitted concurrently; the joint polish is a
+  bounded quasi-Newton search (`math::quasi_newton_maximize`) with coordinate
+  probes and Nelder–Mead only as a fallback; the Student t fit maximises the
+  profile likelihood in `ν` over cached quantiles; likelihood passes cache the
+  logs of the sample and hoist parameter-only terms.
+- C- and D-vine fits now fit the edges of a tree concurrently, as the R-vine
+  fit already did.
+- Khoudraji fits warm-start their base pairs concurrently and polish with the
+  quasi-Newton search. On one of the snapshot datasets this finds a better
+  optimum than 0.4.0 did (log-likelihood 61.72 vs 58.77 for the vine).
+- Vines whose edges are all Gaussian or independence copulas are evaluated on
+  the normal-score scale, where h-functions are linear. Besides the speed-up
+  this removes a loss of accuracy in the upper tail: density and Rosenblatt
+  transform now match their closed forms to 1e-15 (0.4.0: 2e-8 on upper-tail
+  rows).
+- Replace the `statrs` normal and Student t quantile/CDF calls on hot paths
+  with dedicated implementations (`special.rs`): Wichura's AS 241 normal
+  quantile, Cody's normal CDF, and a Student t distribution with precomputed
+  constants, continued-fraction CDF and Hill-plus-Halley quantile, checked
+  against SciPy and exact closed forms. **Accuracy change:** the old normal
+  CDF was only accurate to ~1e-10 relative in the tails, so results that
+  depend on it move by up to that much.
+- `StudentTCopula::fit` inverts each distinct pseudo-observation once per
+  candidate `ν` instead of once per cell, and evaluates candidates
+  concurrently.
+- Factor copula: density rows are integrated concurrently, the joint polish
+  uses Brent's method along each coordinate, and sampling applies the inverse
+  h-functions in parallel (the random stream is unchanged).
+- Nested Archimedean sampling draws its random numbers sequentially and
+  solves for the nested frailties in parallel with a superlinear root search;
+  seeded output is unchanged.
+- TLL fits tabulate the separable kernel per axis (bit-identical grids,
+  12× faster). Hoeffding's D uses an O(n log n) sweep instead of the O(n²)
+  pairwise count (identical values).
+- Add `math::quasi_newton_maximize` with `QuasiNewtonOptions` /
+  `QuasiNewtonResult`.
+- **Behaviour change:** Khoudraji h-functions no longer evaluate the base
+  densities, so they succeed at points where a base density is not finite.
+
 ## 0.4.0 — unreleased
 
 - Fit Gaussian pair copulas by maximum likelihood (Brent's method on
