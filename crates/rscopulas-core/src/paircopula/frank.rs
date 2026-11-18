@@ -88,16 +88,8 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
     // cancellation that wrecks the naive `exp_m1`-based form for large θ
     // (e.g. θ ≈ 37 with u, v well away from 0 makes the raw subtraction
     // evaluate to exactly zero and produces a spurious +∞ log density).
-    if theta <= DIRECT_THETA_MAX {
-        let (first, second) = ((-theta * u1).exp(), (-theta * u2).exp());
-        let floor = (-theta).exp();
-        let den = denominator(first, second, floor, u2, theta);
-        let norm = if floor <= 0.5 {
-            1.0 - floor
-        } else {
-            -(-theta).exp_m1()
-        };
-        return Ok((theta * norm * first * second / (den * den)).ln());
+    if let Some(direct) = DirectDensity::new(theta) {
+        return Ok(direct.log_pdf(u1, u2));
     }
     let log_t1 = -theta * u1 + log_one_minus_exp_neg(theta * u2);
     let log_t2 = -theta * u2 + log_one_minus_exp_neg(theta * (1.0 - u2));
@@ -128,6 +120,41 @@ fn denominator(first: f64, second: f64, floor: f64, v: f64, theta: f64) -> f64 {
         -second * (-gap).exp_m1()
     };
     first * one_minus_second + second_minus_floor
+}
+
+/// Log-density with its parameter-only terms evaluated once, for a batch at
+/// fixed `θ`. Available for `0 < θ ≤ DIRECT_THETA_MAX`; each value is
+/// bit-identical to [`log_pdf`].
+pub(super) struct DirectDensity {
+    theta: f64,
+    floor: f64,
+    scale: f64,
+}
+
+impl DirectDensity {
+    pub(super) fn new(theta: f64) -> Option<Self> {
+        if !(theta > 0.0 && theta <= DIRECT_THETA_MAX) {
+            return None;
+        }
+        let floor = (-theta).exp();
+        let norm = if floor <= 0.5 {
+            1.0 - floor
+        } else {
+            -(-theta).exp_m1()
+        };
+        Some(Self {
+            theta,
+            floor,
+            scale: theta * norm,
+        })
+    }
+
+    #[inline]
+    pub(super) fn log_pdf(&self, u1: f64, u2: f64) -> f64 {
+        let (first, second) = ((-self.theta * u1).exp(), (-self.theta * u2).exp());
+        let den = denominator(first, second, self.floor, u2, self.theta);
+        (self.scale * first * second / (den * den)).ln()
+    }
 }
 
 /// `h(u | v) = e^{−θv}(1 − e^{−θu}) / (T1 + T2)` for `0 < θ ≤ DIRECT_THETA_MAX`.

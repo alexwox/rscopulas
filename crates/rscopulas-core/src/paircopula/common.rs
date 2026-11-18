@@ -1127,6 +1127,9 @@ impl PairCopulaSpec {
     }
 }
 
+/// Rows per task when [`PairCopulaSpec::evaluate_rows`] runs in parallel.
+const EVALUATE_ROWS_BLOCK: usize = 4096;
+
 /// The quantity [`PairCopulaSpec::evaluate_rows`] computes for each row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairKernelOutput {
@@ -1148,7 +1151,8 @@ impl PairCopulaSpec {
     /// Row for row the result equals the scalar method of the same name
     /// (`log_pdf`, `cond_first_given_second`, …) called with
     /// `(first[i], second[i], clip_eps)`, including its errors. The
-    /// specification is validated once instead of once per row.
+    /// specification is validated once instead of once per row, and batches
+    /// of 8192 rows or more are split across threads.
     pub fn evaluate_rows(
         &self,
         output: PairKernelOutput,
@@ -1160,6 +1164,47 @@ impl PairCopulaSpec {
         validate_batch_buffers(first, second, &[out.len()])?;
         crate::data::validate_clip_eps(clip_eps)?;
         self.validate()?;
+        if out.len() >= 2 * EVALUATE_ROWS_BLOCK {
+            use rayon::prelude::*;
+            return out
+                .par_chunks_mut(EVALUATE_ROWS_BLOCK)
+                .zip(first.par_chunks(EVALUATE_ROWS_BLOCK))
+                .zip(second.par_chunks(EVALUATE_ROWS_BLOCK))
+                .try_for_each(|((out, first), second)| {
+                    self.evaluate_rows_serial(output, first, second, clip_eps, out)
+                });
+        }
+        self.evaluate_rows_serial(output, first, second, clip_eps, out)
+    }
+
+    fn evaluate_rows_serial(
+        &self,
+        output: PairKernelOutput,
+        first: &[f64],
+        second: &[f64],
+        clip_eps: f64,
+        out: &mut [f64],
+    ) -> Result<(), CopulaError> {
+        if let (PairKernelOutput::LogPdf, Rotation::R0, PairCopulaFamily::Frank) =
+            (output, self.rotation, self.family)
+            && let PairCopulaParams::One(theta) = &self.params
+            && let Some(kernel) = frank::DirectDensity::new(*theta)
+        {
+            let (low, high) = (clip_eps, 1.0 - clip_eps);
+            for ((slot, &a), &b) in out.iter_mut().zip(first).zip(second) {
+                crate::data::validate_probability(a)?;
+                crate::data::validate_probability(b)?;
+                let value = kernel.log_pdf(a.clamp(low, high), b.clamp(low, high));
+                if value.is_nan() || value == f64::INFINITY {
+                    return Err(crate::errors::NumericalError::Failed {
+                        reason: "pair density is not finite",
+                    }
+                    .into());
+                }
+                *slot = value;
+            }
+            return Ok(());
+        }
         for ((slot, &a), &b) in out.iter_mut().zip(first).zip(second) {
             crate::data::validate_probability(a)?;
             crate::data::validate_probability(b)?;
@@ -1568,6 +1613,16 @@ impl<'a> PairObjective<'a> {
                 return sum(first, second, &|a, b| {
                     gumbel::log_pdf_from_logs(a, b, *theta)
                 });
+            }
+            (PairCopulaFamily::Frank, PairCopulaParams::One(theta)) => {
+                // Same value as the generic path, with `e^{−θ}` and the
+                // normalising constant taken once per likelihood pass.
+                if let Some(kernel) = frank::DirectDensity::new(*theta) {
+                    let (low, high) = (self.clip_eps, 1.0 - self.clip_eps);
+                    return sum(self.x1, self.x2, &|a, b| {
+                        kernel.log_pdf(a.clamp(low, high), b.clamp(low, high))
+                    });
+                }
             }
             (PairCopulaFamily::Joe, PairCopulaParams::One(theta)) => {
                 let (first, second) = self.log_survivals();
