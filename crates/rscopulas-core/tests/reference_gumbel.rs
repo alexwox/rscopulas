@@ -95,9 +95,17 @@ fn gumbel_sample_statistics_match_r_fixture() {
     let means = column_means(&sample_obs);
     let tau = rscopulas::stats::kendall_tau_matrix(&sample_obs);
 
+    // The fixture's mean is itself a draw of the same size, so the two
+    // differ by noise with standard deviation `sqrt(2 / (12 n))` = 0.0041.
+    // The exact mean of a uniform margin is the sharper reference.
+    let standard_error = (1.0 / (12.0 * fixture.sample_size as f64)).sqrt();
     for (idx, (actual, expected)) in means.iter().zip(fixture.expected_mean.iter()).enumerate() {
         assert!(
-            (actual - expected).abs() < 1e-2,
+            (actual - 0.5).abs() < 4.0 * standard_error,
+            "column {idx} mean {actual} is more than 4 standard errors from 0.5"
+        );
+        assert!(
+            (actual - expected).abs() < 4.0 * std::f64::consts::SQRT_2 * standard_error,
             "mean mismatch at column {idx}: left={actual}, right={expected}"
         );
     }

@@ -19,10 +19,49 @@ struct Terms {
     lu: [f64; 2],
     ld: f64,
 }
+/// `1 − e^{x}` for `x < 0` without cancellation, given `e^{x}`.
+#[inline]
+fn one_minus(exp_x: f64, x: f64) -> f64 {
+    if exp_x <= 0.5 {
+        1.0 - exp_x
+    } else {
+        -x.exp_m1()
+    }
+}
+
 fn prep(u: f64, v: f64, theta: f64, delta: f64) -> Terms {
     use crate::math::{log1mexp, logaddexp};
     let lu = [(-delta * u).ln_1p(), (-delta * v).ln_1p()];
     let log_b_tail = theta * (-delta).ln_1p();
+    let scaled = [theta * lu[0], theta * lu[1]];
+    if scaled[0] > -600.0 && scaled[1] > -600.0 {
+        // Plain evaluation. With p_u = (1 − δu)^θ and p_β = (1 − δ)^θ,
+        //   β − x_u·x_v = p_u·x_v + (p_v − p_β),
+        // a sum of two non-negative terms; each `1 − p` and the difference
+        // `p_v − p_β` go through `expm1` where they would cancel.
+        let power = [scaled[0].exp(), scaled[1].exp()];
+        let x = [
+            one_minus(power[0], scaled[0]),
+            one_minus(power[1], scaled[1]),
+        ];
+        let floor = log_b_tail.exp();
+        let lb = one_minus(floor, log_b_tail).ln();
+        let gap = log_b_tail - scaled[1];
+        let above_floor = if gap < -std::f64::consts::LN_2 {
+            power[1] - floor
+        } else {
+            -power[1] * gap.exp_m1()
+        };
+        let numerator = power[0] * x[1] + above_floor;
+        if numerator > 0.0 {
+            return Terms {
+                lb,
+                lx: [x[0].ln(), x[1].ln()],
+                lu,
+                ld: numerator.ln() - lb,
+            };
+        }
+    }
     let lb = log1mexp(log_b_tail);
     let lx = [log1mexp(theta * lu[0]), log1mexp(theta * lu[1])];
     // beta - x_u*x_v = (1-x_u)*x_v + ((1-delta*v)^theta - (1-delta)^theta).
@@ -41,8 +80,12 @@ pub fn log_pdf(u: f64, v: f64, theta: f64, delta: f64) -> Result<f64, CopulaErro
         .into());
     }
     let t = prep(u, v, theta, delta);
-    let lnumer =
-        t.lb + crate::math::logaddexp(crate::math::log1mexp(-theta.ln()), t.ld - theta.ln());
+    // ln(β·(1 − 1/θ + D/θ)); θ·(that) = β·(θ − 1 + D).
+    let lnumer = if t.ld > -700.0 {
+        t.lb + (theta - 1.0 + t.ld.exp()).ln() - theta.ln()
+    } else {
+        t.lb + crate::math::logaddexp(crate::math::log1mexp(-theta.ln()), t.ld - theta.ln())
+    };
     Ok(theta.ln()
         + delta.ln()
         + (theta - 1.0) * (t.lu[0] + t.lu[1])

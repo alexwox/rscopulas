@@ -215,3 +215,48 @@ fn accel_device(device: Device) -> accel::Device {
         Device::Metal => accel::Device::Metal,
     }
 }
+
+/// Rows drawn from one random stream by [`sample_rows_chunked`].
+pub(crate) const SAMPLE_CHUNK_ROWS: usize = 256;
+
+/// Fills an `n × dim` sample in blocks of [`SAMPLE_CHUNK_ROWS`] rows, each
+/// with its own generator.
+///
+/// The caller's generator supplies one 64-bit seed per block, in order, and
+/// every block is then drawn from a `StdRng` started from its seed. The
+/// result therefore depends only on the caller's generator and `n`, not on
+/// the number of threads or on whether the blocks run in parallel, and
+/// the blocks are statistically independent streams.
+pub(crate) fn sample_rows_chunked<R, F>(
+    n: usize,
+    dim: usize,
+    rng: &mut R,
+    strategy: ExecutionStrategy,
+    fill: F,
+) -> ndarray::Array2<f64>
+where
+    R: rand::Rng + ?Sized,
+    F: Fn(&mut rand::rngs::StdRng, &mut [f64]) + Sync + Send,
+{
+    use rand::SeedableRng;
+    let seeds: Vec<u64> = (0..n.div_ceil(SAMPLE_CHUNK_ROWS))
+        .map(|_| rng.random::<u64>())
+        .collect();
+    let mut values = vec![0.0; n * dim];
+    let block = SAMPLE_CHUNK_ROWS * dim;
+    let run = |(rows, seed): (&mut [f64], &u64)| {
+        let mut local = rand::rngs::StdRng::seed_from_u64(*seed);
+        fill(&mut local, rows);
+    };
+    if matches!(strategy, ExecutionStrategy::CpuParallel) && seeds.len() > 1 {
+        use rayon::prelude::*;
+        values
+            .par_chunks_mut(block)
+            .zip(seeds.par_iter())
+            .for_each(run);
+    } else {
+        values.chunks_mut(block).zip(seeds.iter()).for_each(run);
+    }
+    ndarray::Array2::from_shape_vec((n, dim), values)
+        .expect("sample buffer should match the requested shape")
+}

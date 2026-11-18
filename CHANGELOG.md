@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+Speed work measured against R (`copula`, `VineCopula`) and pyvinecopulib
+0.7.6 on an Apple M3 Pro. `benchmarks/compare_pyvinecopulib_features.py` is
+new: it times 73 operations both libraries share, with the same number of
+threads on each side. On one thread rscopulas was slower in 22 of them and
+is now slower in 7 (five within 13 %; Frank and BB7 density at 0.7×, the
+single-pair TLL fit at 0.5×). With twelve threads each it is slower in none.
+
+- **Samples for a given seed change.** The Gaussian, Student t, Clayton,
+  Frank and Gumbel samplers (and flat hierarchical trees) draw in blocks of
+  256 rows, each from its own generator seeded by the caller's generator.
+  Blocks run in parallel, and the result does not depend on the number of
+  threads. Python, Rust and WebAssembly still agree for the same seed. The
+  bivariate Frank sampler uses conditional inversion. Against R at 10 000
+  bivariate draws: Gaussian 6.7× → 9–10×, Student t 4.5× → 9×, Gumbel
+  1.0× → 3.6×, Clayton 0.55× → 2.8×, Frank 0.11× → 2.8×; at a million draws
+  twelve threads give 7.5× over one. `tests/sampler_distribution.rs` checks
+  every sampler against closed forms (joint distribution functions, orthant
+  probabilities, uniform margins, thread independence) at 400 000 draws.
+- Inverse h-functions of the Gumbel and Joe pair copulas solve a
+  one-dimensional equation written for the family (Newton's method on a
+  convex, respectively concave, reformulation) instead of the generic
+  bracketed search: 6.3× and 4.2× faster, and now faster than pyvinecopulib
+  (were 0.17× and 0.30×). Mixed-vine sampling and the inverse Rosenblatt
+  transform gain 1.5–2× from this.
+- Frank, Joe, BB7 and BB8 densities and h-functions take a direct route with
+  no log-space detours wherever no intermediate can overflow or cancel, and
+  fall back to the previous formulas elsewhere: Frank h 2.7×, Frank density
+  1.9× (3.2× in batches), BB7 1.7–2.5×, BB8 1.5–1.7×. The 400-digit
+  reference test (`tests/reference_pair_kernels.rs`) passes unchanged.
+  Pair fits follow: Frank 2.9×, BB7 2×, BB8 1.4×; a mixed R-vine fit on one
+  thread is 1.3× faster and now ahead of pyvinecopulib (was 0.8–0.9×).
+- New `PairCopulaSpec::evaluate_rows` evaluates one kernel output for a
+  whole slice, validating the specification once and splitting batches of
+  8192 rows or more across threads. The Python `PairCopula` methods use it.
+- The Clayton inverse h-function avoids two logarithms when nothing can
+  overflow (1.5×).
+
 ## 0.6.0 — 2026-11-18
 
 - Tail diagnostics (`rscopulas::tail`, [docs/tail-dependence.md](docs/tail-dependence.md)).

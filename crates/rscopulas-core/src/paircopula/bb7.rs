@@ -18,9 +18,56 @@ struct Terms {
     lt: f64,
     la: f64,
 }
+/// The shared terms without the log-space detours, or `None` where the plain
+/// formulas would overflow or underflow and [`prep`] must take over.
+///
+/// Every difference of nearly equal numbers is taken through `expm1` or
+/// `ln_1p`, so the result keeps full relative accuracy:
+///
+/// ```text
+/// ln x_u = ln(1 − e^{θ·lu})          (log1mexp)
+/// φ_u    = x_u^{−δ} − 1 = expm1(−δ·ln x_u)
+/// ln t   = ln_1p(φ_u + φ_v)
+/// ln A   = ln(−expm1(−ln t / δ))
+/// ```
+#[inline]
+fn direct_terms(lu: [f64; 2], theta: f64, delta: f64) -> Option<Terms> {
+    let scaled = [theta * lu[0], theta * lu[1]];
+    if !(scaled[0] > -700.0 && scaled[1] > -700.0) {
+        return None;
+    }
+    let log_x = |scaled: f64| {
+        if scaled < -std::f64::consts::LN_2 {
+            (-scaled.exp()).ln_1p()
+        } else {
+            (-scaled.exp_m1()).ln()
+        }
+    };
+    let lx = [log_x(scaled[0]), log_x(scaled[1])];
+    let exponent = [-delta * lx[0], -delta * lx[1]];
+    if !(exponent[0] < 600.0 && exponent[1] < 600.0) {
+        return None;
+    }
+    let sum = exponent[0].exp_m1() + exponent[1].exp_m1();
+    let lt = sum.ln_1p();
+    let survival = -(-lt / delta).exp_m1();
+    if !(sum > 0.0 && survival > 0.0) {
+        return None;
+    }
+    Some(Terms {
+        lx,
+        lu,
+        lt,
+        la: survival.ln(),
+    })
+}
+
 fn prep(u: f64, v: f64, theta: f64, delta: f64) -> Terms {
     use crate::math::{log_neg_log1mexp, log1mexp, log1mexp_neg_exp, logaddexp, softplus};
     let lu = [(-u).ln_1p(), (-v).ln_1p()];
+    if let Some(terms) = direct_terms(lu, theta, delta) {
+        return terms;
+    }
     let lx = [log1mexp(theta * lu[0]), log1mexp(theta * lu[1])];
     let log_phi = |l: f64| {
         let log_a = delta.ln() + log_neg_log1mexp(theta * l);
@@ -84,6 +131,14 @@ impl Density {
     pub(super) fn log_pdf_from_log_survival(&self, lu0: f64, lu1: f64) -> f64 {
         use crate::math::{log1mexp, log1mexp_neg_exp, logaddexp, softplus};
         let (theta, delta) = (self.theta, self.delta);
+        if let Some(t) = direct_terms([lu0, lu1], theta, delta) {
+            let bracket = logaddexp(self.log_theta_minus_one, self.log1p_theta_delta + t.la);
+            return (-1.0 / delta - 2.0) * t.lt
+                + (1.0 / theta - 2.0) * t.la
+                + bracket
+                + (-delta - 1.0) * (t.lx[0] + t.lx[1])
+                + (theta - 1.0) * (lu0 + lu1);
+        }
         let scaled = [theta * lu0, theta * lu1];
         let lx = [log1mexp(scaled[0]), log1mexp(scaled[1])];
         // ln φ(u) for the generator φ(u) = x_u^(−δ) − 1, with

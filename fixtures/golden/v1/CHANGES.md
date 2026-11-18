@@ -58,6 +58,26 @@ accurate one. Each such case is listed here with the evidence.
   n = 2e5. Nested Gumbel and exchangeable trees were already exact by the
   same test and are bit-for-bit unchanged.
 
+### `archimedean.json`, `elliptical.json`, `hac.json`: every `*/sample` entry (0.6.1)
+
+- **Change:** all values; these are new random draws for the same seed.
+- **Cause:** the Gaussian, Student t, Clayton, Frank and Gumbel samplers (and
+  the flat hierarchical trees that use them) draw in blocks of 256 rows.
+  The caller's generator supplies one seed per block and each block has its
+  own generator, so blocks can be drawn on separate threads and the result
+  does not depend on the thread count. Before, one generator was consumed
+  row by row. The bivariate Frank sampler also switched from the frailty
+  construction to conditional inversion.
+- **Evidence that the new samplers are correct:**
+  `tests/sampler_distribution.rs`, which uses closed forms only. With
+  400 000 draws per configuration, the empirical joint distribution function
+  of 27 Archimedean configurations (three parameters, dimensions 2, 3 and 6)
+  matches `ψ(Σ ψ⁻¹(u))` at 27 points each within 4.5 binomial standard
+  errors; Gaussian and Student t orthant probabilities match
+  `1/4 + asin(ρ)/(2π)`; the Student t lower-corner probability matches a
+  quadrature value; every margin passes a Kolmogorov–Smirnov test; and the
+  sample is identical on one thread and on all threads.
+
 ## Comparison rules added after recording
 
 - **Conditioning slack** (`conditioning_slack` in `golden_snapshots.rs`): a
