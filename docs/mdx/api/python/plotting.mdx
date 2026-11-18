@@ -4,7 +4,7 @@ sidebarTitle: "Plotting"
 description: "API reference for rscopulas.plotting: plot_density for contour plots, plot_scatter for pseudo-observations, and plot_vine_structure for vine tree visualization."
 ---
 
-The `rscopulas.plotting` module provides three functions for visualizing fitted copula models. The base `rscopulas` package does not depend on `matplotlib`, so these functions are only available after you install the optional `viz` extra. If you call any plotting function without `matplotlib` installed, you will get a clear `ImportError` with installation instructions.
+The `rscopulas.plotting` module provides functions for visualizing fitted copula models and for tail and margin diagnostics. The base `rscopulas` package does not depend on `matplotlib`, so these functions are only available after you install the optional `viz` extra. If you call any plotting function without `matplotlib` installed, you will get a clear `ImportError` with installation instructions.
 
 ## Installation
 
@@ -219,6 +219,19 @@ plt.show()
 ```
 
 ---
+
+## Tail and margin diagnostics
+
+Added in release 0.6.0.
+
+| Function | Shows |
+| --- | --- |
+| `plot_tail_dependence(data, *, model=None, dims=(0, 1), k=None, ax=None)` | Tail-dependence estimates against the number of tail points `k`; a `PairCopula` as `model` adds its closed-form coefficients |
+| `plot_tail_concentration(data, *, model=None, dims=(0, 1), q=None, ax=None)` | Empirical tail concentration function, with the model's curve when `model` is given |
+| `plot_mean_excess(x, *, thresholds=None, ax=None)` | Mean residual life plot for choosing a generalized Pareto threshold |
+| `plot_threshold_stability(x, *, thresholds=None, axes=None)` | Fitted shape and modified scale against the threshold; returns two axes |
+
+How to read them is explained in [Tail dependence](/guides/tail-dependence) and [Margins and EVT](/guides/margins).
 
 ## Missing viz extra
 

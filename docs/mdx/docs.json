@@ -48,6 +48,9 @@
               "guides/factor-copulas",
               "guides/khoudraji",
               "guides/hierarchical-archimedean",
+              "guides/tail-dependence",
+              "guides/margins",
+              "guides/javascript",
               "guides/visualization"
             ]
           },

@@ -13,6 +13,9 @@ The canonical user guides and API reference live in [mdx/](mdx/README.md), rende
 | [pair-copulas.md](pair-copulas.md) | Pair kernels, rotations, selection |
 | [khoudraji.md](khoudraji.md) | Asymmetric Khoudraji pair copulas |
 | [hac.md](hac.md) | Hierarchical Archimedean copulas: density paths, sampling caveats |
+| [tail-dependence.md](tail-dependence.md) | Model-implied tail dependence, rank-based estimates, tail concentration |
+| [margins.md](margins.md) | Margins with generalized Pareto tails, block maxima, return levels |
+| [javascript.md](javascript.md) | WebAssembly build for browsers and Node.js |
 | [benchmarks.md](benchmarks.md) | Cross-language harness vs Criterion |
 | [specs.md](specs.md) | What is validated, reference sources, scope |
 | [examples.md](examples.md) | Index of runnable example scripts |
