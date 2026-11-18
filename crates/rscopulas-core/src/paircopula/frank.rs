@@ -90,8 +90,10 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
     // evaluate to exactly zero and produces a spurious +∞ log density).
     if theta <= DIRECT_THETA_MAX {
         let (first, second) = ((-theta * u1).exp(), (-theta * u2).exp());
-        let den = denominator(first, second, u2, theta);
-        return Ok((theta * one_minus_exp_neg(theta) * first * second / (den * den)).ln());
+        let floor = (-theta).exp();
+        let den = denominator(first, second, floor, u2, theta);
+        let norm = if floor <= 0.5 { 1.0 - floor } else { -(-theta).exp_m1() };
+        return Ok((theta * norm * first * second / (den * den)).ln());
     }
     let log_t1 = -theta * u1 + log_one_minus_exp_neg(theta * u2);
     let log_t2 = -theta * u2 + log_one_minus_exp_neg(theta * (1.0 - u2));
@@ -105,20 +107,11 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
 /// argument in `[1e-12, 1 − 1e-12]`.
 const DIRECT_THETA_MAX: f64 = 100.0;
 
-/// `1 − e^{−x}` for `x > 0` without cancellation.
-#[inline]
-fn one_minus_exp_neg(x: f64) -> f64 {
-    if x > std::f64::consts::LN_2 {
-        1.0 - (-x).exp()
-    } else {
-        -(-x).exp_m1()
-    }
-}
-
 /// `T1 + T2 = e^{−θu}(1 − e^{−θv}) + (e^{−θv} − e^{−θ})`, a sum of two
-/// positive terms, given `first = e^{−θu}` and `second = e^{−θv}`.
+/// positive terms, given `first = e^{−θu}`, `second = e^{−θv}` and
+/// `floor = e^{−θ}`.
 #[inline]
-fn denominator(first: f64, second: f64, v: f64, theta: f64) -> f64 {
+fn denominator(first: f64, second: f64, floor: f64, v: f64, theta: f64) -> f64 {
     let one_minus_second = if second <= 0.5 {
         1.0 - second
     } else {
@@ -126,7 +119,7 @@ fn denominator(first: f64, second: f64, v: f64, theta: f64) -> f64 {
     };
     let gap = theta * (1.0 - v);
     let second_minus_floor = if gap > std::f64::consts::LN_2 {
-        second - (-theta).exp()
+        second - floor
     } else {
         -second * (-gap).exp_m1()
     };
@@ -142,7 +135,7 @@ fn direct_conditional(u: f64, v: f64, theta: f64) -> f64 {
     } else {
         -(-theta * u).exp_m1()
     };
-    second * one_minus_first / denominator(first, second, v, theta)
+    second * one_minus_first / denominator(first, second, (-theta).exp(), v, theta)
 }
 
 pub fn cond_first_given_second(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
