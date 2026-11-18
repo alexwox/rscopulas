@@ -103,7 +103,9 @@ fn inverse_conditional(u: f64, p: f64, theta: f64) -> f64 {
         let e = rho.exp_m1();
         let step = (x * e + k * rho - level) / (x * (e + 1.0) + k);
         rho -= step;
-        if step.abs() <= 4.0 * f64::EPSILON * rho {
+        // Quadratic convergence with |g''/(2g')| ≤ 1/2: after a step of
+        // size s the error is at most s²/2.
+        if step * step <= 2.0 * f64::EPSILON * rho {
             break;
         }
     }

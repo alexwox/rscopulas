@@ -1,5 +1,5 @@
-use ndarray::Array2;
 use crate::backend::sample_rows_chunked;
+use ndarray::Array2;
 use rand::Rng;
 use rand_distr::{ChiSquared, StandardNormal};
 use serde::{Deserialize, Deserializer, Serialize};

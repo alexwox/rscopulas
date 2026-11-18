@@ -45,9 +45,15 @@ pub fn cond_second_given_first(u1: f64, u2: f64, theta: f64) -> Result<f64, Copu
 }
 
 pub fn inv_first_given_second(p: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
+    // u1 = (1 + u2^{−θ}·(p^{−θ/(1+θ)} − 1))^{−1/θ}
     let t = -theta / (1.0 + theta) * p.ln();
+    let scale = -theta * u2.ln();
+    if scale + t < 690.0 {
+        // Both factors are positive and neither overflows.
+        return Ok((-(scale.exp() * t.exp_m1()).ln_1p() / theta).exp());
+    }
     let log_expm1 = t + crate::math::log1mexp(-t);
-    Ok((-softplus(-theta * u2.ln() + log_expm1) / theta).exp())
+    Ok((-softplus(scale + log_expm1) / theta).exp())
 }
 
 pub fn inv_second_given_first(u1: f64, p: f64, theta: f64) -> Result<f64, CopulaError> {

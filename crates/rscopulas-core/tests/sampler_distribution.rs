@@ -42,16 +42,17 @@ fn assert_uniform_margins(name: &str, sample: &Array2<f64>) {
         let distance = column
             .iter()
             .enumerate()
-            .map(|(idx, &value)| {
-                ((idx as f64 + 1.0) / n - value).max(value - idx as f64 / n)
-            })
+            .map(|(idx, &value)| ((idx as f64 + 1.0) / n - value).max(value - idx as f64 / n))
             .fold(0.0_f64, f64::max);
         assert!(
             n.sqrt() * distance < KS_MAX,
             "{name}: column {col} is not uniform, sqrt(n)·D = {}",
             n.sqrt() * distance
         );
-        assert!(column[0] > 0.0 && column[column.len() - 1] < 1.0, "{name}: value on the boundary");
+        assert!(
+            column[0] > 0.0 && column[column.len() - 1] < 1.0,
+            "{name}: value on the boundary"
+        );
     }
 }
 
@@ -94,7 +95,12 @@ fn assert_joint_cdf(name: &str, sample: &Array2<f64>, cdf: impl Fn(&[f64]) -> f6
             .into_iter()
             .filter(|row| row.iter().zip(&point).all(|(value, bound)| value <= bound))
             .count();
-        assert_proportion(&format!("{name} at {point:?}"), below, cdf(&point), sample.nrows());
+        assert_proportion(
+            &format!("{name} at {point:?}"),
+            below,
+            cdf(&point),
+            sample.nrows(),
+        );
     }
 }
 
@@ -129,7 +135,11 @@ fn archimedean_samplers_follow_their_distribution_functions() {
             let name = format!("Gumbel d={dim} theta={theta}");
             assert_uniform_margins(&name, &sample);
             assert_joint_cdf(&name, &sample, |u| {
-                (-u.iter().map(|x| (-x.ln()).powf(theta)).sum::<f64>().powf(1.0 / theta)).exp()
+                (-u.iter()
+                    .map(|x| (-x.ln()).powf(theta))
+                    .sum::<f64>()
+                    .powf(1.0 / theta))
+                .exp()
             });
         }
     }
@@ -159,7 +169,12 @@ fn assert_orthants(name: &str, sample: &Array2<f64>, correlation: &Array2<f64>) 
                 .filter(|row| row[i] <= 0.5 && row[j] <= 0.5)
                 .count();
             let expected = 0.25 + correlation[(i, j)].asin() / (2.0 * std::f64::consts::PI);
-            assert_proportion(&format!("{name} orthant ({i}, {j})"), both, expected, sample.nrows());
+            assert_proportion(
+                &format!("{name} orthant ({i}, {j})"),
+                both,
+                expected,
+                sample.nrows(),
+            );
         }
     }
 }
@@ -191,8 +206,17 @@ fn elliptical_samplers_have_exact_orthant_probabilities() {
 fn student_t_sampler_has_the_tail_of_a_t_copula() {
     let student = StudentTCopula::new(array![[1.0, 0.0], [0.0, 1.0]], 2.5).unwrap();
     let sample = draw(&student, 5);
-    let both = sample.rows().into_iter().filter(|row| row[0] <= 0.01 && row[1] <= 0.01).count();
-    assert_proportion("Student t lower corner", both, 1.517_065_6e-3, sample.nrows());
+    let both = sample
+        .rows()
+        .into_iter()
+        .filter(|row| row[0] <= 0.01 && row[1] <= 0.01)
+        .count();
+    assert_proportion(
+        "Student t lower corner",
+        both,
+        1.517_065_6e-3,
+        sample.nrows(),
+    );
 }
 
 #[test]
@@ -200,7 +224,10 @@ fn a_sample_does_not_depend_on_the_number_of_threads() {
     let model = ClaytonCopula::new(4, 2.0).unwrap();
     let gaussian = GaussianCopula::new(correlations().remove(2)).unwrap();
     let on_all = (draw(&model, 9), draw(&gaussian, 9));
-    let single = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let single = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
     let on_one = single.install(|| (draw(&model, 9), draw(&gaussian, 9)));
     assert_eq!(on_all.0, on_one.0);
     assert_eq!(on_all.1, on_one.1);
@@ -208,6 +235,11 @@ fn a_sample_does_not_depend_on_the_number_of_threads() {
     // A shorter sample is a prefix of a longer one from the same seed up to
     // the last complete block.
     let mut rng = StdRng::seed_from_u64(9);
-    let short = model.sample(3000, &mut rng, &SampleOptions::default()).unwrap();
-    assert_eq!(short.slice(ndarray::s![..2048, ..]), on_all.0.slice(ndarray::s![..2048, ..]));
+    let short = model
+        .sample(3000, &mut rng, &SampleOptions::default())
+        .unwrap();
+    assert_eq!(
+        short.slice(ndarray::s![..2048, ..]),
+        on_all.0.slice(ndarray::s![..2048, ..])
+    );
 }

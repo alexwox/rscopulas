@@ -22,7 +22,11 @@ struct Terms {
 /// `1 − e^{x}` for `x < 0` without cancellation, given `e^{x}`.
 #[inline]
 fn one_minus(exp_x: f64, x: f64) -> f64 {
-    if exp_x <= 0.5 { 1.0 - exp_x } else { -x.exp_m1() }
+    if exp_x <= 0.5 {
+        1.0 - exp_x
+    } else {
+        -x.exp_m1()
+    }
 }
 
 fn prep(u: f64, v: f64, theta: f64, delta: f64) -> Terms {
@@ -36,7 +40,10 @@ fn prep(u: f64, v: f64, theta: f64, delta: f64) -> Terms {
         // a sum of two non-negative terms; each `1 − p` and the difference
         // `p_v − p_β` go through `expm1` where they would cancel.
         let power = [scaled[0].exp(), scaled[1].exp()];
-        let x = [one_minus(power[0], scaled[0]), one_minus(power[1], scaled[1])];
+        let x = [
+            one_minus(power[0], scaled[0]),
+            one_minus(power[1], scaled[1]),
+        ];
         let floor = log_b_tail.exp();
         let lb = one_minus(floor, log_b_tail).ln();
         let gap = log_b_tail - scaled[1];

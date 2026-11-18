@@ -140,7 +140,9 @@ fn inverse_conditional(u: f64, p: f64, theta: f64) -> f64 {
         };
         let step = (kappa * softplus_pos - softplus_neg - log_r) / ((1.0 - q) + kappa * q);
         lambda -= step;
-        if step.abs() <= 4.0 * f64::EPSILON * lambda.abs().max(1.0) {
+        // Quadratic convergence: the curvature term |ψ''/(2ψ')| is at most
+        // 1/2, so after a step of size s the error is at most s²/2.
+        if step * step <= 2.0 * f64::EPSILON * lambda.abs().max(1.0) {
             break;
         }
     }
@@ -183,7 +185,9 @@ fn inverse_conditional(u: f64, p: f64, theta: f64) -> f64 {
         }
         let moved = (next - b).abs();
         b = next;
-        if moved <= 4.0 * f64::EPSILON * b {
+        // The start is already close; a relative step of 1e-8 leaves a
+        // relative error near 1e-16.
+        if moved <= 1e-8 * b {
             break;
         }
     }

@@ -17,8 +17,8 @@ mod tawn;
 mod tll;
 
 pub use common::{
-    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult, Rotation,
-    TllOrder, TllParams, fit_pair_copula,
+    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairFitResult,
+    PairKernelOutput, Rotation, TllOrder, TllParams, fit_pair_copula,
 };
 
 /// Fit a nonparametric TLL pair copula directly from pseudo-observations.

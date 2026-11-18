@@ -92,7 +92,11 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
         let (first, second) = ((-theta * u1).exp(), (-theta * u2).exp());
         let floor = (-theta).exp();
         let den = denominator(first, second, floor, u2, theta);
-        let norm = if floor <= 0.5 { 1.0 - floor } else { -(-theta).exp_m1() };
+        let norm = if floor <= 0.5 {
+            1.0 - floor
+        } else {
+            -(-theta).exp_m1()
+        };
         return Ok((theta * norm * first * second / (den * den)).ln());
     }
     let log_t1 = -theta * u1 + log_one_minus_exp_neg(theta * u2);

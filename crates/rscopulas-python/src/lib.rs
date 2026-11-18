@@ -15,9 +15,9 @@ use rscopulas::{
     FactorFitOptions, FactorFitResult, FactorLayout, FactorQuadrature, FitDiagnostics, FitError,
     FitOptions, FrankCopula, GaussianCopula, GumbelHougaardCopula, HacFamily, HacFitMethod,
     HacFitOptions, HacNode, HacStructureMethod, HacTree, HierarchicalArchimedeanCopula,
-    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, SampleOptions,
-    SelectionCriterion, StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge,
-    VineFitOptions, VineStructureKind, VineTree,
+    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairKernelOutput,
+    Rotation, SampleOptions, SelectionCriterion, StudentTCopula, TreeAlgorithm, TreeCriterion,
+    VineCopula, VineEdge, VineFitOptions, VineStructureKind, VineTree,
     margins::{
         GeneralizedExtremeValue, GeneralizedPareto, GevFit, GpdTail, MarginFitOptions, Margins,
         Threshold,
@@ -1478,7 +1478,7 @@ struct PyPairCopula {
 
 impl PyPairCopula {
     #[allow(clippy::too_many_arguments)]
-    fn eval_pair_batch<'py, F>(
+    fn eval_pair_batch<'py>(
         &self,
         py: Python<'py>,
         left: PyReadonlyArray1<'_, f64>,
@@ -1486,21 +1486,16 @@ impl PyPairCopula {
         clip_eps: f64,
         left_name: &str,
         right_name: &str,
-        callback: F,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>>
-    where
-        F: Fn(&PairCopulaSpec, f64, f64, f64) -> Result<f64, CopulaError> + Send,
-    {
+        output: PairKernelOutput,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         catch_internal_panic(|| {
             let (left_values, right_values) =
                 paired_vectors_from_py(left, right, left_name, right_name)?;
             let spec = &self.inner;
             let values = detached(py, move || {
-                left_values
-                    .into_iter()
-                    .zip(right_values)
-                    .map(|(first, second)| callback(spec, first, second, clip_eps))
-                    .collect::<Result<Vec<_>, CopulaError>>()
+                let mut values = vec![0.0; left_values.len()];
+                spec.evaluate_rows(output, &left_values, &right_values, clip_eps, &mut values)?;
+                Ok::<_, CopulaError>(values)
             })?;
             Ok(values.into_pyarray(py))
         })
@@ -1712,15 +1707,7 @@ impl PyPairCopula {
         u2: PyReadonlyArray1<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.eval_pair_batch(
-            py,
-            u1,
-            u2,
-            clip_eps,
-            "u1",
-            "u2",
-            |spec, left, right, eps| spec.log_pdf(left, right, eps),
-        )
+        self.eval_pair_batch(py, u1, u2, clip_eps, "u1", "u2", PairKernelOutput::LogPdf)
     }
 
     #[pyo3(signature = (u1, u2, clip_eps=1e-12))]
@@ -1738,7 +1725,7 @@ impl PyPairCopula {
             clip_eps,
             "u1",
             "u2",
-            |spec, left, right, eps| spec.cond_first_given_second(left, right, eps),
+            PairKernelOutput::CondFirstGivenSecond,
         )
     }
 
@@ -1757,7 +1744,7 @@ impl PyPairCopula {
             clip_eps,
             "u1",
             "u2",
-            |spec, left, right, eps| spec.cond_second_given_first(left, right, eps),
+            PairKernelOutput::CondSecondGivenFirst,
         )
     }
 
@@ -1769,9 +1756,15 @@ impl PyPairCopula {
         u2: PyReadonlyArray1<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.eval_pair_batch(py, p, u2, clip_eps, "p", "u2", |spec, left, right, eps| {
-            spec.inv_first_given_second(left, right, eps)
-        })
+        self.eval_pair_batch(
+            py,
+            p,
+            u2,
+            clip_eps,
+            "p",
+            "u2",
+            PairKernelOutput::InvFirstGivenSecond,
+        )
     }
 
     #[pyo3(signature = (u1, p, clip_eps=1e-12))]
@@ -1782,9 +1775,15 @@ impl PyPairCopula {
         p: PyReadonlyArray1<'_, f64>,
         clip_eps: f64,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.eval_pair_batch(py, u1, p, clip_eps, "u1", "p", |spec, left, right, eps| {
-            spec.inv_second_given_first(left, right, eps)
-        })
+        self.eval_pair_batch(
+            py,
+            u1,
+            p,
+            clip_eps,
+            "u1",
+            "p",
+            PairKernelOutput::InvSecondGivenFirst,
+        )
     }
 
     fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {

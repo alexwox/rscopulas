@@ -250,7 +250,10 @@ where
     };
     if matches!(strategy, ExecutionStrategy::CpuParallel) && seeds.len() > 1 {
         use rayon::prelude::*;
-        values.par_chunks_mut(block).zip(seeds.par_iter()).for_each(run);
+        values
+            .par_chunks_mut(block)
+            .zip(seeds.par_iter())
+            .for_each(run);
     } else {
         values.chunks_mut(block).zip(seeds.iter()).for_each(run);
     }

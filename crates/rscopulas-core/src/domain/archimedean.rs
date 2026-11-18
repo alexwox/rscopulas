@@ -174,7 +174,7 @@ impl CopulaModel for FrankCopula {
             let floor = (-theta).exp();
             return Ok(sample_rows_chunked(n, dim, rng, strategy, |rng, rows| {
                 use rand::distr::Open01;
-                for row in rows.chunks_exact_mut(2) {
+                for row in rows.chunks_exact_mut(dim) {
                     let first: f64 = rng.sample(Open01);
                     let level: f64 = rng.sample(Open01);
                     let weighted = (1.0 - level) * (-theta * first).exp();

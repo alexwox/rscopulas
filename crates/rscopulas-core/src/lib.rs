@@ -182,7 +182,7 @@ pub use margins::{
     Threshold,
 };
 pub use paircopula::{
-    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, TllOrder,
-    TllParams, tll_fit,
+    KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, PairKernelOutput,
+    Rotation, TllOrder, TllParams, tll_fit,
 };
 pub use tail::{TailDependence, TailDependenceMatrix};
