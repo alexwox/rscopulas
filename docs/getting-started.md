@@ -4,7 +4,7 @@
 
 `rscopulas` expects data in **pseudo-observation** form: a matrix `U` with entries strictly in `(0, 1)` and finite.
 
-- The library does **not** estimate marginal distributions.
+- Build it from raw data with a rank transform (`to_pseudo_obs` in Python) or with fitted margins, which also map simulated uniforms back to the raw scale: see [margins.md](margins.md).
 - If you have raw `X`, transform each margin to uniforms (parametric, empirical, or rank-based) first, then call the API.
 
 Invalid values are rejected (e.g. `PseudoObs::new` in Rust; Python raises mapped errors).

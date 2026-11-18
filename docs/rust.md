@@ -8,6 +8,10 @@
 - **`CopulaModel`** — trait for `log_pdf`, `sample`, etc. on fitted / constructed models.
 - **`FitOptions` / `EvalOptions` / `SampleOptions`** — carry `ExecPolicy` and related knobs.
 
+## Margins and extreme values
+
+`rscopulas::margins` holds `Margins` and `SemiParametricMargin` (empirical body, generalized Pareto tails, exact inverse), `GeneralizedPareto` and `GeneralizedExtremeValue` with maximum-likelihood fits, and the `mean_excess` / `threshold_stability` diagnostics. See [margins.md](margins.md).
+
 ## Execution policy
 
 - **`ExecPolicy::Auto`** — conservative; does not guarantee GPU on all heavy paths.

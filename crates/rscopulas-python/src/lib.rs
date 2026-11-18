@@ -18,6 +18,10 @@ use rscopulas::{
     KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, SampleOptions,
     SelectionCriterion, StudentTCopula, TreeAlgorithm, TreeCriterion, VineCopula, VineEdge,
     VineFitOptions, VineStructureKind, VineTree,
+    margins::{
+        GeneralizedExtremeValue, GeneralizedPareto, GevFit, GpdTail, MarginFitOptions, Margins,
+        Threshold,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -187,6 +191,7 @@ const _: () = {
     assert_send_sync::<VineCopula>();
     assert_send_sync::<HierarchicalArchimedeanCopula>();
     assert_send_sync::<FactorCopula>();
+    assert_send_sync::<Margins>();
 };
 
 fn fit_options(clip_eps: f64, max_iter: usize) -> FitOptions {
@@ -2623,6 +2628,407 @@ fn uniform_matrix<'py>(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Margins and extreme-value distributions
+// ---------------------------------------------------------------------------
+
+/// `fraction` in (0, 0.5), or `value` on the raw scale (which wins), or
+/// neither for an empirical tail.
+fn threshold_from_py(fraction: Option<f64>, value: Option<f64>) -> Option<Threshold> {
+    match (value, fraction) {
+        (Some(value), _) => Some(Threshold::Value(value)),
+        (None, Some(fraction)) => Some(Threshold::Fraction(fraction)),
+        (None, None) => None,
+    }
+}
+
+fn tail_to_py<'py>(
+    py: Python<'py>,
+    tail: Option<&GpdTail>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let Some(tail) = tail else {
+        return Ok(None);
+    };
+    let dict = PyDict::new(py);
+    dict.set_item("threshold", tail.threshold)?;
+    dict.set_item("probability", tail.probability)?;
+    dict.set_item("scale", tail.gpd.scale())?;
+    dict.set_item("shape", tail.gpd.shape())?;
+    dict.set_item("n_exceedances", tail.n_exceedances)?;
+    Ok(Some(dict))
+}
+
+#[pyclass(
+    skip_from_py_object,
+    module = "rscopulas._rscopulas",
+    name = "_Margins",
+    frozen
+)]
+#[derive(Clone)]
+struct PyMargins {
+    inner: Margins,
+}
+
+#[pymethods]
+impl PyMargins {
+    #[new]
+    fn new(payload: &str) -> PyResult<Self> {
+        Self::from_json(payload)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (data, lower_tail=None, upper_tail=None, lower_threshold=None, upper_threshold=None, min_exceedances=10))]
+    fn fit(
+        py: Python<'_>,
+        data: PyReadonlyArray2<'_, f64>,
+        lower_tail: Option<f64>,
+        upper_tail: Option<f64>,
+        lower_threshold: Option<f64>,
+        upper_threshold: Option<f64>,
+        min_exceedances: usize,
+    ) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            let data = matrix_from_py(data);
+            let options = MarginFitOptions {
+                lower_tail: threshold_from_py(lower_tail, lower_threshold),
+                upper_tail: threshold_from_py(upper_tail, upper_threshold),
+                min_exceedances,
+            };
+            let inner = detached(py, move || Margins::fit(data.view(), &options))?;
+            Ok(Self { inner })
+        })
+    }
+
+    /// One collection holding the columns of several, in order.
+    #[staticmethod]
+    fn concat(parts: Vec<PyRef<'_, PyMargins>>) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            let margins = parts
+                .iter()
+                .flat_map(|part| part.inner.margins().iter().cloned())
+                .collect();
+            Margins::from_margins(margins)
+                .map(|inner| Self { inner })
+                .map_err(to_pyerr)
+        })
+    }
+
+    /// The single-column collection for column `index`.
+    fn column(&self, index: usize) -> PyResult<Self> {
+        let margin = self.inner.margins().get(index).cloned().ok_or_else(|| {
+            InvalidInputError::new_err(format!(
+                "column {index} is out of range for {} margins",
+                self.inner.dim()
+            ))
+        })?;
+        Margins::from_margins(vec![margin])
+            .map(|inner| Self { inner })
+            .map_err(to_pyerr)
+    }
+
+    #[staticmethod]
+    fn from_json(payload: &str) -> PyResult<Self> {
+        catch_internal_panic(|| {
+            let inner = parse_json!(Margins, payload, "margins")?;
+            inner.validate().map_err(|err| {
+                InvalidInputError::new_err(format!("failed to deserialize margins: {err}"))
+            })?;
+            Ok(Self { inner })
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        json_string!(&self.inner, "margins")
+    }
+
+    #[getter]
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    /// Per column: `{"n_obs", "lower", "upper"}` with each tail a dict or `None`.
+    fn tails<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.inner
+            .margins()
+            .iter()
+            .map(|margin| {
+                let dict = PyDict::new(py);
+                dict.set_item("n_obs", margin.n_obs())?;
+                dict.set_item("lower", tail_to_py(py, margin.lower_tail())?)?;
+                dict.set_item("upper", tail_to_py(py, margin.upper_tail())?)?;
+                Ok(dict)
+            })
+            .collect()
+    }
+
+    fn cdf<'py>(
+        &self,
+        py: Python<'py>,
+        data: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        catch_internal_panic(|| {
+            let data = matrix_from_py(data);
+            let margins = &self.inner;
+            let values = detached(py, move || margins.cdf(data.view()))?;
+            Ok(values.into_pyarray(py))
+        })
+    }
+
+    fn quantile<'py>(
+        &self,
+        py: Python<'py>,
+        uniforms: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        catch_internal_panic(|| {
+            let uniforms = matrix_from_py(uniforms);
+            let margins = &self.inner;
+            let values = detached(py, move || margins.quantile(uniforms.view()))?;
+            Ok(values.into_pyarray(py))
+        })
+    }
+
+    /// The `period`-observation return level of every column.
+    fn return_level(&self, period: f64) -> PyResult<Vec<f64>> {
+        self.inner
+            .margins()
+            .iter()
+            .map(|margin| margin.return_level(period).map_err(to_pyerr))
+            .collect()
+    }
+
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyType>, (String,))> {
+        Ok((slf.get_type(), (slf.get().to_json()?,)))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __eq__(&self, other: PyRef<'_, Self>) -> bool {
+        self.inner == other.inner
+    }
+}
+
+fn covariance_to_py<'py>(
+    py: Python<'py>,
+    covariance: Option<Array2<f64>>,
+) -> Option<Bound<'py, PyArray2<f64>>> {
+    covariance.map(|matrix| matrix.into_pyarray(py))
+}
+
+type GpdFitTuple<'py> = (f64, f64, f64, Option<Bound<'py, PyArray2<f64>>>);
+type GevFitTuple<'py> = (f64, f64, f64, f64, Option<Bound<'py, PyArray2<f64>>>);
+
+/// Maximum-likelihood GPD fit: `(scale, shape, loglik, covariance)`.
+#[pyfunction]
+fn gpd_fit<'py>(
+    py: Python<'py>,
+    excesses: PyReadonlyArray1<'_, f64>,
+) -> PyResult<GpdFitTuple<'py>> {
+    catch_internal_panic(|| {
+        let excesses = vector_from_py(excesses);
+        let fit = detached(py, move || GeneralizedPareto::fit(&excesses))?;
+        Ok((
+            fit.model.scale(),
+            fit.model.shape(),
+            fit.loglik,
+            covariance_to_py(py, fit.covariance),
+        ))
+    })
+}
+
+/// `what` is one of `cdf`, `survival`, `ln_pdf`, `quantile`.
+#[pyfunction]
+fn gpd_eval<'py>(
+    py: Python<'py>,
+    what: &str,
+    values: PyReadonlyArray1<'_, f64>,
+    scale: f64,
+    shape: f64,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    catch_internal_panic(|| {
+        let model = GeneralizedPareto::new(scale, shape).map_err(to_pyerr)?;
+        let values = vector_from_py(values);
+        let result = match what {
+            "cdf" => values.iter().map(|y| model.cdf(*y)).collect(),
+            "survival" => values.iter().map(|y| model.survival(*y)).collect(),
+            "ln_pdf" => values.iter().map(|y| model.ln_pdf(*y)).collect(),
+            "quantile" => values
+                .iter()
+                .map(|p| model.quantile(*p))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(to_pyerr)?,
+            other => {
+                return Err(InvalidInputError::new_err(format!(
+                    "unknown generalized Pareto function '{other}'"
+                )));
+            }
+        };
+        Ok(Vec::into_pyarray(result, py))
+    })
+}
+
+/// Maximum-likelihood GEV fit: `(location, scale, shape, loglik, covariance)`.
+#[pyfunction]
+fn gev_fit<'py>(py: Python<'py>, maxima: PyReadonlyArray1<'_, f64>) -> PyResult<GevFitTuple<'py>> {
+    catch_internal_panic(|| {
+        let maxima = vector_from_py(maxima);
+        let fit = detached(py, move || GeneralizedExtremeValue::fit(&maxima))?;
+        Ok((
+            fit.model.location(),
+            fit.model.scale(),
+            fit.model.shape(),
+            fit.loglik,
+            covariance_to_py(py, fit.covariance),
+        ))
+    })
+}
+
+/// `what` is one of `cdf`, `ln_pdf`, `quantile`, `return_level`.
+#[pyfunction]
+fn gev_eval<'py>(
+    py: Python<'py>,
+    what: &str,
+    values: PyReadonlyArray1<'_, f64>,
+    location: f64,
+    scale: f64,
+    shape: f64,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    catch_internal_panic(|| {
+        let model = GeneralizedExtremeValue::new(location, scale, shape).map_err(to_pyerr)?;
+        let values = vector_from_py(values);
+        let fallible = |f: &dyn Fn(f64) -> Result<f64, CopulaError>| {
+            values
+                .iter()
+                .map(|value| f(*value))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(to_pyerr)
+        };
+        let result = match what {
+            "cdf" => values.iter().map(|x| model.cdf(*x)).collect(),
+            "ln_pdf" => values.iter().map(|x| model.ln_pdf(*x)).collect(),
+            "quantile" => fallible(&|p| model.quantile(p))?,
+            "return_level" => fallible(&|period| model.return_level(period))?,
+            other => {
+                return Err(InvalidInputError::new_err(format!(
+                    "unknown generalized extreme value function '{other}'"
+                )));
+            }
+        };
+        Ok(Vec::into_pyarray(result, py))
+    })
+}
+
+/// Delta-method standard errors of GEV return levels at `periods`.
+#[pyfunction]
+fn gev_return_level_std_error<'py>(
+    py: Python<'py>,
+    periods: PyReadonlyArray1<'_, f64>,
+    location: f64,
+    scale: f64,
+    shape: f64,
+    covariance: PyReadonlyArray2<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    catch_internal_panic(|| {
+        let covariance = matrix_from_py(covariance);
+        if covariance.dim() != (3, 3) {
+            return Err(InvalidInputError::new_err("covariance must be 3 x 3"));
+        }
+        let fit = GevFit {
+            model: GeneralizedExtremeValue::new(location, scale, shape).map_err(to_pyerr)?,
+            loglik: f64::NAN,
+            n_obs: 0,
+            covariance: Some(covariance),
+        };
+        let result = vector_from_py(periods)
+            .into_iter()
+            .map(|period| {
+                fit.return_level_std_error(period)
+                    .map(|value| value.unwrap_or(f64::NAN))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_pyerr)?;
+        Ok(result.into_pyarray(py))
+    })
+}
+
+#[pyfunction]
+fn block_maxima<'py>(
+    py: Python<'py>,
+    values: PyReadonlyArray1<'_, f64>,
+    block_size: usize,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    catch_internal_panic(|| {
+        let values = vector_from_py(values);
+        let maxima = rscopulas::margins::block_maxima(&values, block_size).map_err(to_pyerr)?;
+        Ok(maxima.into_pyarray(py))
+    })
+}
+
+/// Mean excess over each threshold: dict of arrays.
+#[pyfunction]
+fn mean_excess<'py>(
+    py: Python<'py>,
+    values: PyReadonlyArray1<'_, f64>,
+    thresholds: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    catch_internal_panic(|| {
+        let (values, thresholds) = (vector_from_py(values), vector_from_py(thresholds));
+        let points = detached(py, move || {
+            rscopulas::margins::mean_excess(&values, &thresholds)
+        })?;
+        let dict = PyDict::new(py);
+        let column = |f: &dyn Fn(&rscopulas::margins::MeanExcess) -> f64| {
+            points.iter().map(f).collect::<Vec<f64>>().into_pyarray(py)
+        };
+        dict.set_item("threshold", column(&|p| p.threshold))?;
+        dict.set_item("mean_excess", column(&|p| p.mean_excess))?;
+        dict.set_item("std_error", column(&|p| p.std_error))?;
+        dict.set_item(
+            "n_exceedances",
+            points.iter().map(|p| p.n_exceedances).collect::<Vec<_>>(),
+        )?;
+        Ok(dict)
+    })
+}
+
+/// Generalized Pareto fit above each threshold: dict of arrays.
+#[pyfunction]
+fn threshold_stability<'py>(
+    py: Python<'py>,
+    values: PyReadonlyArray1<'_, f64>,
+    thresholds: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    catch_internal_panic(|| {
+        let (values, thresholds) = (vector_from_py(values), vector_from_py(thresholds));
+        let points = detached(py, move || {
+            rscopulas::margins::threshold_stability(&values, &thresholds)
+        })?;
+        let dict = PyDict::new(py);
+        let column = |f: &dyn Fn(&rscopulas::margins::ThresholdFit) -> f64| {
+            points.iter().map(f).collect::<Vec<f64>>().into_pyarray(py)
+        };
+        dict.set_item("threshold", column(&|p| p.threshold))?;
+        dict.set_item("shape", column(&|p| p.shape))?;
+        dict.set_item("shape_std_error", column(&|p| p.shape_std_error))?;
+        dict.set_item("scale", column(&|p| p.scale))?;
+        dict.set_item("modified_scale", column(&|p| p.modified_scale))?;
+        dict.set_item(
+            "modified_scale_std_error",
+            column(&|p| p.modified_scale_std_error),
+        )?;
+        dict.set_item(
+            "n_exceedances",
+            points.iter().map(|p| p.n_exceedances).collect::<Vec<_>>(),
+        )?;
+        Ok(dict)
+    })
+}
+
 #[pymodule]
 fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -2650,5 +3056,14 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyFactorCopula>()?;
 
     module.add_function(wrap_pyfunction!(uniform_matrix, module)?)?;
+    module.add_class::<PyMargins>()?;
+    module.add_function(wrap_pyfunction!(gpd_fit, module)?)?;
+    module.add_function(wrap_pyfunction!(gpd_eval, module)?)?;
+    module.add_function(wrap_pyfunction!(gev_fit, module)?)?;
+    module.add_function(wrap_pyfunction!(gev_eval, module)?)?;
+    module.add_function(wrap_pyfunction!(gev_return_level_std_error, module)?)?;
+    module.add_function(wrap_pyfunction!(block_maxima, module)?)?;
+    module.add_function(wrap_pyfunction!(mean_excess, module)?)?;
+    module.add_function(wrap_pyfunction!(threshold_stability, module)?)?;
     Ok(())
 }

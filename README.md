@@ -29,7 +29,7 @@
 
 ## Pseudo-observations (read this once)
 
-- You supply **pseudo-observations**; the library does **not** fit marginals for you.
+- Copula models take **pseudo-observations**. Build them from raw data with a rank transform (`to_pseudo_obs`) or with fitted margins (`Margins`, which also map simulated uniforms back to the raw scale — see [docs/margins.md](docs/margins.md)).
 - Each entry must satisfy `0 < u < 1` (strict).
 - Workflow: transform raw data to uniforms → build `PseudoObs` / NumPy `float64` arrays → `fit` → `log_pdf` / `sample`.
 - In Python, `rscopulas.to_pseudo_obs(x, ties="average", scaling="n+1")` rank-transforms a raw `(n, d)` matrix (or a 1-D vector) into valid pseudo-observations; ties follow `scipy.stats.rankdata` semantics (`average`, `min`, `max`, `ordinal`) and NaN is rejected with a clear error.
@@ -141,6 +141,7 @@ Do not compare harness wall times to Criterion reports directly; methodology dif
 - Pair copulas: density, h-functions, inverses; rotations where supported; **Khoudraji** composition of two base pair kernels ([docs/khoudraji.md](docs/khoudraji.md)).
 - Vines: C-vine, D-vine, R-vine — construct, fit, `log_pdf`, sample, and **exact conditional sampling** via the Rosenblatt transform ([docs/vines.md](docs/vines.md)).
 - HAC: hierarchical Archimedean construction and fitting — behavior and sampling caveats: [docs/hac.md](docs/hac.md) (Python/Rust API also in [docs/python.md](docs/python.md)).
+- Margins: empirical body with generalized Pareto tails, in both directions (raw ↔ uniform), so a fitted copula gives joint tail estimates on the raw scale; generalized extreme value fits for block maxima, return levels, and threshold-selection plots ([docs/margins.md](docs/margins.md)).
 
 ## Workspace layout (for contributors)
 

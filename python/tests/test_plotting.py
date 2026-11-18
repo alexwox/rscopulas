@@ -6,7 +6,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from rscopulas import ClaytonCopula, GaussianCopula, PairCopula, VineCopula
-from rscopulas.plotting import plot_density, plot_scatter, plot_vine_structure
+from rscopulas.plotting import (
+    plot_density,
+    plot_mean_excess,
+    plot_scatter,
+    plot_threshold_stability,
+    plot_vine_structure,
+)
 
 
 DATA_2D = np.array(
@@ -102,3 +108,29 @@ def test_plot_vine_structure_renders_matrix_and_annotations() -> None:
 def test_plot_vine_structure_rejects_non_vine_models() -> None:
     with pytest.raises(TypeError, match="vine model"):
         plot_vine_structure(GaussianCopula.fit(DATA_2D).model)
+
+
+def test_plot_mean_excess_draws_curve_and_band() -> None:
+    x = np.random.default_rng(0).exponential(size=2_000)
+
+    ax = plot_mean_excess(x)
+
+    assert ax.get_title() == "Mean residual life"
+    curve = ax.get_lines()[0]
+    assert len(curve.get_xdata()) == 40
+    # Exponential data: the mean excess is 1 at every threshold.
+    assert abs(float(np.median(curve.get_ydata())) - 1.0) < 0.15
+    assert len(ax.collections) == 1
+
+
+def test_plot_threshold_stability_returns_both_panels() -> None:
+    x = np.random.default_rng(0).exponential(size=2_000)
+
+    shape_ax, scale_ax = plot_threshold_stability(x, thresholds=[0.5, 1.0, 1.5])
+
+    assert shape_ax.get_ylabel() == "shape"
+    assert scale_ax.get_ylabel() == "modified scale"
+    assert shape_ax.get_lines()[0].get_xdata().tolist() == [0.5, 1.0, 1.5]
+    # Exponential data: shape 0 and modified scale 1.
+    assert abs(float(shape_ax.get_lines()[0].get_ydata()[0])) < 0.15
+    assert abs(float(scale_ax.get_lines()[0].get_ydata()[0]) - 1.0) < 0.2

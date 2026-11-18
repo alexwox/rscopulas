@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Margins with extreme-value tails (`rscopulas::margins`,
+  [docs/margins.md](docs/margins.md)). `SemiParametricMargin` models one
+  variable as an interpolated empirical body with generalized Pareto tails
+  beyond chosen thresholds; it is continuous, strictly increasing and exactly
+  invertible. `Margins` holds one per column: `cdf` turns raw data into
+  pseudo-observations and `quantile` maps a sample from any fitted copula back
+  to the raw scale, including levels beyond the largest observation.
+  `GeneralizedPareto::fit` (profile likelihood over its whole domain, no
+  starting value) and `GeneralizedExtremeValue::fit` (for block maxima) return
+  the log-likelihood and parameter covariance; return levels come with
+  delta-method standard errors. `mean_excess` and `threshold_stability` are the
+  two standard diagnostics for choosing a threshold. Python gains the same
+  API (`Margins`, `SemiParametricMargin`, `GeneralizedPareto`,
+  `GeneralizedExtremeValue`, `block_maxima`, `mean_excess`,
+  `threshold_stability`) and `plot_mean_excess` / `plot_threshold_stability`.
+  Fits reach the log-likelihood of a tightly converged search on SciPy's
+  likelihood and of R's `evd`; return-level errors agree with `extRemes`
+  (`scripts/reference/generate_evt_fixtures.py`).
+- `InputError` has a new variant, `InvalidArgument`.
+
 ## 0.5.0 — 2026-11-10
 
 Performance work on the numerical core. Measured on an Apple M3 Pro against
