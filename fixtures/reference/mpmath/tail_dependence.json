@@ -1,0 +1,373 @@
+{
+  "cases": [
+    {
+      "family": "independence",
+      "parameters": [],
+      "lower": 1e-250,
+      "upper": 1e-250
+    },
+    {
+      "family": "clayton",
+      "parameters": [
+        0.2
+      ],
+      "lower": 0.03125,
+      "upper": 1.2e-250
+    },
+    {
+      "family": "clayton",
+      "parameters": [
+        1.0
+      ],
+      "lower": 0.5,
+      "upper": 2e-250
+    },
+    {
+      "family": "clayton",
+      "parameters": [
+        2.5
+      ],
+      "lower": 0.757858283255199,
+      "upper": 3.5e-250
+    },
+    {
+      "family": "clayton",
+      "parameters": [
+        9.0
+      ],
+      "lower": 0.9258747122872905,
+      "upper": 1e-249
+    },
+    {
+      "family": "frank",
+      "parameters": [
+        -6.0
+      ],
+      "lower": 1.4909469941067513e-252,
+      "upper": 1.4909469941067513e-252
+    },
+    {
+      "family": "frank",
+      "parameters": [
+        0.5
+      ],
+      "lower": 1.2707470412683992e-250,
+      "upper": 1.2707470412683992e-250
+    },
+    {
+      "family": "frank",
+      "parameters": [
+        12.0
+      ],
+      "lower": 1.200007373100126e-249,
+      "upper": 1.200007373100126e-249
+    },
+    {
+      "family": "gumbel",
+      "parameters": [
+        1.0
+      ],
+      "lower": 1e-250,
+      "upper": 1e-250
+    },
+    {
+      "family": "gumbel",
+      "parameters": [
+        1.3
+      ],
+      "lower": 8.12459620684253e-177,
+      "upper": 0.29563920714285086
+    },
+    {
+      "family": "gumbel",
+      "parameters": [
+        2.5
+      ],
+      "lower": 1.32746263877529e-80,
+      "upper": 0.6804920892271057
+    },
+    {
+      "family": "gumbel",
+      "parameters": [
+        8.0
+      ],
+      "lower": 2.360841515713709e-23,
+      "upper": 0.9094922673347423
+    },
+    {
+      "family": "joe",
+      "parameters": [
+        1.0
+      ],
+      "lower": 1e-250,
+      "upper": 1e-250
+    },
+    {
+      "family": "joe",
+      "parameters": [
+        1.4
+      ],
+      "lower": 1.4e-250,
+      "upper": 0.35932928798472413
+    },
+    {
+      "family": "joe",
+      "parameters": [
+        3.0
+      ],
+      "lower": 3e-250,
+      "upper": 0.7400789501051268
+    },
+    {
+      "family": "joe",
+      "parameters": [
+        10.0
+      ],
+      "lower": 1e-249,
+      "upper": 0.9282265374637069
+    },
+    {
+      "family": "bb1",
+      "parameters": [
+        0.3,
+        1.0
+      ],
+      "lower": 0.09921256574801247,
+      "upper": 1.3e-250
+    },
+    {
+      "family": "bb1",
+      "parameters": [
+        0.5,
+        1.6
+      ],
+      "lower": 0.42044820762685725,
+      "upper": 0.4577891745920592
+    },
+    {
+      "family": "bb1",
+      "parameters": [
+        2.0,
+        3.0
+      ],
+      "lower": 0.8908987181403393,
+      "upper": 0.7400789501051268
+    },
+    {
+      "family": "bb1",
+      "parameters": [
+        0.2,
+        6.0
+      ],
+      "lower": 0.5612310241546865,
+      "upper": 0.877537951690627
+    },
+    {
+      "family": "bb6",
+      "parameters": [
+        1.0,
+        1.0
+      ],
+      "lower": 1e-250,
+      "upper": 1e-250
+    },
+    {
+      "family": "bb6",
+      "parameters": [
+        1.5,
+        1.3
+      ],
+      "lower": 1.0810195908522298e-176,
+      "upper": 0.573163019586757
+    },
+    {
+      "family": "bb6",
+      "parameters": [
+        3.0,
+        2.5
+      ],
+      "lower": 1.885672736822282e-80,
+      "upper": 0.903175020305374
+    },
+    {
+      "family": "bb7",
+      "parameters": [
+        1.0,
+        0.4
+      ],
+      "lower": 0.1767766952966369,
+      "upper": 1.4e-250
+    },
+    {
+      "family": "bb7",
+      "parameters": [
+        1.8,
+        1.2
+      ],
+      "lower": 0.5612310241546865,
+      "upper": 0.5302655077244012
+    },
+    {
+      "family": "bb7",
+      "parameters": [
+        4.0,
+        3.0
+      ],
+      "lower": 0.7937005259840998,
+      "upper": 0.810792884997279
+    },
+    {
+      "family": "bb8",
+      "parameters": [
+        1.5,
+        0.7
+      ],
+      "lower": 1.2564569430772121e-250,
+      "upper": 1.8548564769240402e-250
+    },
+    {
+      "family": "bb8",
+      "parameters": [
+        4.0,
+        0.95
+      ],
+      "lower": 3.8000237501484385e-250,
+      "upper": 5.700047500296877e-249
+    },
+    {
+      "family": "bb8",
+      "parameters": [
+        6.0,
+        0.3
+      ],
+      "lower": 2.0400044880098736e-250,
+      "upper": 2.4857206971569622e-250
+    },
+    {
+      "family": "bb8",
+      "parameters": [
+        3.0,
+        1.0
+      ],
+      "lower": 3e-250,
+      "upper": 0.7400789501051268
+    },
+    {
+      "family": "tawn1",
+      "parameters": [
+        1.5,
+        0.3
+      ],
+      "lower": 2.059849291269297e-202,
+      "upper": 0.1932553417856233
+    },
+    {
+      "family": "tawn1",
+      "parameters": [
+        3.0,
+        0.8
+      ],
+      "lower": 1.1490067609068493e-87,
+      "upper": 0.6522412903365665
+    },
+    {
+      "family": "tawn1",
+      "parameters": [
+        6.0,
+        1.0
+      ],
+      "lower": 2.4237505612701947e-31,
+      "upper": 0.877537951690627
+    },
+    {
+      "family": "tawn1",
+      "parameters": [
+        2.0,
+        0.0
+      ],
+      "lower": 1e-250,
+      "upper": 1e-250
+    },
+    {
+      "family": "tawn2",
+      "parameters": [
+        1.5,
+        0.3
+      ],
+      "lower": 2.059849291269297e-202,
+      "upper": 0.1932553417856233
+    },
+    {
+      "family": "tawn2",
+      "parameters": [
+        3.0,
+        0.8
+      ],
+      "lower": 1.1490067609068493e-87,
+      "upper": 0.6522412903365665
+    },
+    {
+      "family": "tawn2",
+      "parameters": [
+        6.0,
+        1.0
+      ],
+      "lower": 2.4237505612701947e-31,
+      "upper": 0.877537951690627
+    },
+    {
+      "family": "tawn2",
+      "parameters": [
+        2.0,
+        0.0
+      ],
+      "lower": 1e-250,
+      "upper": 1e-250
+    },
+    {
+      "family": "student_t",
+      "parameters": [
+        0.5,
+        3.0
+      ],
+      "lower": 0.3125,
+      "upper": 0.3125
+    },
+    {
+      "family": "student_t",
+      "parameters": [
+        -0.4,
+        2.0
+      ],
+      "lower": 0.07727428998754561,
+      "upper": 0.07727428998754561
+    },
+    {
+      "family": "student_t",
+      "parameters": [
+        0.9,
+        6.0
+      ],
+      "lower": 0.5630278036985401,
+      "upper": 0.5630278036985401
+    },
+    {
+      "family": "student_t",
+      "parameters": [
+        0.0,
+        4.0
+      ],
+      "lower": 0.07558681842161244,
+      "upper": 0.07558681842161244
+    },
+    {
+      "family": "student_t",
+      "parameters": [
+        0.7,
+        1.0
+      ],
+      "lower": 0.6127016653792583,
+      "upper": 0.6127016653792583
+    }
+  ]
+}
