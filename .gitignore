@@ -49,3 +49,6 @@ Thumbs.db
 .RData
 .Ruserdata
 
+
+# WebAssembly packages built by wasm-pack
+crates/rscopulas-wasm/pkg*/

@@ -1,0 +1,5 @@
+# getrandom 0.3 picks its WebAssembly entropy backend from a cfg flag, not a
+# Cargo feature. Without this, `cargo build --target wasm32-unknown-unknown`
+# stops with "the wasm*-unknown-unknown targets are not supported by default".
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

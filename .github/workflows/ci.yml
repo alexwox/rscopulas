@@ -43,6 +43,27 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo bench --no-run
 
+  wasm:
+    name: WebAssembly (build + Node tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+          # Leave RUSTFLAGS unset: cargo ignores the target rustflags in
+          # .cargo/config.toml (the getrandom backend) when it is set.
+          rustflags: ""
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the Node.js and browser packages
+        run: |
+          npx --yes wasm-pack@0.13.1 build crates/rscopulas-wasm --release --target nodejs --out-dir pkg-node
+          npx --yes wasm-pack@0.13.1 build crates/rscopulas-wasm --release --target web --out-dir pkg-web
+      - name: Run Node tests
+        run: node --test "crates/rscopulas-wasm/tests/node/*.test.mjs"
+
   python-tests:
     name: Python tests (${{ matrix.os }}, py${{ matrix.python-version }})
     strategy:

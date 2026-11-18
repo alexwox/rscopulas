@@ -141,11 +141,13 @@ Do not compare harness wall times to Criterion reports directly; methodology dif
 - Pair copulas: density, h-functions, inverses; rotations where supported; **Khoudraji** composition of two base pair kernels ([docs/khoudraji.md](docs/khoudraji.md)).
 - Vines: C-vine, D-vine, R-vine — construct, fit, `log_pdf`, sample, and **exact conditional sampling** via the Rosenblatt transform ([docs/vines.md](docs/vines.md)).
 - HAC: hierarchical Archimedean construction and fitting — behavior and sampling caveats: [docs/hac.md](docs/hac.md) (Python/Rust API also in [docs/python.md](docs/python.md)).
+- JavaScript: the same core compiled to WebAssembly for browsers and Node.js, with models and seeded samples interchangeable with Python ([docs/javascript.md](docs/javascript.md)).
 
 ## Workspace layout (for contributors)
 
 - `crates/rscopulas-core` — Rust library package `rscopulas`, including internal CPU/GPU acceleration support.
 - `crates/rscopulas-python` — PyO3 bindings.
+- `crates/rscopulas-wasm` — WebAssembly bindings for browsers and Node.js ([docs/javascript.md](docs/javascript.md)).
 - `python/` — Python package source.
 - `fixtures/reference/` — R-generated JSON for tests and benchmarks.
 - `benchmarks/` — cross-language benchmark orchestration.
