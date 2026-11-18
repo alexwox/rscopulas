@@ -217,7 +217,7 @@ fn accel_device(device: Device) -> accel::Device {
 }
 
 /// Rows drawn from one random stream by [`sample_rows_chunked`].
-pub(crate) const SAMPLE_CHUNK_ROWS: usize = 1024;
+pub(crate) const SAMPLE_CHUNK_ROWS: usize = 256;
 
 /// Fills an `n × dim` sample in blocks of [`SAMPLE_CHUNK_ROWS`] rows, each
 /// with its own generator.

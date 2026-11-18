@@ -62,7 +62,7 @@ accurate one. Each such case is listed here with the evidence.
 
 - **Change:** all values; these are new random draws for the same seed.
 - **Cause:** the Gaussian, Student t, Clayton, Frank and Gumbel samplers (and
-  the flat hierarchical trees that use them) draw in blocks of 1024 rows.
+  the flat hierarchical trees that use them) draw in blocks of 256 rows.
   The caller's generator supplies one seed per block and each block has its
   own generator, so blocks can be drawn on separate threads and the result
   does not depend on the thread count. Before, one generator was consumed
