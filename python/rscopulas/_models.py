@@ -8,6 +8,7 @@ import numpy.typing as npt
 
 from . import _rscopulas
 from ._rscopulas import InvalidInputError, NonPrefixConditioningError
+from ._tail import TailDependence, TailDependenceMatrix
 
 ModelT = TypeVar("ModelT")
 _ModelT = TypeVar("_ModelT", bound="_SerializableMixin")
@@ -525,6 +526,23 @@ class PairCopula(_SerializableMixin):
             )
         )
 
+    def tail_dependence(self) -> TailDependence | None:
+        """Closed-form tail-dependence coefficients implied by this pair copula.
+
+        Returns ``None`` for Khoudraji and TLL pair copulas, which have no
+        closed form. Compare with :func:`rscopulas.empirical_tail_dependence`.
+        """
+        pair = self._core.tail_dependence()
+        return None if pair is None else TailDependence(float(pair[0]), float(pair[1]))
+
+    def tail_concentration(self, q: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """The model's tail concentration function at each level in ``q``.
+
+        ``P(U2 <= q | U1 <= q)`` for ``q <= 0.5`` and ``P(U2 > q | U1 > q)``
+        above. Levels must lie strictly inside ``(0, 1)``.
+        """
+        return np.asarray(self._core.tail_concentration(_as_float_vector(q)))
+
 
 class GaussianCopula(_BaseModel):
     _core_cls = _rscopulas._GaussianCopula
@@ -549,6 +567,11 @@ class GaussianCopula(_BaseModel):
     @property
     def correlation(self) -> npt.NDArray[np.float64]:
         return np.asarray(self._core.correlation).copy()
+
+    def tail_dependence(self) -> TailDependenceMatrix:
+        """Pairwise tail-dependence coefficients implied by the model."""
+        lower, upper = self._core.tail_dependence()
+        return TailDependenceMatrix(np.asarray(lower), np.asarray(upper))
 
 
 class StudentTCopula(_BaseModel):
@@ -589,6 +612,11 @@ class StudentTCopula(_BaseModel):
     def degrees_of_freedom(self) -> float:
         return float(self._core.degrees_of_freedom)
 
+    def tail_dependence(self) -> TailDependenceMatrix:
+        """Pairwise tail-dependence coefficients implied by the model."""
+        lower, upper = self._core.tail_dependence()
+        return TailDependenceMatrix(np.asarray(lower), np.asarray(upper))
+
 
 class ClaytonCopula(_BaseModel):
     _core_cls = _rscopulas._ClaytonCopula
@@ -613,6 +641,11 @@ class ClaytonCopula(_BaseModel):
     @property
     def theta(self) -> float:
         return float(self._core.theta)
+
+    def tail_dependence(self) -> TailDependenceMatrix:
+        """Pairwise tail-dependence coefficients implied by the model."""
+        lower, upper = self._core.tail_dependence()
+        return TailDependenceMatrix(np.asarray(lower), np.asarray(upper))
 
 
 class FrankCopula(_BaseModel):
@@ -639,6 +672,11 @@ class FrankCopula(_BaseModel):
     def theta(self) -> float:
         return float(self._core.theta)
 
+    def tail_dependence(self) -> TailDependenceMatrix:
+        """Pairwise tail-dependence coefficients implied by the model."""
+        lower, upper = self._core.tail_dependence()
+        return TailDependenceMatrix(np.asarray(lower), np.asarray(upper))
+
 
 class GumbelCopula(_BaseModel):
     _core_cls = _rscopulas._GumbelCopula
@@ -663,6 +701,11 @@ class GumbelCopula(_BaseModel):
     @property
     def theta(self) -> float:
         return float(self._core.theta)
+
+    def tail_dependence(self) -> TailDependenceMatrix:
+        """Pairwise tail-dependence coefficients implied by the model."""
+        lower, upper = self._core.tail_dependence()
+        return TailDependenceMatrix(np.asarray(lower), np.asarray(upper))
 
 
 class HierarchicalArchimedeanCopula(_BaseModel):

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Tail diagnostics (`rscopulas::tail`, [docs/tail-dependence.md](docs/tail-dependence.md)).
+  `PairCopulaSpec::tail_dependence` returns the closed-form lower and upper
+  tail-dependence coefficients of every parametric pair family, with
+  rotations; `GaussianCopula`, `StudentTCopula`, `ClaytonCopula`,
+  `FrankCopula` and `GumbelHougaardCopula` return them for every pair.
+  `empirical_tail_dependence`, `..._curve`, `..._matrix` and
+  `empirical_tail_concentration` estimate them from ranks, so they accept raw
+  data. `PairCopulaSpec::tail_concentration` gives the model's value at a
+  finite level for comparison. Python gains the same functions, the
+  `tail_dependence()` / `tail_concentration()` model methods, and
+  `plot_tail_concentration` / `plot_tail_dependence`.
+  The closed forms agree to 1e-10 with limits computed from each family's
+  distribution function at 1300 digits
+  (`scripts/reference/generate_tail_dependence_truth.py`), and the Student t
+  values with R `copula::lambda` to 1e-13.
 - Margins with extreme-value tails (`rscopulas::margins`,
   [docs/margins.md](docs/margins.md)). `SemiParametricMargin` models one
   variable as an interpolated empirical body with generalized Pareto tails

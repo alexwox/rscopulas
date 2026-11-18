@@ -22,6 +22,7 @@ use rscopulas::{
         GeneralizedExtremeValue, GeneralizedPareto, GevFit, GpdTail, MarginFitOptions, Margins,
         Threshold,
     },
+    tail::TailDependenceMatrix,
 };
 
 // ---------------------------------------------------------------------------
@@ -1095,6 +1096,14 @@ impl PyGaussianCopula {
         })
     }
 
+    /// Pairwise `(lower, upper)` tail-dependence matrices implied by the model.
+    fn tail_dependence<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
+        tail_matrices_to_py(py, self.inner.tail_dependence())
+    }
+
     fn to_json(&self) -> PyResult<String> {
         json_string!(&self.inner, "Gaussian copula")
     }
@@ -1217,6 +1226,14 @@ impl PyStudentTCopula {
                 inner: parse_json!(StudentTCopula, payload, "Student t copula")?,
             })
         })
+    }
+
+    /// Pairwise `(lower, upper)` tail-dependence matrices implied by the model.
+    fn tail_dependence<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
+        tail_matrices_to_py(py, self.inner.tail_dependence())
     }
 
     fn to_json(&self) -> PyResult<String> {
@@ -1355,6 +1372,14 @@ macro_rules! archimedean_pyclass {
                             ))
                         })
                 })
+            }
+
+            /// Pairwise `(lower, upper)` tail-dependence matrices implied by the model.
+            fn tail_dependence<'py>(
+                &self,
+                py: Python<'py>,
+            ) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
+                tail_matrices_to_py(py, self.inner.tail_dependence())
             }
 
             fn to_json(&self) -> PyResult<String> {
@@ -1616,6 +1641,37 @@ impl PyPairCopula {
                 InvalidInputError::new_err(format!("failed to deserialize pair copula: {err}"))
             })?;
             Ok(Self { inner })
+        })
+    }
+
+    /// Closed-form `(lower, upper)` tail-dependence coefficients, or `None`
+    /// for families without one (Khoudraji, TLL).
+    fn tail_dependence(&self) -> PyResult<Option<(f64, f64)>> {
+        catch_internal_panic(|| {
+            Ok(self
+                .inner
+                .tail_dependence()
+                .map_err(to_pyerr)?
+                .map(|pair| (pair.lower, pair.upper)))
+        })
+    }
+
+    /// The model's tail concentration function at each level in `q`.
+    fn tail_concentration<'py>(
+        &self,
+        py: Python<'py>,
+        q: PyReadonlyArray1<'_, f64>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        catch_internal_panic(|| {
+            let levels = vector_from_py(q);
+            let spec = &self.inner;
+            let values = detached(py, move || {
+                levels
+                    .into_iter()
+                    .map(|level| spec.tail_concentration(level))
+                    .collect::<Result<Vec<_>, CopulaError>>()
+            })?;
+            Ok(values.into_pyarray(py))
         })
     }
 
@@ -3029,6 +3085,88 @@ fn threshold_stability<'py>(
     })
 }
 
+/// `(lower, upper)` arrays handed back by the tail diagnostics.
+type TailVectors<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+type TailMatrices<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>);
+
+fn tail_matrices_to_py<'py>(py: Python<'py>, matrices: TailDependenceMatrix) -> TailMatrices<'py> {
+    (
+        matrices.lower.into_pyarray(py),
+        matrices.upper.into_pyarray(py),
+    )
+}
+
+/// Rank-based `(lower, upper)` tail-dependence estimate from the `k` most
+/// extreme observations in each tail.
+#[pyfunction]
+fn empirical_tail_dependence(
+    py: Python<'_>,
+    first: PyReadonlyArray1<'_, f64>,
+    second: PyReadonlyArray1<'_, f64>,
+    k: usize,
+) -> PyResult<(f64, f64)> {
+    catch_internal_panic(|| {
+        let (first, second) = paired_vectors_from_py(first, second, "u1", "u2")?;
+        let pair = detached(py, move || {
+            rscopulas::tail::empirical_tail_dependence(&first, &second, k)
+        })?;
+        Ok((pair.lower, pair.upper))
+    })
+}
+
+/// `empirical_tail_dependence` at every `k` in `ks`: `(lower, upper)` arrays.
+#[pyfunction]
+fn empirical_tail_dependence_curve<'py>(
+    py: Python<'py>,
+    first: PyReadonlyArray1<'_, f64>,
+    second: PyReadonlyArray1<'_, f64>,
+    ks: Vec<usize>,
+) -> PyResult<TailVectors<'py>> {
+    catch_internal_panic(|| {
+        let (first, second) = paired_vectors_from_py(first, second, "u1", "u2")?;
+        let curve = detached(py, move || {
+            rscopulas::tail::empirical_tail_dependence_curve(&first, &second, &ks)
+        })?;
+        let lower: Vec<f64> = curve.iter().map(|pair| pair.lower).collect();
+        let upper: Vec<f64> = curve.iter().map(|pair| pair.upper).collect();
+        Ok((lower.into_pyarray(py), upper.into_pyarray(py)))
+    })
+}
+
+/// Pairwise `(lower, upper)` tail-dependence estimates for an `(n, d)` matrix.
+#[pyfunction]
+fn empirical_tail_dependence_matrix<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray2<'_, f64>,
+    k: usize,
+) -> PyResult<TailMatrices<'py>> {
+    catch_internal_panic(|| {
+        let data = matrix_from_py(data);
+        let matrices = detached(py, move || {
+            rscopulas::tail::empirical_tail_dependence_matrix(data.view(), k)
+        })?;
+        Ok(tail_matrices_to_py(py, matrices))
+    })
+}
+
+/// Empirical tail concentration function at each level in `q`.
+#[pyfunction]
+fn empirical_tail_concentration<'py>(
+    py: Python<'py>,
+    first: PyReadonlyArray1<'_, f64>,
+    second: PyReadonlyArray1<'_, f64>,
+    q: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    catch_internal_panic(|| {
+        let (first, second) = paired_vectors_from_py(first, second, "u1", "u2")?;
+        let levels = vector_from_py(q);
+        let values = detached(py, move || {
+            rscopulas::tail::empirical_tail_concentration(&first, &second, &levels)
+        })?;
+        Ok(values.into_pyarray(py))
+    })
+}
+
 #[pymodule]
 fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -3065,5 +3203,9 @@ fn _rscopulas(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(block_maxima, module)?)?;
     module.add_function(wrap_pyfunction!(mean_excess, module)?)?;
     module.add_function(wrap_pyfunction!(threshold_stability, module)?)?;
+    module.add_function(wrap_pyfunction!(empirical_tail_dependence, module)?)?;
+    module.add_function(wrap_pyfunction!(empirical_tail_dependence_curve, module)?)?;
+    module.add_function(wrap_pyfunction!(empirical_tail_dependence_matrix, module)?)?;
+    module.add_function(wrap_pyfunction!(empirical_tail_concentration, module)?)?;
     Ok(())
 }

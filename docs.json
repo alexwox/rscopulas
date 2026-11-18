@@ -47,6 +47,7 @@
               "docs/khoudraji",
               "docs/hac",
               "docs/margins",
+              "docs/tail-dependence",
               "docs/examples"
             ]
           },

@@ -68,6 +68,10 @@ Full detail: [hac.md](hac.md).
 
 `Margins.fit(x)` fits an empirical body with generalized Pareto tails to every column of raw data; `margins.cdf(x)` gives pseudo-observations and `margins.quantile(u)` maps simulated uniforms back to the raw scale. `SemiParametricMargin` is the one-column version, `GeneralizedPareto` and `GeneralizedExtremeValue` are the distributions with `fit`, and `mean_excess` / `threshold_stability` help choose a threshold. See [margins.md](margins.md).
 
+## Tail dependence
+
+`PairCopula.tail_dependence()` and the `tail_dependence()` method of `GaussianCopula`, `StudentTCopula`, `ClaytonCopula`, `FrankCopula` and `GumbelCopula` return the coefficients the model implies. `empirical_tail_dependence`, `empirical_tail_dependence_matrix`, `empirical_tail_dependence_curve` and `empirical_tail_concentration` estimate them from raw data or pseudo-observations. See [tail-dependence.md](tail-dependence.md).
+
 ## Serialization, pickling, and copying
 
 Every model class (`GaussianCopula`, `StudentTCopula`, `ClaytonCopula`, `FrankCopula`, `GumbelCopula`, `VineCopula`, `HierarchicalArchimedeanCopula`, `FactorCopula`, `PairCopula`) supports:
@@ -122,6 +126,7 @@ Install with the `viz` extra (`uv add "rscopulas[viz]"` in a uv project, or `uv 
 
 - `plot_density`, `plot_scatter`, `plot_vine_structure`
 - `plot_mean_excess`, `plot_threshold_stability` — see [margins.md](margins.md)
+- `plot_tail_concentration`, `plot_tail_dependence` — see [tail-dependence.md](tail-dependence.md)
 
 The base package does not depend on Matplotlib.
 

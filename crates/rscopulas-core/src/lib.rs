@@ -163,6 +163,7 @@ pub mod margins;
 pub mod math;
 pub mod paircopula;
 pub mod stats;
+pub mod tail;
 pub mod vine;
 
 pub use data::PseudoObs;
@@ -184,3 +185,4 @@ pub use paircopula::{
     KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, TllOrder,
     TllParams, tll_fit,
 };
+pub use tail::{TailDependence, TailDependenceMatrix};
