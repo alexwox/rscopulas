@@ -21,6 +21,8 @@ repository for reference testing.
 - `run.py`: top-level orchestrator that runs Rust, Python, and R
 - `python_runner.py`: Python package benchmarks
 - `r_runner.R`: R package benchmarks
+- `compare_pyvinecopulib.py`: model-selection comparison with pyvinecopulib (accuracy and fit time)
+- `compare_pyvinecopulib_features.py`: time of every operation shared with pyvinecopulib, at equal thread counts
 - `output/`: generated JSON and Markdown summaries
 
 The Rust runner lives at `crates/rscopulas-core/examples/benchmark_runner.rs`
