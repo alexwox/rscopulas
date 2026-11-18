@@ -88,11 +88,61 @@ pub fn log_pdf(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
     // cancellation that wrecks the naive `exp_m1`-based form for large θ
     // (e.g. θ ≈ 37 with u, v well away from 0 makes the raw subtraction
     // evaluate to exactly zero and produces a spurious +∞ log density).
+    if theta <= DIRECT_THETA_MAX {
+        let (first, second) = ((-theta * u1).exp(), (-theta * u2).exp());
+        let den = denominator(first, second, u2, theta);
+        return Ok((theta * one_minus_exp_neg(theta) * first * second / (den * den)).ln());
+    }
     let log_t1 = -theta * u1 + log_one_minus_exp_neg(theta * u2);
     let log_t2 = -theta * u2 + log_one_minus_exp_neg(theta * (1.0 - u2));
     let log_den = logsumexp2(log_t1, log_t2);
     let log_d = log_one_minus_exp_neg(theta);
     Ok(theta.ln() + log_d - theta * (u1 + u2) - 2.0 * log_den)
+}
+
+/// Largest `θ` evaluated without logarithms. Below it `e^{-θ(u+v)}` and the
+/// squared denominator stay far above the underflow threshold for every
+/// argument in `[1e-12, 1 − 1e-12]`.
+const DIRECT_THETA_MAX: f64 = 100.0;
+
+/// `1 − e^{−x}` for `x > 0` without cancellation.
+#[inline]
+fn one_minus_exp_neg(x: f64) -> f64 {
+    if x > std::f64::consts::LN_2 {
+        1.0 - (-x).exp()
+    } else {
+        -(-x).exp_m1()
+    }
+}
+
+/// `T1 + T2 = e^{−θu}(1 − e^{−θv}) + (e^{−θv} − e^{−θ})`, a sum of two
+/// positive terms, given `first = e^{−θu}` and `second = e^{−θv}`.
+#[inline]
+fn denominator(first: f64, second: f64, v: f64, theta: f64) -> f64 {
+    let one_minus_second = if second <= 0.5 {
+        1.0 - second
+    } else {
+        -(-theta * v).exp_m1()
+    };
+    let gap = theta * (1.0 - v);
+    let second_minus_floor = if gap > std::f64::consts::LN_2 {
+        second - (-theta).exp()
+    } else {
+        -second * (-gap).exp_m1()
+    };
+    first * one_minus_second + second_minus_floor
+}
+
+/// `h(u | v) = e^{−θv}(1 − e^{−θu}) / (T1 + T2)` for `0 < θ ≤ DIRECT_THETA_MAX`.
+#[inline]
+fn direct_conditional(u: f64, v: f64, theta: f64) -> f64 {
+    let (first, second) = ((-theta * u).exp(), (-theta * v).exp());
+    let one_minus_first = if first <= 0.5 {
+        1.0 - first
+    } else {
+        -(-theta * u).exp_m1()
+    };
+    second * one_minus_first / denominator(first, second, v, theta)
 }
 
 pub fn cond_first_given_second(u1: f64, u2: f64, theta: f64) -> Result<f64, CopulaError> {
@@ -101,6 +151,9 @@ pub fn cond_first_given_second(u1: f64, u2: f64, theta: f64) -> Result<f64, Copu
         return Ok(1.0 - cond_first_given_second(1.0 - u1, u2, -theta)?);
     }
     // h_{1|2}(u1 | u2) = e^{-θ u2} (1 - e^{-θ u1}) / [T1 + T2]
+    if theta <= DIRECT_THETA_MAX {
+        return Ok(direct_conditional(u1, u2, theta));
+    }
     // The log form is stable even when the denominator underflows.
     let log_num = -theta * u2 + log_one_minus_exp_neg(theta * u1);
     let log_t1 = -theta * u1 + log_one_minus_exp_neg(theta * u2);
@@ -115,6 +168,9 @@ pub fn cond_second_given_first(u1: f64, u2: f64, theta: f64) -> Result<f64, Copu
     validate_theta(theta)?;
     if theta < 0.0 {
         return cond_second_given_first(1.0 - u1, u2, -theta);
+    }
+    if theta <= DIRECT_THETA_MAX {
+        return Ok(direct_conditional(u2, u1, theta));
     }
     let log_num = -theta * u1 + log_one_minus_exp_neg(theta * u2);
     let log_t1 = -theta * u2 + log_one_minus_exp_neg(theta * u1);
