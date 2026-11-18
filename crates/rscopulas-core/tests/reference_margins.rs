@@ -332,6 +332,54 @@ fn generalized_extreme_value_fit_reaches_the_reference_maximum() {
     }
 }
 
+/// With a short, bounded sample the likelihood can be largest on the
+/// boundary `shape = -1`, the uniform distribution on `[0, max]`. The fit
+/// must never return less than that, and never less than any interior point.
+#[test]
+fn generalized_pareto_fit_never_loses_to_the_boundary_or_a_grid() {
+    let mut rng = StdRng::seed_from_u64(31);
+    let mut on_boundary = 0;
+    for case in 0..400 {
+        let n = [8, 20, 50][case % 3];
+        let shape = -0.9 + 1.6 * rng.random::<f64>(); // -0.9 .. 0.7
+        let truth = GeneralizedPareto::new(1.0 + 9.0 * rng.random::<f64>(), shape).unwrap();
+        let sample: Vec<f64> = (0..n)
+            .map(|_| truth.quantile(rng.random::<f64>()).unwrap())
+            .collect();
+        let fit = GeneralizedPareto::fit(&sample).unwrap();
+        let largest = sample.iter().copied().fold(0.0, f64::max);
+        let boundary = -(n as f64) * largest.ln();
+        assert!(
+            fit.loglik >= boundary - 1e-9,
+            "case {case}: below the boundary"
+        );
+        if fit.model.shape() == -1.0 {
+            on_boundary += 1;
+            assert_eq!(fit.model.scale(), largest);
+            assert!(fit.covariance.is_none());
+        }
+
+        // Brute force over (scale, shape) with shape >= -1.
+        let mut best = f64::NEG_INFINITY;
+        for i in 0..=120 {
+            let candidate_shape = -1.0 + 3.0 * i as f64 / 120.0;
+            for j in 0..=120 {
+                let scale = largest * 10f64.powf(-2.0 + 3.0 * j as f64 / 120.0);
+                let candidate = GeneralizedPareto::new(scale, candidate_shape).unwrap();
+                let value: f64 = sample.iter().map(|y| candidate.ln_pdf(*y)).sum();
+                best = best.max(value);
+            }
+        }
+        assert!(
+            fit.loglik >= best - 1e-9,
+            "case {case} (n = {n}, shape {shape:.2}): {} < grid {best}",
+            fit.loglik
+        );
+    }
+    // The boundary case really occurs in this set.
+    assert!(on_boundary > 10, "{on_boundary} boundary fits");
+}
+
 #[test]
 fn fits_reject_bad_input() {
     assert!(GeneralizedPareto::fit(&[1.0]).is_err());

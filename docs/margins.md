@@ -154,6 +154,9 @@ the log-likelihood and the asymptotic covariance of the parameters.
   with SciPy to `5e-6` (GPD) and `2e-5` (GEV), standard errors to `2e-4`.
 - GEV return levels and their delta-method standard errors agree with
   `extRemes` to `1e-3` and `5e-3`.
+- On 400 short samples (8 to 50 points, shapes from -0.9 to 0.7) the GPD fit
+  is never below a brute-force grid over `(scale, shape)` or below the
+  boundary solution `shape = -1`.
 - The margin is checked on a distribution with a closed-form distribution
   function and exactly generalized Pareto tails: continuity at both joins,
   monotonicity, exact inversion, and no bias in the extrapolated survival
@@ -161,3 +164,21 @@ the log-likelihood and the asymptotic covariance of the parameters.
 - An end-to-end test (raw data, margins, Gumbel copula, one million simulated
   points, back to the raw scale) recovers a joint exceedance probability of
   `2.9e-4` known in closed form.
+
+## Speed
+
+Measured on an Apple M3 Pro, best of several runs, all reaching the same
+log-likelihood to six decimals or better:
+
+| Task | rscopulas | SciPy | R `evd` | R `extRemes` |
+| --- | --- | --- | --- | --- |
+| GPD fit, 1 000 excesses | 0.3 ms | 3.5 ms | 1 ms | 2 ms |
+| GPD fit, 100 000 excesses | 38 ms | 100 ms | 88 ms | 224 ms |
+| GEV fit, 200 maxima | 0.1 ms | 11 ms | 1 ms | 1 ms |
+| GEV fit, 20 000 maxima | 24 ms | 152 ms | 74 ms | 75 ms |
+| GPD fits above 40 thresholds, n = 100 000 | 332 ms | 991 ms | | |
+
+R's timer resolves 1 ms, so its small-sample figures are upper bounds.
+Fitting both tails of five columns of 100 000 observations takes 59 ms, and
+transforming them 15 ms each way; a rank transform of the same matrix takes
+41 ms.

@@ -19,7 +19,9 @@
   `threshold_stability`) and `plot_mean_excess` / `plot_threshold_stability`.
   Fits reach the log-likelihood of a tightly converged search on SciPy's
   likelihood and of R's `evd`; return-level errors agree with `extRemes`
-  (`scripts/reference/generate_evt_fixtures.py`).
+  (`scripts/reference/generate_evt_fixtures.py`). They are 3 to 100 times
+  faster than `scipy.stats` and 2 to 10 times faster than `evd` (table in
+  the guide).
 - `InputError` has a new variant, `InvalidArgument`.
 
 ## 0.5.0 — 2026-11-10

@@ -42,7 +42,8 @@ use crate::{
     PseudoObs,
     errors::{CopulaError, FitError, InputError},
     math::{
-        NelderMeadOptions, inverse, maximize_scalar_brent, nelder_mead_maximize, numerical_hessian,
+        NelderMeadOptions, QuasiNewtonOptions, inverse, maximize_scalar_brent,
+        nelder_mead_maximize, numerical_hessian, quasi_newton_maximize,
     },
 };
 
@@ -260,33 +261,47 @@ impl GeneralizedPareto {
         };
 
         // Grid: tau * mean from 1e-6 to 1e4 on the heavy side, and tau
-        // approaching -1 / max(y) geometrically on the bounded side.
-        let mut grid = Vec::with_capacity(160);
-        for step in (0..60).rev() {
-            let gap = 10f64.powf(-12.0 * step as f64 / 59.0); // 1e-12 ..= 1
+        // approaching -1 / max(y) geometrically on the bounded side. Each
+        // point costs one pass over the sample, so the grid is only as fine
+        // as it needs to be to bracket the maximum; Brent does the rest.
+        let mut grid = Vec::with_capacity(72);
+        for step in (0..25).rev() {
+            let gap = 10f64.powf(-12.0 * step as f64 / 24.0); // 1e-12 ..= 1
             grid.push(-(1.0 - gap) / largest);
         }
         grid.push(0.0);
-        for step in 0..80 {
-            grid.push(10f64.powf(-6.0 + 10.0 * step as f64 / 79.0) / mean);
+        for step in 0..41 {
+            grid.push(10f64.powf(-6.0 + 10.0 * step as f64 / 40.0) / mean);
         }
         grid.sort_by(f64::total_cmp);
         grid.dedup();
 
+        let values: Vec<f64> = grid.iter().map(|tau| at(*tau).0).collect();
         let best = (0..grid.len())
-            .max_by(|a, b| at(grid[*a]).0.total_cmp(&at(grid[*b]).0))
+            .max_by(|a, b| values[*a].total_cmp(&values[*b]))
             .expect("grid is not empty");
         let low = grid[best.saturating_sub(1)];
         let high = grid[(best + 1).min(grid.len() - 1)];
+        // The likelihood is flat to second order at its maximum, so a
+        // relative 1e-10 on tau leaves the log-likelihood exact to rounding.
         let refined = maximize_scalar_brent(
             low,
             high,
             Some(grid[best]),
-            1e-13 * (high - low).abs(),
-            200,
+            1e-10 * (high - low).abs(),
+            80,
             |tau| at(tau).0,
         );
-        let (loglik, scale, shape) = at(refined.x);
+        let (mut loglik, mut scale, mut shape) = at(refined.x);
+        // The profile only reaches the boundary shape = -1 at a scale above
+        // max(y). The best point on that boundary is the uniform
+        // distribution on [0, max(y)], with log-likelihood -n ln(max(y));
+        // for small samples with a bounded tail it can beat every interior
+        // point, so it is compared explicitly.
+        let boundary = -n * largest.ln();
+        if boundary > loglik || !loglik.is_finite() {
+            (loglik, scale, shape) = (boundary, largest, -1.0);
+        }
         if !loglik.is_finite() {
             return Err(FitError::Failed {
                 reason: "generalized Pareto likelihood has no finite maximum for this sample",
@@ -414,10 +429,11 @@ impl GeneralizedExtremeValue {
 
     /// Maximum-likelihood fit to block maxima.
     ///
-    /// Starts from the probability-weighted-moment estimates of Hosking,
-    /// Wallis and Wood (1985), or from Gumbel moments when those do not
-    /// cover the sample, and maximises the likelihood in
-    /// `(location, ln scale, shape)` with a restarted Nelder–Mead search.
+    /// Starts from the best of the probability-weighted-moment estimates of
+    /// Hosking, Wallis and Wood (1985) and two moment-based guesses, and
+    /// maximises the likelihood in `(location, ln scale, shape)` with a
+    /// quasi-Newton search, falling back to a restarted Nelder–Mead search
+    /// if that does not converge.
     /// The shape is restricted to `[-1, 5]`.
     pub fn fit(maxima: &[f64]) -> Result<GevFit, CopulaError> {
         require_finite(maxima)?;
@@ -456,33 +472,64 @@ impl GeneralizedExtremeValue {
         // The widest start always covers the sample.
         starts.push([mean, 2.0 * std_dev, 0.1]);
 
-        let options = NelderMeadOptions {
+        // Search in standardised coordinates so the three parameters have
+        // comparable scales: ((location - mean) / sd, ln(scale / sd), shape).
+        let objective = |x: &[f64]| loglik(mean + std_dev * x[0], std_dev.ln() + x[1], x[2]);
+        let bounds = [(-50.0, 50.0), (1e-8f64.ln(), 1e4f64.ln()), (-1.0, 5.0)];
+        let mut starts: Vec<(f64, [f64; 3])> = starts
+            .into_iter()
+            .map(|start| {
+                let x0 = [
+                    (start[0] - mean) / std_dev,
+                    (start[1] / std_dev).ln(),
+                    start[2],
+                ];
+                (objective(&x0), x0)
+            })
+            .filter(|(value, _)| value.is_finite())
+            .collect();
+        starts.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        // A quasi-Newton search from the best start needs a few dozen passes
+        // over the sample. The simplex search is the fallback for a start in
+        // a region where the finite-difference model fails; it costs
+        // thousands of passes, so it only runs when needed.
+        let newton = QuasiNewtonOptions {
+            ftol: 1e-11,
+            initial_step: 0.05,
+            max_iter: 200,
+            parallel_gradient: false,
+        };
+        let simplex = NelderMeadOptions {
             initial_step: 0.1,
             ftol: 1e-12,
             xtol: 1e-10,
             max_iter: 4000,
             restarts: 6,
         };
-        let spread = 50.0 * std_dev;
-        let bounds = [
-            (mean - spread, mean + spread),
-            ((1e-8 * std_dev).ln(), (1e4 * std_dev).ln()),
-            (-1.0, 5.0),
-        ];
         let mut best: Option<(f64, Vec<f64>)> = None;
-        for start in starts {
-            let x0 = [start[0], start[1].ln(), start[2]];
-            if !loglik(x0[0], x0[1], x0[2]).is_finite() {
-                continue;
+        for (_, x0) in &starts {
+            let result = quasi_newton_maximize(x0, &bounds, &newton, objective);
+            let (value, x) = if result.converged {
+                (result.value, result.x)
+            } else {
+                let polished = nelder_mead_maximize(&result.x, &bounds, &simplex, objective);
+                (polished.value, polished.x)
+            };
+            if best
+                .as_ref()
+                .is_none_or(|(incumbent, _)| value > *incumbent)
+            {
+                best = Some((value, x));
             }
-            let result = nelder_mead_maximize(&x0, &bounds, &options, |x| loglik(x[0], x[1], x[2]));
-            if best.as_ref().is_none_or(|(value, _)| result.value > *value) {
-                best = Some((result.value, result.x));
+            if result.converged {
+                break;
             }
         }
         let (loglik_value, x) = best.ok_or(FitError::Failed {
             reason: "no starting value gave a finite generalized extreme value likelihood",
         })?;
+        let x = [mean + std_dev * x[0], std_dev.ln() + x[1], x[2]];
         let model = Self::new(x[0], x[1].exp(), x[2])?;
 
         let covariance = if model.shape > -1.0 + 1e-6 && model.shape < 5.0 - 1e-6 {
