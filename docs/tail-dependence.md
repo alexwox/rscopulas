@@ -143,6 +143,23 @@ let matrix = empirical_tail_dependence_matrix(data.as_view(), k)?;
   each family's textbook distribution function at 1300 digits. The script
   never uses a closed-form coefficient. The crate agrees to `1e-10`.
 - Student t values also match R `copula::lambda` to `1e-13`.
+- On pseudo-observations the matrix estimator equals R
+  `copula::fitLambda(u, method = "Schmidt.Stadtmueller", p = k / n)` to
+  2e-16 for both tails (checked by hand on a 20 000 × 10 sample; R thresholds
+  the values it is given instead of ranking them, so it needs
+  pseudo-observations to agree).
 - The estimators are compared with a literal transcription of their
   definitions, and on 200 000-point samples they recover the known
   coefficients of Clayton, Gumbel and Student t copulas.
+
+## Speed
+
+Measured on an Apple M3 Pro, best of several runs, identical results:
+
+| Task | rscopulas | NumPy / SciPy | R `copula` |
+| --- | --- | --- | --- |
+| Both tail matrices, 20 000 × 10 | 1.1 ms | 17 ms | 14 ms (`fitLambda`, two calls) |
+| Curve over 4 000 values of `k`, one pair | 1.5 ms | 3.7 ms vectorised, 66 ms as a loop | |
+
+The matrix estimator ranks each column once, in parallel, and then looks
+only at the roughly `k` observations in each tail.

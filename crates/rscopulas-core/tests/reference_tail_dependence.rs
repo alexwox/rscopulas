@@ -424,6 +424,33 @@ fn matrix_estimator_is_symmetric_with_unit_diagonal() {
         .unwrap();
     assert_eq!(matrix.lower[(0, 2)], pair.lower);
     assert_eq!(matrix.upper[(0, 2)], pair.upper);
+
+    // Every entry equals the pairwise estimator, at several k and with ties.
+    let mut tied = sample.clone();
+    for row in 0..40 {
+        tied[(row, 1)] = tied[(0, 1)];
+        tied[(row + 100, 0)] = tied[(100, 0)];
+    }
+    for k in [1, 7, 44, 500, 2_000] {
+        let matrix = empirical_tail_dependence_matrix(tied.view(), k).unwrap();
+        for left in 0..3 {
+            for right in 0..3 {
+                if left == right {
+                    continue;
+                }
+                let pair = empirical_tail_dependence(
+                    &tied.column(left).to_vec(),
+                    &tied.column(right).to_vec(),
+                    k,
+                )
+                .unwrap();
+                assert_eq!(matrix.lower[(left, right)], pair.lower, "k = {k}");
+                assert_eq!(matrix.upper[(left, right)], pair.upper, "k = {k}");
+            }
+        }
+    }
+    assert!(empirical_tail_dependence_matrix(sample.view(), 0).is_err());
+    assert!(empirical_tail_dependence_matrix(sample.view(), 2_001).is_err());
 }
 
 #[test]

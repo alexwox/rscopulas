@@ -408,21 +408,71 @@ pub fn empirical_tail_dependence_curve(
 
 /// [`empirical_tail_dependence`] for every pair of columns of an `(n, d)`
 /// matrix. Pass `PseudoObs::as_view()` or a matrix of raw observations.
+///
+/// Each column is ranked once (columns in parallel). A pair then only needs
+/// the observations that are in the tail of its first column, about `k` of
+/// them, so the cost is `d` sorts plus `d^2 k` lookups.
 pub fn empirical_tail_dependence_matrix(
     data: ArrayView2<'_, f64>,
     k: usize,
 ) -> Result<TailDependenceMatrix, CopulaError> {
-    let dim = data.ncols();
-    let columns: Vec<Vec<f64>> = (0..dim).map(|idx| data.column(idx).to_vec()).collect();
+    use rayon::prelude::*;
+
+    let (n_obs, dim) = data.dim();
+    if n_obs < 2 {
+        return Err(InputError::InvalidArgument {
+            reason: "tail estimators need at least two observations",
+        }
+        .into());
+    }
+    if data.iter().any(|value| !value.is_finite()) {
+        return Err(InputError::NonFiniteValue.into());
+    }
+    if k == 0 || k > n_obs {
+        return Err(InputError::InvalidArgument {
+            reason: "k must lie between 1 and the number of observations",
+        }
+        .into());
+    }
+
+    /// Which observations of one column are in each tail.
+    struct Tails {
+        in_lower: Vec<bool>,
+        in_upper: Vec<bool>,
+        lower: Vec<usize>,
+        upper: Vec<usize>,
+    }
+    let (low, high) = (k as f64, (n_obs - k) as f64);
+    let tails: Vec<Tails> = (0..dim)
+        .into_par_iter()
+        .map(|col| {
+            let ranks = average_ranks(&data.column(col).to_vec());
+            let in_lower: Vec<bool> = ranks.iter().map(|rank| *rank <= low).collect();
+            let in_upper: Vec<bool> = ranks.iter().map(|rank| *rank > high).collect();
+            let members = |flags: &[bool]| (0..n_obs).filter(|idx| flags[*idx]).collect();
+            Tails {
+                lower: members(&in_lower),
+                upper: members(&in_upper),
+                in_lower,
+                in_upper,
+            }
+        })
+        .collect();
+
+    let scale = k as f64;
     let mut lower = Array2::eye(dim);
     let mut upper = Array2::eye(dim);
     for left in 0..dim {
         for right in (left + 1)..dim {
-            let pair = empirical_tail_dependence(&columns[left], &columns[right], k)?;
-            lower[(left, right)] = pair.lower;
-            lower[(right, left)] = pair.lower;
-            upper[(left, right)] = pair.upper;
-            upper[(right, left)] = pair.upper;
+            let both = |members: &[usize], flags: &[bool]| {
+                (members.iter().filter(|idx| flags[**idx]).count() as f64 / scale).min(1.0)
+            };
+            let below = both(&tails[left].lower, &tails[right].in_lower);
+            let above = both(&tails[left].upper, &tails[right].in_upper);
+            lower[(left, right)] = below;
+            lower[(right, left)] = below;
+            upper[(left, right)] = above;
+            upper[(right, left)] = above;
         }
     }
     Ok(TailDependenceMatrix { lower, upper })
