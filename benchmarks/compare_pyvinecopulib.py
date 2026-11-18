@@ -31,18 +31,37 @@ import argparse
 import datetime as dt
 import importlib.metadata
 import json
+import os
 import platform
 import statistics
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-import numpy as np
-import pyvinecopulib as pv
 
-import rscopulas as rc
+
+def _threads_from_argv() -> int:
+    """Read ``--threads`` before rscopulas starts its thread pool."""
+    for index, argument in enumerate(sys.argv):
+        if argument == "--threads" and index + 1 < len(sys.argv):
+            return max(1, int(sys.argv[index + 1]))
+        if argument.startswith("--threads="):
+            return max(1, int(argument.split("=", 1)[1]))
+    return 1
+
+
+# Both libraries get the same number of threads. rscopulas sizes its pool from
+# this variable on first use, so it has to be set before any fit runs.
+THREADS = _threads_from_argv()
+os.environ["RAYON_NUM_THREADS"] = str(THREADS)
+
+import numpy as np  # noqa: E402
+import pyvinecopulib as pv  # noqa: E402
+
+import rscopulas as rc  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "benchmarks" / "output" / "pyvinecopulib-comparison.md"
@@ -323,7 +342,7 @@ def fit_rscopulas(u_train: np.ndarray, u_test: np.ndarray, criterion: str, repea
 
 
 def fit_pyvinecopulib(u_train: np.ndarray, u_test: np.ndarray, repeats: int) -> FitSummary:
-    controls = pv.FitControlsVinecop(family_set=PV_FAMILIES, num_threads=1)
+    controls = pv.FitControlsVinecop(family_set=PV_FAMILIES, num_threads=THREADS)
 
     def run() -> pv.Vinecop:
         return pv.Vinecop.from_data(u_train, controls=controls)
@@ -339,7 +358,7 @@ def fit_pyvinecopulib(u_train: np.ndarray, u_test: np.ndarray, repeats: int) -> 
         n_parameters=float(model.npars),
         tree1=pv_tree1_edges(model),
         rosenblatt_test=rosenblatt_diagnostics(np.asarray(model.rosenblatt(u_test, seeds=[1]))),
-        notes="Vinecop.from_data, tree_algorithm=mst_prim, tree_criterion=tau, preselect_families=True, num_threads=1",
+        notes=f"Vinecop.from_data, tree_algorithm=mst_prim, tree_criterion=tau, preselect_families=True, num_threads={THREADS}",
     )
 
 
@@ -402,6 +421,7 @@ def environment() -> dict[str, str]:
         "numpy": version("numpy"),
         "rscopulas": version("rscopulas"),
         "pyvinecopulib": version("pyvinecopulib"),
+        "threads (both libraries)": str(THREADS),
     }
 
 
@@ -427,7 +447,8 @@ def render_markdown(reports: list[DatasetReport], env: dict[str, str], repeats: 
         "own default selection criterion: **rscopulas `fit_r` defaults to AIC, pyvinecopulib "
         "`FitControlsVinecop` defaults to BIC**; a third row refits rscopulas with BIC. pyvinecopulib "
         "keeps its default `preselect_families=True` (families are pruned by symmetry of the data "
-        "before fitting), rscopulas fits every candidate. Both run single-threaded. Fit time is the "
+        "before fitting), rscopulas fits every candidate. Both run with "
+        f"{THREADS} thread{'' if THREADS == 1 else 's'}. Fit time is the "
         f"median of {repeats} wall-clock runs of the complete select-and-fit call in one Python "
         "process. Log-likelihoods are the sums of each fitted model's own log-density over the "
         "training and test pseudo-observations; the truth row evaluates the simulating vine. "
@@ -489,6 +510,7 @@ def main() -> None:
     parser.add_argument("--n-train", type=int, default=2000)
     parser.add_argument("--n-test", type=int, default=2000)
     parser.add_argument("--dataset", action="append", choices=sorted(DATASETS), help="restrict to a dataset (repeatable)")
+    parser.add_argument("--threads", type=int, default=1, help="threads for both libraries (default 1)")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Markdown report path (JSON written next to it)")
     parser.add_argument("--docs-copy", type=str, default=str(DEFAULT_DOCS_COPY), help="committed copy of the report; pass '' to skip")
     args = parser.parse_args()

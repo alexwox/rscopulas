@@ -7,7 +7,7 @@ Rscopulas is a copula modeling library for scientists and researchers who need t
 
 ## What is a pseudo-observation?
 
-A **pseudo-observation** is a data point that has already been transformed to the open unit interval `(0, 1)`. Rscopulas works exclusively with pseudo-observations: it does not estimate marginal distributions for you.
+A **pseudo-observation** is a data point that has already been transformed to the open unit interval `(0, 1)`. Rscopulas works exclusively with pseudo-observations: the copula models take uniforms, not raw data. From release 0.6.0 the [margins layer](/guides/margins) can fit the margins for you and map results back to the raw scale.
 
 Before calling any rscopulas API, transform each margin of your raw data to uniforms — using a parametric fit, an empirical CDF, or rank-based scaling — then pass the result to the library. Every entry must satisfy `0 < u < 1` strictly; boundary values are rejected with a clear error.
 
@@ -39,13 +39,13 @@ Python users keep a familiar NumPy interface without falling back to pure-Python
 
 ## Performance
 
-Rscopulas is benchmarked against R's `copula` and `VineCopula` packages on a shared mixed R-vine harness. Representative results from a single development machine (2026-04-18):
+Rscopulas is benchmarked against R's `copula` and `VineCopula` packages on a shared mixed R-vine harness. Results of release 0.6.0 on an Apple M3 Pro (2026-11-18); the [Benchmarks](/performance/benchmarks) page has every case, including the two where R is faster:
 
-| Workload      | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
-| ------------- | --------: | ----------: | ------------------------------ |
-| **Fit**       |  **3.1×** |    **3.4×** | 7.1 ms / 6.5 ms / 22.1 ms      |
-| **Sample**    |  **4.0×** |    **4.0×** | 28.4 ms / 27.9 ms / 112.9 ms   |
-| **`log_pdf`** |  **114×** |    **111×** | 22.9 µs / 23.5 µs / 2.60 ms    |
+| Workload | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
+| --- | ---: | ---: | --- |
+| **Fit** | **19×** | **19×** | 0.89 ms / 0.93 ms / 17.2 ms |
+| **Sample** | **21×** | **24×** | 5.4 ms / 4.6 ms / 112.5 ms |
+| **`log_pdf`** | **398×** | **372×** | 5.9 µs / 6.3 µs / 2.34 ms |
 
 <Tip>
   You can reproduce these numbers locally with `python benchmarks/run.py` from

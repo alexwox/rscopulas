@@ -60,12 +60,28 @@ Every model class supports `to_json()` / `from_json()`, `pickle`, `copy.copy` / 
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `to_pseudo_obs(x, *, ties="average", scaling="n+1")` | Rank-transform a raw vector or `(n, d)` matrix into pseudo-observations strictly inside `(0, 1)` (NumPy only). |
 
+### Tail diagnostics and margins
+
+Added in release 0.6.0.
+
+| Name | Description |
+| --- | --- |
+| `TailDependence`, `TailDependenceMatrix` | Lower and upper tail-dependence coefficients of a pair or of every pair |
+| `empirical_tail_dependence`, `empirical_tail_dependence_matrix`, `empirical_tail_dependence_curve`, `default_tail_k` | Rank-based estimates; results are `TailDependence`, `TailDependenceMatrix`, `TailDependenceCurve` |
+| `empirical_tail_concentration` | Tail concentration function of two columns (`TailConcentration`) |
+| `Margins`, `SemiParametricMargin`, `GpdTail` | Empirical margins with generalized Pareto tails: raw values to uniforms and back |
+| `GeneralizedPareto`, `GeneralizedExtremeValue`, `GpdFit`, `GevFit` | Extreme-value distributions and their maximum-likelihood fits |
+| `block_maxima`, `mean_excess`, `threshold_stability` | Block maxima and threshold-selection diagnostics (`MeanExcess`, `ThresholdStability`) |
+
+See [Tail dependence](/guides/tail-dependence) and [Margins and EVT](/guides/margins).
+
 ### Data and result types
 
 | Class               | Description                                                       |
 | ------------------- | ----------------------------------------------------------------- |
 | `FitResult`         | Generic dataclass holding the fitted model and diagnostics        |
 | `FitDiagnostics`    | Log-likelihood, AIC, BIC, convergence status, and iteration count |
+| `FactorFitResult`, `FactorFitDiagnostics` | Result and diagnostics of `FactorCopula.fit` |
 | `VineEdgeInfo`      | Data for a single edge in a vine tree                             |
 | `VineStructureInfo` | Vine kind, structure matrix, and truncation level                 |
 | `VineTreeInfo`      | All edges at a given tree level                                   |

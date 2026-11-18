@@ -8,17 +8,17 @@ The `rscopulas` crate is the primary Rust interface for copula modeling. All pub
 
 ## Adding the dependency
 
-Inside the rscopulas workspace, reference the core crate as a path dependency:
+Add the crate from crates.io:
 
 ```toml Cargo.toml
 [dependencies]
 ndarray = "0.17"
 rand = "0.9"
-rscopulas = { path = "crates/rscopulas-core" }
+rscopulas = "0.6"
 ```
 
 <Note>
-Once the crate is published to crates.io, replace the path dependency with a version specifier such as `rscopulas = "0.2"`.
+Inside the rscopulas workspace, use a path dependency instead: `rscopulas = { path = "crates/rscopulas-core" }`. API documentation for the published crate is on [docs.rs](https://docs.rs/rscopulas).
 </Note>
 
 ## Key types
