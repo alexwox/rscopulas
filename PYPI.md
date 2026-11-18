@@ -34,6 +34,9 @@ uv pip install "rscopulas[viz]"
 - Pair copulas, including Khoudraji constructions
 - C-vine, D-vine, and R-vine copulas
 - Hierarchical Archimedean copulas
+- Factor copulas
+- Tail diagnostics: model-implied tail dependence, rank-based estimates, tail concentration
+- Margins with generalized Pareto tails, block maxima and return levels (`Margins`, `GeneralizedPareto`, `GeneralizedExtremeValue`)
 
 ## Python example
 
