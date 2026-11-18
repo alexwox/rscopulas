@@ -9,9 +9,11 @@
 //!   including **Khoudraji** asymmetric pair copulas,
 //! - C-vine, D-vine, and R-vine copulas.
 //!
-//! The crate assumes your data is already in pseudo-observation form: finite
-//! values strictly inside `(0, 1)`. If you start from raw observations, estimate
-//! or transform the marginals first, then build a [`PseudoObs`] matrix.
+//! The copula models take data in pseudo-observation form: finite values
+//! strictly inside `(0, 1)`, wrapped in [`PseudoObs`]. If you start from raw
+//! observations, [`Margins`] fits a distribution function to each column
+//! (empirical body, generalized Pareto tails), turns raw data into
+//! pseudo-observations, and maps simulated uniforms back to the raw scale.
 //!
 //! # Quick start
 //!
@@ -157,6 +159,7 @@ pub mod data;
 pub mod domain;
 pub mod errors;
 pub mod fit;
+pub mod margins;
 pub mod math;
 pub mod paircopula;
 pub mod stats;
@@ -174,6 +177,10 @@ pub use domain::{
     VineStructure, VineStructureKind, VineTree,
 };
 pub use errors::{BackendError, CopulaError, FitError, InputError, NumericalError};
+pub use margins::{
+    GeneralizedExtremeValue, GeneralizedPareto, MarginFitOptions, Margins, SemiParametricMargin,
+    Threshold,
+};
 pub use paircopula::{
     KhoudrajiParams, PairCopulaFamily, PairCopulaParams, PairCopulaSpec, Rotation, TllOrder,
     TllParams, tll_fit,
