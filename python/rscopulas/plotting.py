@@ -7,9 +7,11 @@ import numpy.typing as npt
 
 __all__ = [
     "plot_density",
+    "plot_mean_excess",
     "plot_scatter",
     "plot_tail_concentration",
     "plot_tail_dependence",
+    "plot_threshold_stability",
     "plot_vine_structure",
 ]
 
@@ -190,6 +192,67 @@ def plot_vine_structure(vine_model: Any, *, ax: Any = None, annotate: bool = Tru
 
     fig.colorbar(image, ax=ax, shrink=0.85, label="node id")
     return ax
+
+
+def plot_mean_excess(x: npt.ArrayLike, *, thresholds: npt.ArrayLike | None = None, ax: Any = None):
+    """Mean residual life plot for choosing a generalized Pareto threshold.
+
+    Look for the lowest threshold from which the curve is straight within the
+    band (two standard errors). Above it the excesses can be modelled as
+    generalized Pareto. The slope shows the tail type: rising for a heavy
+    tail, flat for an exponential one, falling for a bounded one.
+    """
+    from ._margins import mean_excess
+
+    result = mean_excess(x, thresholds)
+    fig, ax = _resolve_ax(ax)
+    ax.plot(result.threshold, result.mean_excess, color="#1f77b4")
+    ax.fill_between(
+        result.threshold,
+        result.mean_excess - 2.0 * result.std_error,
+        result.mean_excess + 2.0 * result.std_error,
+        color="#1f77b4",
+        alpha=0.2,
+        label="+- 2 standard errors",
+    )
+    ax.set_xlabel("threshold")
+    ax.set_ylabel("mean excess")
+    ax.set_title("Mean residual life")
+    ax.legend(loc="best")
+    return ax
+
+
+def plot_threshold_stability(
+    x: npt.ArrayLike, *, thresholds: npt.ArrayLike | None = None, axes: Any = None
+):
+    """Generalized Pareto shape and modified scale against the threshold.
+
+    Above a valid threshold both panels are flat within their bands (two
+    standard errors). Returns the two axes ``(shape, modified scale)``.
+    """
+    from ._margins import threshold_stability
+
+    result = threshold_stability(x, thresholds)
+    if axes is None:
+        plt = _import_pyplot()
+        _, axes = plt.subplots(1, 2, figsize=(10, 4))
+    shape_ax, scale_ax = axes
+    for ax, values, errors, label in (
+        (shape_ax, result.shape, result.shape_std_error, "shape"),
+        (scale_ax, result.modified_scale, result.modified_scale_std_error, "modified scale"),
+    ):
+        ax.plot(result.threshold, values, color="#1f77b4")
+        ax.fill_between(
+            result.threshold,
+            values - 2.0 * errors,
+            values + 2.0 * errors,
+            color="#1f77b4",
+            alpha=0.2,
+        )
+        ax.set_xlabel("threshold")
+        ax.set_ylabel(label)
+        ax.set_title(f"Stability of the {label}")
+    return shape_ax, scale_ax
 
 
 def _pair_columns(
