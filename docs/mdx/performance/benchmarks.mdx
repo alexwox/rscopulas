@@ -12,27 +12,42 @@ The table below shows representative results from the mixed R-vine workload in t
 
 | Workload | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
 | --- | ---: | ---: | --- |
-| Mixed R-vine **fit** | **19×** | **19×** | 0.89 ms / 0.93 ms / 17.2 ms |
-| Mixed R-vine **sample** | **21×** | **24×** | 5.4 ms / 4.6 ms / 112.5 ms |
-| Mixed R-vine **`log_pdf`** | **398×** | **372×** | 5.9 µs / 6.3 µs / 2.34 ms |
+| Mixed R-vine **fit** | **22×** | **19×** | 0.75 ms / 0.86 ms / 16.5 ms |
+| Mixed R-vine **sample** | **46×** | **40×** | 2.5 ms / 2.9 ms / 114.1 ms |
+| Mixed R-vine **`log_pdf`** | **514×** | **426×** | 4.8 µs / 5.8 µs / 2.47 ms |
 
 Other cases from the same run:
 
 | Workload | Rust vs R | Python vs R |
 | --- | ---: | ---: |
-| Gaussian / Student t / Clayton / Frank / Gumbel copula **fit** | 142× / 39× / 94× / 48× / 33× | 116× / 38× / 80× / 44× / 31× |
-| Same five families, **`log_pdf`** | 238× / 41× / 149× / 87× / 129× | 100× / 33× / 57× / 51× / 90× |
-| Gaussian / Student t / Gumbel **sample** | 3.5× / 4.5× / 1.0× | 3.5× / 4.2× / 1.1× |
-| Clayton / Frank **sample** | **0.55× / 0.11×** | 0.56× / 0.11× |
-| Pair kernels (density, h, inverse h), Gaussian / Clayton / Frank | 465× / 326× / 295× | 65× / 63× / 61× |
-| Pair kernels, Student t / Gumbel 180° / Khoudraji | 41× / 37× / 881× | 28× / 25× / 774× |
+| Gaussian / Student t / Clayton / Frank / Gumbel copula **fit** | 130× / 27× / 95× / 47× / 41× | 113× / 40× / 79× / 40× / 38× |
+| Same five families, **`log_pdf`** | 255× / 43× / 148× / 86× / 115× | 101× / 35× / 53× / 47× / 48× |
+| Gaussian / Student t **sample** | 10× / 8.8× | 10× / 8.8× |
+| Gumbel / Frank / Clayton **sample** | 4.9× / 3.4× / 2.8× | 3.3× / 3.2× / 2.6× |
+| Pair kernels (density, h, inverse h), Gaussian / Clayton / Frank | 509× / 378× / 608× | 51× / 56× / 69× |
+| Pair kernels, Student t / Gumbel 180° / Khoudraji | 39× / 166× / 1000× | 22× / 48× / 801× |
 
-Sampling from the multivariate Clayton and Frank copulas is the one place where R `copula` is faster: about 2× for Clayton and 9× for Frank.
+Every case is faster than R. 20 of the 25 are at least 10× faster; the five below that are the single-family samplers, which draw 10 000 bivariate observations in 0.08–0.36 ms. Up to release 0.6.0 R was faster at Clayton and Frank sampling (0.55× and 0.11×). The samplers use every core, R uses one; at a million draws twelve threads are 7.5× faster than one.
+
+<Note>
+From release 0.6.1 the Gaussian, Student t, Clayton, Frank and Gumbel samplers draw in independent blocks of 256 rows so that they can run in parallel. A given seed therefore produces a different sample than in 0.6.0 and earlier. The sample does not depend on the number of threads, and Python, Rust and JavaScript still agree for the same seed.
+</Note>
+
+## Against pyvinecopulib, feature by feature
+
+`benchmarks/compare_pyvinecopulib_features.py` times 73 operations both libraries share: density, both h-functions and both inverses of ten pair families, pair fits and family selection, and vine density, Rosenblatt transforms, sampling and fitting. Both sides get the same number of threads.
+
+| Threads each | rscopulas slower in | Where |
+| --- | ---: | --- |
+| 1 | 6 of 73 | TLL pair fit 0.53×, BB7 density 0.74×, Frank density 0.75×, BB1 density 0.90×, Clayton inverse h 0.90–0.96× |
+| 12 | 0 of 73 | |
+
+Release 0.6.0 was slower in 22 of the 73 on one thread. pyvinecopulib returns the density and rscopulas its logarithm, which costs one extra `ln` per point in the density rows. The [comparison page](/performance/comparison) covers which models the two libraries select.
 
 The Python and Rust numbers track each other closely because both call the same Rust core. The large `log_pdf` advantage comes from the vine density evaluation being entirely in Rust with no interpreter overhead on the hot path.
 
 <Note>
-These numbers are from one run of release 0.6.0 on 2026-11-18 on an Apple M3 Pro, against R 4.3 with `copula` and `VineCopula`. Results depend on CPU, memory bandwidth, and R package versions. Run the harness locally to get numbers relevant to your hardware.
+These numbers are from one run of release 0.6.1 on 2026-11-18 on an Apple M3 Pro, against R 4.3 with `copula` and `VineCopula` and against pyvinecopulib 0.7.6. The machine was running other applications, so single figures move by 10–20 % between runs. Results depend on CPU, memory bandwidth, and package versions. Run the harness locally to get numbers relevant to your hardware.
 </Note>
 
 ## Release 0.5.0 against 0.4.0

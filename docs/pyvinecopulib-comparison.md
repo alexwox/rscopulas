@@ -1,6 +1,6 @@
 # rscopulas vs pyvinecopulib
 
-Generated 2026-11-18 16:26 UTC by `benchmarks/compare_pyvinecopulib.py`.
+Generated 2026-11-18 17:42 UTC by `benchmarks/compare_pyvinecopulib.py`.
 
 | Environment | |
 | --- | --- |
@@ -8,7 +8,7 @@ Generated 2026-11-18 16:26 UTC by `benchmarks/compare_pyvinecopulib.py`.
 | cpu | Apple M3 Pro |
 | python | 3.12.11 |
 | numpy | 2.4.4 |
-| rscopulas | 0.6.0 |
+| rscopulas | 0.6.1 |
 | pyvinecopulib | 0.7.6 |
 
 ## Method
@@ -19,12 +19,12 @@ Each dataset is simulated with `pyvinecopulib.Vinecop.simulate` from a known vin
 
 | Model | Fit time (s) | Log-lik train | Log-lik test | Params | KS max (p) | Spearman max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| rscopulas (AIC) | 1.712 | 2608.9 | 2607.6 | 10 | 0.0232 (0.23) | 0.0548 |
-| pyvinecopulib (BIC) | 1.741 | 2608.9 | 2607.6 | 10 | 0.0232 (0.23) | 0.0493 |
-| rscopulas (BIC) | 1.692 | 2608.9 | 2607.6 | 10 | 0.0232 (0.23) | 0.0548 |
+| rscopulas (AIC) | 1.197 | 2608.9 | 2607.6 | 10 | 0.0232 (0.23) | 0.0548 |
+| pyvinecopulib (BIC) | 1.783 | 2608.9 | 2607.6 | 10 | 0.0232 (0.23) | 0.0493 |
+| rscopulas (BIC) | 1.197 | 2608.9 | 2607.6 | 10 | 0.0232 (0.23) | 0.0548 |
 | truth (simulating vine) | – | 2606.3 | 2609.0 | – | 0.0208 (0.35) | 0.0355 |
 
-Fit-time ratio rscopulas (AIC) / pyvinecopulib (BIC): **1.0x**. Out-of-sample log-likelihood gap to the truth: rscopulas (AIC) -1.4, pyvinecopulib (BIC) -1.4, rscopulas (BIC) -1.4.
+Fit-time ratio rscopulas (AIC) / pyvinecopulib (BIC): **0.7x**. Out-of-sample log-likelihood gap to the truth: rscopulas (AIC) -1.4, pyvinecopulib (BIC) -1.4, rscopulas (BIC) -1.4.
 
 Selected first-tree edges (variables are 0-based; `r` = rotation in degrees):
 
@@ -40,12 +40,12 @@ Selected first-tree edges (variables are 0-based; `r` = rotation in degrees):
 
 | Model | Fit time (s) | Log-lik train | Log-lik test | Params | KS max (p) | Spearman max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| rscopulas (AIC) | 1.692 | 4385.4 | 4450.8 | 14 | 0.0287 (0.07) | 0.1045 |
-| pyvinecopulib (BIC) | 1.284 | 4378.7 | 4443.8 | 13 | 0.0212 (0.33) | 0.0835 |
-| rscopulas (BIC) | 1.640 | 4378.7 | 4443.8 | 13 | 0.0287 (0.07) | 0.1028 |
+| rscopulas (AIC) | 1.119 | 4385.4 | 4450.8 | 14 | 0.0287 (0.07) | 0.1045 |
+| pyvinecopulib (BIC) | 1.259 | 4378.7 | 4443.8 | 13 | 0.0212 (0.33) | 0.0835 |
+| rscopulas (BIC) | 1.122 | 4378.7 | 4443.8 | 13 | 0.0287 (0.07) | 0.1028 |
 | truth (simulating vine) | – | 4595.8 | 4644.5 | – | 0.0192 (0.45) | 0.0375 |
 
-Fit-time ratio rscopulas (AIC) / pyvinecopulib (BIC): **1.3x**. Out-of-sample log-likelihood gap to the truth: rscopulas (AIC) -193.8, pyvinecopulib (BIC) -200.7, rscopulas (BIC) -200.7.
+Fit-time ratio rscopulas (AIC) / pyvinecopulib (BIC): **0.9x**. Out-of-sample log-likelihood gap to the truth: rscopulas (AIC) -193.8, pyvinecopulib (BIC) -200.7, rscopulas (BIC) -200.7.
 
 Selected first-tree edges (variables are 0-based; `r` = rotation in degrees):
 
@@ -61,12 +61,12 @@ Selected first-tree edges (variables are 0-based; `r` = rotation in degrees):
 
 | Model | Fit time (s) | Log-lik train | Log-lik test | Params | KS max (p) | Spearman max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| rscopulas (AIC) | 5.447 | 7732.0 | 7407.1 | 35 | 0.0384 (0.01) | 0.0594 |
-| pyvinecopulib (BIC) | 4.304 | 7708.7 | 7391.2 | 30 | 0.0292 (0.06) | 0.0940 |
-| rscopulas (BIC) | 5.113 | 7708.7 | 7391.2 | 30 | 0.0373 (0.01) | 0.0804 |
+| rscopulas (AIC) | 3.391 | 7732.0 | 7407.1 | 35 | 0.0384 (0.01) | 0.0594 |
+| pyvinecopulib (BIC) | 4.208 | 7708.7 | 7391.2 | 30 | 0.0292 (0.06) | 0.0940 |
+| rscopulas (BIC) | 3.362 | 7708.7 | 7391.2 | 30 | 0.0373 (0.01) | 0.0804 |
 | truth (simulating vine) | – | 7941.2 | 7690.2 | – | 0.0284 (0.08) | 0.0612 |
 
-Fit-time ratio rscopulas (AIC) / pyvinecopulib (BIC): **1.3x**. Out-of-sample log-likelihood gap to the truth: rscopulas (AIC) -283.1, pyvinecopulib (BIC) -299.0, rscopulas (BIC) -299.0.
+Fit-time ratio rscopulas (AIC) / pyvinecopulib (BIC): **0.8x**. Out-of-sample log-likelihood gap to the truth: rscopulas (AIC) -283.1, pyvinecopulib (BIC) -299.0, rscopulas (BIC) -299.0.
 
 Selected first-tree edges (variables are 0-based; `r` = rotation in degrees):
 
