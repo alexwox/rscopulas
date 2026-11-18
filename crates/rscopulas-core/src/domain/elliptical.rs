@@ -1,4 +1,5 @@
 use ndarray::Array2;
+use crate::backend::sample_rows_chunked;
 use rand::Rng;
 use rand_distr::{ChiSquared, StandardNormal};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -153,22 +154,21 @@ impl CopulaModel for GaussianCopula {
         rng: &mut R,
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
-        resolve_strategy(options.exec, Operation::Sample, n)?;
+        let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
         let whitening = Whitening::new(&self.cholesky);
         let dim = self.dim;
-        // The RNG stream is consumed row by row exactly as before; only the
-        // deterministic transform to uniforms runs in parallel.
-        let mut values = vec![0.0; n * dim];
-        let mut epsilon = vec![0.0; dim];
-        for row in values.chunks_exact_mut(dim) {
-            for slot in epsilon.iter_mut() {
-                *slot = rng.sample::<f64, _>(StandardNormal);
+        Ok(sample_rows_chunked(n, dim, rng, strategy, |rng, rows| {
+            let mut epsilon = vec![0.0; dim];
+            for row in rows.chunks_exact_mut(dim) {
+                for slot in epsilon.iter_mut() {
+                    *slot = rng.sample::<f64, _>(StandardNormal);
+                }
+                whitening.correlate(&epsilon, row);
+                for value in row {
+                    *value = norm_cdf(*value);
+                }
             }
-            whitening.correlate(&epsilon, row);
-        }
-        map_in_place(&mut values, n, norm_cdf);
-        Ok(Array2::from_shape_vec((n, dim), values)
-            .expect("sample buffer should match the requested shape"))
+        }))
     }
 }
 
@@ -239,23 +239,6 @@ impl RowScratch {
         Self {
             z: vec![0.0; dim],
             work: vec![0.0; dim],
-        }
-    }
-}
-
-/// Applies `f` to every element, in parallel once there are enough rows for
-/// it to pay off (same threshold as the other sampling paths).
-fn map_in_place(values: &mut [f64], n_rows: usize, f: impl Fn(f64) -> f64 + Sync + Send) {
-    if n_rows >= 128 {
-        use rayon::prelude::*;
-        values.par_chunks_mut(1024).for_each(|chunk| {
-            for value in chunk {
-                *value = f(*value);
-            }
-        });
-    } else {
-        for value in values {
-            *value = f(*value);
         }
     }
 }
@@ -477,31 +460,27 @@ impl CopulaModel for StudentTCopula {
         rng: &mut R,
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
-        resolve_strategy(options.exec, Operation::Sample, n)?;
+        let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
         let dist = self.univariate_t();
         let chi_squared =
             ChiSquared::new(self.degrees_of_freedom).map_err(|_| FitError::Failed {
                 reason: "degrees of freedom must be positive",
             })?;
         let whitening = Whitening::new(&self.cholesky);
-        let dim = self.dim;
-        // RNG consumption per row is unchanged: `dim` normals, then the
-        // chi-square mixing draw.
-        let mut values = vec![0.0; n * dim];
-        let mut epsilon = vec![0.0; dim];
-        for row in values.chunks_exact_mut(dim) {
-            for slot in epsilon.iter_mut() {
-                *slot = rng.sample::<f64, _>(StandardNormal);
+        let (dim, nu) = (self.dim, self.degrees_of_freedom);
+        Ok(sample_rows_chunked(n, dim, rng, strategy, |rng, rows| {
+            let mut epsilon = vec![0.0; dim];
+            for row in rows.chunks_exact_mut(dim) {
+                for slot in epsilon.iter_mut() {
+                    *slot = rng.sample::<f64, _>(StandardNormal);
+                }
+                let scale = (nu / rng.sample::<f64, _>(chi_squared)).sqrt();
+                whitening.correlate(&epsilon, row);
+                for value in row {
+                    *value = dist.cdf(*value * scale);
+                }
             }
-            let scale = (self.degrees_of_freedom / rng.sample::<f64, _>(chi_squared)).sqrt();
-            whitening.correlate(&epsilon, row);
-            for value in row.iter_mut() {
-                *value *= scale;
-            }
-        }
-        map_in_place(&mut values, n, |x| dist.cdf(x));
-        Ok(Array2::from_shape_vec((n, dim), values)
-            .expect("sample buffer should match the requested shape"))
+        }))
     }
 }
 

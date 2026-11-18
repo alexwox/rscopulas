@@ -9,7 +9,7 @@
 //!   Student t `2 asin(rho) / pi`, Clayton `theta / (theta + 2)`, Gumbel
 //!   `1 - 1 / theta`, Frank via the Debye function, BB1
 //!   `1 - 2 / (delta (theta + 2))`, and sign flips for 90/270 rotations) the
-//!   sample tau is within `3 SE` of it, with `SE = sqrt(2 (2n + 5) / (9 n (n - 1)))`
+//!   sample tau is within `4 SE` of it, with `SE = sqrt(2 (2n + 5) / (9 n (n - 1)))`
 //!   (≈ 0.0094 for n = 5000). That is the variance of tau under independence;
 //!   for the positively/negatively ordered families used here the variance
 //!   under dependence is smaller, so this is a conservative bound.
@@ -131,11 +131,13 @@ fn assert_uniform_margins(name: &str, samples: &Array2<f64>) {
 }
 
 fn assert_tau(name: &str, tau: &Array2<f64>, i: usize, j: usize, expected: f64) {
-    let tolerance = 3.0 * tau_null_se(N);
+    // 4 SE: with roughly 70 pairs in this file, 3 SE fails one run in five
+    // for a correct sampler. `sampler_distribution.rs` is the sharp test.
+    let tolerance = 4.0 * tau_null_se(N);
     let actual = tau[(i, j)];
     assert!(
         (actual - expected).abs() < tolerance,
-        "{name}: Kendall tau({i},{j}) = {actual}, expected {expected} (|diff| {} > 3 SE = {tolerance})",
+        "{name}: Kendall tau({i},{j}) = {actual}, expected {expected} (|diff| {} > 4 SE = {tolerance})",
         (actual - expected).abs()
     );
 }

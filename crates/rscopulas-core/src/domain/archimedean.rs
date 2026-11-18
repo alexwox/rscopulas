@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     archimedean_math::{frank, gumbel},
-    backend::{Operation, resolve_strategy, try_fill_rows},
+    backend::{Operation, resolve_strategy, sample_rows_chunked, try_fill_rows},
     data::PseudoObs,
     errors::{CopulaError, FitError},
     fit::FitResult,
@@ -74,21 +74,21 @@ impl CopulaModel for ClaytonCopula {
         rng: &mut R,
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
-        resolve_strategy(options.exec, Operation::Sample, n)?;
+        let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
         let frailty = Gamma::new(1.0 / self.theta, 1.0).map_err(|_| FitError::Failed {
             reason: "failed to construct Clayton frailty sampler",
         })?;
-        let mut samples = Array2::zeros((n, self.dim));
-
-        for row_idx in 0..n {
-            let shared = rng.sample::<f64, _>(frailty);
-            for col_idx in 0..self.dim {
-                let exponential = rng.sample::<f64, _>(Exp1);
-                samples[(row_idx, col_idx)] = (1.0 + exponential / shared).powf(-1.0 / self.theta);
+        let (dim, inv_theta) = (self.dim, 1.0 / self.theta);
+        // Marshall–Olkin: U_j = (1 + E_j / V)^(−1/θ) with V ~ Gamma(1/θ, 1).
+        Ok(sample_rows_chunked(n, dim, rng, strategy, |rng, rows| {
+            for row in rows.chunks_exact_mut(dim) {
+                let shared = rng.sample::<f64, _>(frailty);
+                for value in row {
+                    let exponential = rng.sample::<f64, _>(Exp1);
+                    *value = (-inv_theta * (exponential / shared).ln_1p()).exp();
+                }
             }
-        }
-
-        Ok(samples)
+        }))
     }
 }
 
@@ -164,19 +164,35 @@ impl CopulaModel for FrankCopula {
         rng: &mut R,
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
-        resolve_strategy(options.exec, Operation::Sample, n)?;
-        let mut samples = Array2::zeros((n, self.dim));
-
-        for row_idx in 0..n {
-            let log_frailty = frank::sample_log_frailty(rng, self.theta);
-            for col_idx in 0..self.dim {
-                let exponential = rng.sample::<f64, _>(Exp1);
-                samples[(row_idx, col_idx)] =
-                    frank::generator_from_log_argument(exponential.ln() - log_frailty, self.theta);
-            }
+        let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
+        let (dim, theta) = (self.dim, self.theta);
+        if dim == 2 && theta <= 600.0 {
+            // Conditional inversion: U1 uniform, then U2 from
+            //   e^{−θ·u2} = ((1 − w)·e^{−θ·u1} + w·e^{−θ}) / ((1 − w)·e^{−θ·u1} + w)
+            // for a second uniform w. Both sums are positive, so nothing
+            // cancels; θ ≤ 600 keeps the exponentials above underflow.
+            let floor = (-theta).exp();
+            return Ok(sample_rows_chunked(n, dim, rng, strategy, |rng, rows| {
+                use rand::distr::Open01;
+                for row in rows.chunks_exact_mut(2) {
+                    let first: f64 = rng.sample(Open01);
+                    let level: f64 = rng.sample(Open01);
+                    let weighted = (1.0 - level) * (-theta * first).exp();
+                    row[0] = first;
+                    row[1] = ((weighted + level) / (weighted + level * floor)).ln() / theta;
+                }
+            }));
         }
-
-        Ok(samples)
+        Ok(sample_rows_chunked(n, dim, rng, strategy, |rng, rows| {
+            for row in rows.chunks_exact_mut(dim) {
+                let log_frailty = frank::sample_log_frailty(rng, theta);
+                for value in row {
+                    let exponential = rng.sample::<f64, _>(Exp1);
+                    *value =
+                        frank::generator_from_log_argument(exponential.ln() - log_frailty, theta);
+                }
+            }
+        }))
     }
 }
 
@@ -245,19 +261,18 @@ impl CopulaModel for GumbelHougaardCopula {
         rng: &mut R,
         options: &SampleOptions,
     ) -> Result<Array2<f64>, CopulaError> {
-        resolve_strategy(options.exec, Operation::Sample, n)?;
-        let alpha = 1.0 / self.theta;
-        let mut samples = Array2::zeros((n, self.dim));
-
-        for row_idx in 0..n {
-            let frailty = sample_positive_stable(rng, alpha);
-            for col_idx in 0..self.dim {
-                let exponential = rng.sample::<f64, _>(Exp1);
-                samples[(row_idx, col_idx)] = (-(exponential / frailty).powf(alpha)).exp();
+        let strategy = resolve_strategy(options.exec, Operation::Sample, n)?;
+        let (dim, alpha) = (self.dim, 1.0 / self.theta);
+        // Marshall–Olkin: U_j = exp(−(E_j / V)^α) with V positive stable.
+        Ok(sample_rows_chunked(n, dim, rng, strategy, |rng, rows| {
+            for row in rows.chunks_exact_mut(dim) {
+                let log_frailty = sample_positive_stable(rng, alpha).ln();
+                for value in row {
+                    let exponential = rng.sample::<f64, _>(Exp1);
+                    *value = (-(alpha * (exponential.ln() - log_frailty)).exp()).exp();
+                }
             }
-        }
-
-        Ok(samples)
+        }))
     }
 }
 
