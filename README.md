@@ -320,9 +320,9 @@ print("log_pdf:", model.log_pdf(u1, u2))
 
 ## Current status
 
-**Implemented:** pseudo-obs validation; single-family fit/score/sample; pair kernels and `fit_pair_copula`; vines (Gaussian construction + mixed-family fitting); HAC; Khoudraji in pair and vine fitting; reference tests and benchmarks.
+**Implemented:** pseudo-obs validation; single-family fit/score/sample; pair kernels and `fit_pair_copula`; vines (Gaussian construction + mixed-family fitting); HAC; factor copulas; Khoudraji in pair and vine fitting; tail diagnostics; margins with extreme-value tails; a WebAssembly build; reference tests and benchmarks.
 
-**Still evolving:** no single “auto-discover family” facade; `Copula` enum not the main UX; Rust crate publishing and multi-platform Python wheel automation are still separate release tasks.
+**Still evolving:** no single “auto-discover family” facade; `Copula` enum not the main UX; nested HAC trees have no joint density and mixed-family HAC sampling is experimental ([docs/hac.md](docs/hac.md)); the JavaScript package is not on npm yet.
 
 ## Reference fixtures
 
