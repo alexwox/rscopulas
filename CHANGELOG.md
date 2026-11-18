@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-11-18
 
 - Tail diagnostics (`rscopulas::tail`, [docs/tail-dependence.md](docs/tail-dependence.md)).
   `PairCopulaSpec::tail_dependence` returns the closed-form lower and upper
@@ -137,7 +137,7 @@ Archimedean pair families are unchanged; no case is slower.
 - **Behaviour change:** Khoudraji h-functions no longer evaluate the base
   densities, so they succeed at points where a base density is not finite.
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-09-10
 
 - Fit Gaussian pair copulas by maximum likelihood (Brent's method on
   `atanh ρ`, warm-started at the Kendall-τ inversion) instead of τ inversion
