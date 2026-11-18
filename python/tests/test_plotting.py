@@ -6,7 +6,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from rscopulas import ClaytonCopula, GaussianCopula, PairCopula, VineCopula
-from rscopulas.plotting import plot_density, plot_scatter, plot_vine_structure
+from rscopulas.plotting import (
+    plot_density,
+    plot_scatter,
+    plot_tail_concentration,
+    plot_tail_dependence,
+    plot_vine_structure,
+)
 
 
 DATA_2D = np.array(
@@ -102,3 +108,33 @@ def test_plot_vine_structure_renders_matrix_and_annotations() -> None:
 def test_plot_vine_structure_rejects_non_vine_models() -> None:
     with pytest.raises(TypeError, match="vine model"):
         plot_vine_structure(GaussianCopula.fit(DATA_2D).model)
+
+
+def test_plot_tail_concentration_overlays_a_model() -> None:
+    sample = ClaytonCopula.from_params(3, 2.0).sample(500, seed=1)
+    model = PairCopula.from_spec("clayton", [2.0])
+
+    ax = plot_tail_concentration(sample, model=model, dims=(0, 2))
+
+    assert ax.get_title() == "Tail concentration of u1, u3"
+    labels = [line.get_label() for line in ax.get_lines()]
+    assert labels[:2] == ["empirical", "Clayton"]
+    empirical = ax.get_lines()[0].get_ydata()
+    assert len(empirical) == 99 and 0.0 <= empirical.min() and empirical.max() <= 1.0
+
+    with pytest.raises(TypeError, match="PairCopula"):
+        plot_tail_concentration(sample, model=object())
+    with pytest.raises(ValueError, match="distinct"):
+        plot_tail_concentration(sample, dims=(1, 1))
+
+
+def test_plot_tail_dependence_marks_default_k_and_model() -> None:
+    sample = ClaytonCopula.from_params(2, 2.0).sample(400, seed=1)
+
+    ax = plot_tail_dependence(sample, model=PairCopula.from_spec("clayton", [2.0]))
+
+    labels = [line.get_label() for line in ax.get_lines()]
+    assert labels == ["lower", "upper", "model lower", "model upper", "sqrt(n)"]
+    assert ax.get_lines()[0].get_xdata().tolist() == list(range(1, 81))
+    assert ax.get_lines()[2].get_ydata()[0] == pytest.approx(2.0**-0.5)
+    assert ax.get_lines()[4].get_xdata()[0] == 20

@@ -27,6 +27,17 @@ from ._models import (
     VineTreeInfo,
 )
 from ._pseudo_obs import to_pseudo_obs
+from ._tail import (
+    TailConcentration,
+    TailDependence,
+    TailDependenceCurve,
+    TailDependenceMatrix,
+    default_tail_k,
+    empirical_tail_concentration,
+    empirical_tail_dependence,
+    empirical_tail_dependence_curve,
+    empirical_tail_dependence_matrix,
+)
 from ._rscopulas import (
     BackendError,
     InternalError,
@@ -64,9 +75,18 @@ __all__ = [
     "PairCopula",
     "RscopulasError",
     "StudentTCopula",
+    "TailConcentration",
+    "TailDependence",
+    "TailDependenceCurve",
+    "TailDependenceMatrix",
     "VineCopula",
     "VineEdgeInfo",
     "VineStructureInfo",
     "VineTreeInfo",
+    "default_tail_k",
+    "empirical_tail_concentration",
+    "empirical_tail_dependence",
+    "empirical_tail_dependence_curve",
+    "empirical_tail_dependence_matrix",
     "to_pseudo_obs",
 ]

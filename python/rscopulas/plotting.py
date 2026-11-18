@@ -5,7 +5,13 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["plot_density", "plot_scatter", "plot_vine_structure"]
+__all__ = [
+    "plot_density",
+    "plot_scatter",
+    "plot_tail_concentration",
+    "plot_tail_dependence",
+    "plot_vine_structure",
+]
 
 
 def _import_pyplot():
@@ -183,4 +189,103 @@ def plot_vine_structure(vine_model: Any, *, ax: Any = None, annotate: bool = Tru
             )
 
     fig.colorbar(image, ax=ax, shrink=0.85, label="node id")
+    return ax
+
+
+def _pair_columns(
+    data: npt.ArrayLike, dims: tuple[int, int]
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], int, int]:
+    values = _as_float_matrix(data)
+    if values.shape[1] < 2:
+        raise ValueError("tail plots require at least two columns.")
+    first, second = _validate_dims(dims, values.shape[1])
+    return (
+        np.ascontiguousarray(values[:, first]),
+        np.ascontiguousarray(values[:, second]),
+        first,
+        second,
+    )
+
+
+def plot_tail_concentration(
+    data: npt.ArrayLike,
+    *,
+    model: Any = None,
+    dims: tuple[int, int] = (0, 1),
+    q: npt.ArrayLike | None = None,
+    ax: Any = None,
+):
+    """Plot the empirical tail concentration function of two columns.
+
+    The left half shows ``P(U2 <= q | U1 <= q)`` and the right half
+    ``P(U2 > q | U1 > q)``; the ends of the curve approach the lower and
+    upper tail-dependence coefficients. Pass a :class:`rscopulas.PairCopula`
+    as ``model`` to overlay what the fitted family implies. A model curve
+    that leaves the data at either end is the wrong family for that tail.
+    """
+    from ._tail import default_tail_levels, empirical_tail_concentration
+
+    first_values, second_values, first, second = _pair_columns(data, dims)
+    levels = default_tail_levels() if q is None else np.asarray(q, dtype=np.float64)
+    observed = empirical_tail_concentration(first_values, second_values, q=levels)
+
+    fig, ax = _resolve_ax(ax)
+    ax.plot(observed.q, observed.values, color="#1f77b4", label="empirical")
+    if model is not None:
+        if not hasattr(model, "tail_concentration"):
+            raise TypeError("plot_tail_concentration() expects `model` to be a PairCopula.")
+        ax.plot(
+            levels,
+            model.tail_concentration(levels),
+            color="#d62728",
+            linestyle="--",
+            label=_pretty_family_name(model),
+        )
+    ax.axvline(0.5, color="0.6", linewidth=0.8)
+    ax.set_xlabel("q")
+    ax.set_ylabel("tail concentration")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_title(f"Tail concentration of u{first + 1}, u{second + 1}")
+    ax.legend(loc="lower center")
+    return ax
+
+
+def plot_tail_dependence(
+    data: npt.ArrayLike,
+    *,
+    model: Any = None,
+    dims: tuple[int, int] = (0, 1),
+    k: npt.ArrayLike | None = None,
+    ax: Any = None,
+):
+    """Plot the tail-dependence estimates against the number of tail points ``k``.
+
+    Use it to choose ``k``: the estimates are noisy on the left and biased
+    toward the body of the distribution on the right, and a flat stretch in
+    between is the value to read. The dotted line marks the default
+    ``k = floor(sqrt(n))``. Pass a :class:`rscopulas.PairCopula` as ``model``
+    to draw its closed-form coefficients as horizontal lines.
+    """
+    from ._tail import default_tail_k, empirical_tail_dependence_curve
+
+    first_values, second_values, first, second = _pair_columns(data, dims)
+    curve = empirical_tail_dependence_curve(first_values, second_values, k=k)
+
+    fig, ax = _resolve_ax(ax)
+    ax.plot(curve.k, curve.lower, color="#1f77b4", label="lower")
+    ax.plot(curve.k, curve.upper, color="#ff7f0e", label="upper")
+    if model is not None:
+        if not hasattr(model, "tail_dependence"):
+            raise TypeError("plot_tail_dependence() expects `model` to be a PairCopula.")
+        implied = model.tail_dependence()
+        if implied is not None and hasattr(implied, "lower") and np.ndim(implied.lower) == 0:
+            ax.axhline(implied.lower, color="#1f77b4", linestyle="--", label="model lower")
+            ax.axhline(implied.upper, color="#ff7f0e", linestyle="--", label="model upper")
+    ax.axvline(default_tail_k(first_values.shape[0]), color="0.5", linestyle=":", label="sqrt(n)")
+    ax.set_xlabel("k (observations in each tail)")
+    ax.set_ylabel("tail dependence")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_title(f"Tail dependence of u{first + 1}, u{second + 1}")
+    ax.legend(loc="best")
     return ax
