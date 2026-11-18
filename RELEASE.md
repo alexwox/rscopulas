@@ -18,6 +18,9 @@ Keep these versions synchronized:
 - `[workspace.package].version` and the `rscopulas` workspace dependency in `Cargo.toml`.
 - `[project].version` in `pyproject.toml`.
 - Local package entries in `Cargo.lock` and `uv.lock` (regenerate with `cargo check --workspace` and `uv lock`).
+- The `version` field of `crates/rscopulas-wasm/tests/fixtures/reference.json`
+  (regenerate with `python crates/rscopulas-wasm/tests/fixtures/generate_reference.py`
+  after installing the new wheel; only the version should change).
 
 Merge the release changes through a reviewed PR, then start from a clean,
 up-to-date `master`. Set `TASK_RELEASE_VERSION` to the approved version:
