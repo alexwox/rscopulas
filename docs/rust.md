@@ -8,6 +8,10 @@
 - **`CopulaModel`** — trait for `log_pdf`, `sample`, etc. on fitted / constructed models.
 - **`FitOptions` / `EvalOptions` / `SampleOptions`** — carry `ExecPolicy` and related knobs.
 
+## Tail dependence
+
+`PairCopulaSpec::tail_dependence` and the `tail_dependence` method of the single-family models return model-implied coefficients; the `rscopulas::tail` module holds the rank-based estimators. See [tail-dependence.md](tail-dependence.md).
+
 ## Execution policy
 
 - **`ExecPolicy::Auto`** — conservative; does not guarantee GPU on all heavy paths.

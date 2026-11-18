@@ -28,6 +28,8 @@ pub enum InputError {
     DimensionMismatch { expected: usize, got: usize },
     #[error("all values must be finite")]
     NonFiniteValue,
+    #[error("invalid argument: {reason}")]
+    InvalidArgument { reason: &'static str },
     #[error(
         "pseudo-observations must lie strictly inside (0, 1); found {value} at row {row}, col {col}"
     )]

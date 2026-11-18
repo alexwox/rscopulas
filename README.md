@@ -141,6 +141,7 @@ Do not compare harness wall times to Criterion reports directly; methodology dif
 - Pair copulas: density, h-functions, inverses; rotations where supported; **Khoudraji** composition of two base pair kernels ([docs/khoudraji.md](docs/khoudraji.md)).
 - Vines: C-vine, D-vine, R-vine — construct, fit, `log_pdf`, sample, and **exact conditional sampling** via the Rosenblatt transform ([docs/vines.md](docs/vines.md)).
 - HAC: hierarchical Archimedean construction and fitting — behavior and sampling caveats: [docs/hac.md](docs/hac.md) (Python/Rust API also in [docs/python.md](docs/python.md)).
+- Tail diagnostics: closed-form tail-dependence coefficients of fitted models, rank-based estimates, and tail concentration plots to check a family against the data in both tails ([docs/tail-dependence.md](docs/tail-dependence.md)).
 - JavaScript: the same core compiled to WebAssembly for browsers and Node.js, with models and seeded samples interchangeable with Python ([docs/javascript.md](docs/javascript.md)).
 
 ## Workspace layout (for contributors)
