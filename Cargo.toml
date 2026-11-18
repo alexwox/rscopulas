@@ -2,6 +2,7 @@
 members = [
     "crates/rscopulas-core",
     "crates/rscopulas-python",
+    "crates/rscopulas-wasm",
 ]
 resolver = "2"
 
@@ -22,7 +23,9 @@ rayon = "1.11"
 rscopulas = { version = "0.5.0", path = "crates/rscopulas-core" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
-statrs = "0.18.0"
+# Only the special functions and scalar distributions are used; the default
+# features pull in nalgebra and a second copy of rand.
+statrs = { version = "0.18.0", default-features = false }
 thiserror = "2.0"
 
 [profile.profiling]

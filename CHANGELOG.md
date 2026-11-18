@@ -38,6 +38,21 @@
   faster than `scipy.stats` and 2 to 10 times faster than `evd` (table in
   the guide).
 - `InputError` has a new variant, `InvalidArgument`.
+- WebAssembly target: new crate `crates/rscopulas-wasm`
+  ([docs/javascript.md](docs/javascript.md)), built with `wasm-pack` for
+  browsers, bundlers and Node.js. It binds the Gaussian, Student t, Clayton,
+  Frank and Gumbel copulas, vine copulas (fit, density, sampling, Rosenblatt
+  transforms) and pair copulas (density, h-functions and their inverses,
+  family selection), plus a rank transform and Kendall's tau. Models share
+  their JSON with the Python package, and a seed gives the same sample in
+  both. Against the native build, densities, samples and transforms agree to
+  3e-15 and fitted log-likelihoods to 5e-10. Not published to npm yet.
+- The core crate builds for `wasm32-unknown-unknown`: it enables the
+  JavaScript entropy backend of `getrandom` on that target, and
+  `.cargo/config.toml` selects it.
+- `statrs` is now used without its default features, which drops `nalgebra`
+  and a second copy of `rand` from the core's dependency tree (74 crates
+  down to 55 on macOS).
 
 ## 0.5.0 — 2026-11-10
 

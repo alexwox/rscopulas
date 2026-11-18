@@ -36,7 +36,8 @@
             "pages": [
               "docs/getting-started",
               "docs/python",
-              "docs/rust"
+              "docs/rust",
+              "docs/javascript"
             ]
           },
           {

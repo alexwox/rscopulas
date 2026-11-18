@@ -143,11 +143,13 @@ Do not compare harness wall times to Criterion reports directly; methodology dif
 - HAC: hierarchical Archimedean construction and fitting — behavior and sampling caveats: [docs/hac.md](docs/hac.md) (Python/Rust API also in [docs/python.md](docs/python.md)).
 - Tail diagnostics: closed-form tail-dependence coefficients of fitted models, rank-based estimates, and tail concentration plots to check a family against the data in both tails ([docs/tail-dependence.md](docs/tail-dependence.md)).
 - Margins: empirical body with generalized Pareto tails, in both directions (raw ↔ uniform), so a fitted copula gives joint tail estimates on the raw scale; generalized extreme value fits for block maxima, return levels, and threshold-selection plots ([docs/margins.md](docs/margins.md)).
+- JavaScript: the same core compiled to WebAssembly for browsers and Node.js, with models and seeded samples interchangeable with Python ([docs/javascript.md](docs/javascript.md)).
 
 ## Workspace layout (for contributors)
 
 - `crates/rscopulas-core` — Rust library package `rscopulas`, including internal CPU/GPU acceleration support.
 - `crates/rscopulas-python` — PyO3 bindings.
+- `crates/rscopulas-wasm` — WebAssembly bindings for browsers and Node.js ([docs/javascript.md](docs/javascript.md)).
 - `python/` — Python package source.
 - `fixtures/reference/` — R-generated JSON for tests and benchmarks.
 - `benchmarks/` — cross-language benchmark orchestration.

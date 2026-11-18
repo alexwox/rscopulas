@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rscopulas in the browser</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 46rem; padding: 0 1rem; }
+      canvas { border: 1px solid #94a3b8; max-width: 100%; }
+      pre { background: #f1f5f9; padding: 0.75rem; overflow-x: auto; }
+      .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+      figure { margin: 0; }
+      figcaption { color: #475569; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <h1>rscopulas in the browser</h1>
+    <p>
+      Everything on this page runs locally in WebAssembly: the data are drawn from a Student t
+      copula, a vine copula is fitted to them, and a new sample is drawn from the fit.
+    </p>
+    <div class="row">
+      <figure>
+        <canvas id="data" width="320" height="320"></canvas>
+        <figcaption>Data: 2000 draws, columns 1 and 2</figcaption>
+      </figure>
+      <figure>
+        <canvas id="simulated" width="320" height="320"></canvas>
+        <figcaption>2000 draws from the fitted vine</figcaption>
+      </figure>
+    </div>
+    <pre id="out">loading…</pre>
+
+    <!--
+      Build the package first, then serve this folder's crate root over HTTP
+      (browsers do not load WebAssembly from file://):
+
+        npx wasm-pack build crates/rscopulas-wasm --target web --out-dir pkg-web
+        python3 -m http.server --directory crates/rscopulas-wasm 8000
+        open http://localhost:8000/examples/browser/
+    -->
+    <script type="module">
+      import init, { Copula, version } from "../../pkg-web/rscopulas_wasm.js";
+
+      function scatter(canvasId, sample, dim) {
+        const canvas = document.getElementById(canvasId);
+        const context = canvas.getContext("2d");
+        context.fillStyle = "rgba(30, 64, 175, 0.45)";
+        for (let row = 0; row < sample.length / dim; row += 1) {
+          const x = sample[row * dim] * canvas.width;
+          const y = (1 - sample[row * dim + 1]) * canvas.height;
+          context.fillRect(x - 1, y - 1, 2, 2);
+        }
+      }
+
+      const out = document.getElementById("out");
+      try {
+        await init();
+
+        const dim = 3;
+        const correlation = Float64Array.from([1, 0.7, 0.3, 0.7, 1, 0.5, 0.3, 0.5, 1]);
+        const data = Copula.studentT(correlation, dim, 4).sample(2000, 1);
+
+        const started = performance.now();
+        const vine = Copula.fitVine(data, dim, { criterion: "bic" });
+        const fitMs = performance.now() - started;
+        const gaussian = Copula.fitGaussian(data, dim);
+        const simulated = vine.sample(2000);
+
+        scatter("data", data, dim);
+        scatter("simulated", simulated, dim);
+
+        out.textContent = [
+          `rscopulas ${version()}`,
+          `vine fit:      loglik ${vine.loglik.toFixed(2)}   BIC ${vine.bic.toFixed(2)}   (${fitMs.toFixed(0)} ms)`,
+          `Gaussian fit:  loglik ${gaussian.loglik.toFixed(2)}   BIC ${gaussian.bic.toFixed(2)}`,
+          `first simulated row: ${Array.from(simulated.subarray(0, dim), (value) => value.toFixed(4)).join(", ")}`,
+        ].join("\n");
+        document.title = "rscopulas: ok";
+      } catch (error) {
+        out.textContent = `failed: ${error.message}`;
+        document.title = "rscopulas: failed";
+      }
+    </script>
+  </body>
+</html>
