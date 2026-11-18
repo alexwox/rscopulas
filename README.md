@@ -127,11 +127,11 @@ Representative mixed R-vine harness results (same fixture and iteration counts f
 
 | Workload | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
 | --- | ---: | ---: | --- |
-| Mixed R-vine **fit** | **19×** | **19×** | 0.89 ms / 0.93 ms / 17.2 ms |
-| Mixed R-vine **sample** | **21×** | **24×** | 5.4 ms / 4.6 ms / 112.5 ms |
-| Mixed R-vine **`log_pdf`** | **398×** | **372×** | 5.9 µs / 6.3 µs / 2.34 ms |
+| Mixed R-vine **fit** | **22×** | **19×** | 0.75 ms / 0.86 ms / 16.5 ms |
+| Mixed R-vine **sample** | **46×** | **40×** | 2.5 ms / 2.9 ms / 114.1 ms |
+| Mixed R-vine **`log_pdf`** | **514×** | **426×** | 4.8 µs / 5.8 µs / 2.47 ms |
 
-Those multiples are from one run of release 0.6.0 on an Apple M3 Pro (2026-11-18). Single-family fits and densities are 30–240× faster than R; sampling from the Clayton and Frank copulas is slower than R `copula` (0.55× and 0.11×). Reproduce with `python benchmarks/run.py` and read `benchmarks/output/latest.md` locally—numbers depend on CPU and R package versions. They show you can keep the **Python API** and still sit on the same fast Rust core instead of trading ergonomics for performance.
+Those multiples are from one run of release 0.6.1 on an Apple M3 Pro (2026-11-18). Single-family fits and densities are 27–250× faster than R, and sampling 3–10× (Gaussian 10×, Student t 9×, Gumbel 5×, Frank 3.4×, Clayton 2.8× at 10 000 bivariate draws). Against pyvinecopulib, see [docs/pyvinecopulib-comparison.md](docs/pyvinecopulib-comparison.md) and `benchmarks/compare_pyvinecopulib_features.py`. Reproduce with `python benchmarks/run.py` and read `benchmarks/output/latest.md` locally—numbers depend on CPU and R package versions.
 
 Do not compare harness wall times to Criterion reports directly; methodology differs. [docs/benchmarks.md](docs/benchmarks.md) explains both.
 

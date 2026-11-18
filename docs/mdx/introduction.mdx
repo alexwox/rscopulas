@@ -39,13 +39,13 @@ Python users keep a familiar NumPy interface without falling back to pure-Python
 
 ## Performance
 
-Rscopulas is benchmarked against R's `copula` and `VineCopula` packages on a shared mixed R-vine harness. Results of release 0.6.0 on an Apple M3 Pro (2026-11-18); the [Benchmarks](/performance/benchmarks) page has every case, including the two where R is faster:
+Rscopulas is benchmarked against R's `copula` and `VineCopula` packages on a shared mixed R-vine harness. Results of release 0.6.1 on an Apple M3 Pro (2026-11-18); the [Benchmarks](/performance/benchmarks) page has every case:
 
 | Workload | Rust vs R | Python vs R | Mean times (Rust / Python / R) |
 | --- | ---: | ---: | --- |
-| **Fit** | **19×** | **19×** | 0.89 ms / 0.93 ms / 17.2 ms |
-| **Sample** | **21×** | **24×** | 5.4 ms / 4.6 ms / 112.5 ms |
-| **`log_pdf`** | **398×** | **372×** | 5.9 µs / 6.3 µs / 2.34 ms |
+| **Fit** | **22×** | **19×** | 0.75 ms / 0.86 ms / 16.5 ms |
+| **Sample** | **46×** | **40×** | 2.5 ms / 2.9 ms / 114.1 ms |
+| **`log_pdf`** | **514×** | **426×** | 4.8 µs / 5.8 µs / 2.47 ms |
 
 <Tip>
   You can reproduce these numbers locally with `python benchmarks/run.py` from

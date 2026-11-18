@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-11-18
 
 Speed work measured against R (`copula`, `VineCopula`) and pyvinecopulib
 0.7.6 on an Apple M3 Pro. `benchmarks/compare_pyvinecopulib_features.py` is

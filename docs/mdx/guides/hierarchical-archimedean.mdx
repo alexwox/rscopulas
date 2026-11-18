@@ -104,6 +104,8 @@ A nested Archimedean copula has a closed-form distribution function that involve
 
 <Note>
 Releases before 0.5.0 drew nested Clayton and Frank frailties by numerically inverting a Laplace transform. That method was inaccurate: marginals were visibly non-uniform when the inner parameter was large. Samples from nested Clayton and Frank trees therefore differ from earlier releases for the same seed. Nested Gumbel and exchangeable trees are unchanged.
+
+Release 0.6.1 changed the samples of exchangeable (single-node) trees for a given seed: they share the block-parallel samplers of `ClaytonCopula`, `FrankCopula` and `GumbelCopula`. Nested trees are unchanged.
 </Note>
 
 <Tip>
