@@ -283,7 +283,7 @@ Archimedean pair families are unchanged; no case is slower.
 ## 0.3.0 — 2026-09-10
 
 This minor release contains breaking corrections to the pre-1.0 numerical and
-serialization contracts. See [migration notes](docs/mdx/guides/migrating-to-0-3.mdx).
+serialization contracts. See [migration notes](docs/mdx/guides/upgrading.mdx).
 
 - Align pair, vine, conditional, and fixture orientation; enforce truncation in
   every vine fitter and optimize mBICV over all prefix lengths.

@@ -28,8 +28,7 @@
             "pages": [
               "introduction",
               "quickstart-python",
-              "quickstart-rust",
-              "guides/migrating-to-0-3"
+              "quickstart-rust"
             ]
           },
           {
@@ -51,7 +50,8 @@
               "guides/tail-dependence",
               "guides/margins",
               "guides/javascript",
-              "guides/visualization"
+              "guides/visualization",
+              "guides/upgrading"
             ]
           },
           {
@@ -90,5 +90,11 @@
         ]
       }
     ]
-  }
+  },
+  "redirects": [
+    {
+      "source": "/guides/migrating-to-0-3",
+      "destination": "/guides/upgrading"
+    }
+  ]
 }

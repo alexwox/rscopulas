@@ -9,9 +9,9 @@ release: obtain the maintainer's release approval before pushing a tag or publis
 
 Use a patch for compatible fixes. Public API changes need a minor bump; while
 pre-1.0, breaking changes also need a minor bump and explicit migration notes.
-Version 0.3.0 includes the likelihood, TLL, factor, and vine serialization changes
-in [CHANGELOG.md](CHANGELOG.md) and the
-[migration guide](docs/mdx/guides/migrating-to-0-3.mdx).
+Add a section to the [upgrade notes](docs/mdx/guides/upgrading.mdx) for every
+release that changes results (seeded samples included) or breaks code, patch
+releases too.
 
 Keep these versions synchronized:
 
